@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: testagent
+  labels:
+    app: testagent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: testagent
+  template:
+    metadata:
+      labels:
+        app: testagent
+    spec:
+      containers:
+        - name: testagent
+          image: testagent:latest
+          envFrom:
+            - secretRef:
+                name: testagent-secrets
+          volumeMounts:
+            - name: output
+              mountPath: /app/output
+      volumes:
+        - name: output
+          persistentVolumeClaim:
+            claimName: testagent-output

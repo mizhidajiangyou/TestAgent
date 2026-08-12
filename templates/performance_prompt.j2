@@ -1,0 +1,50 @@
+{% if script_format == "jmeter" %}
+Generate a complete, production-ready JMeter JMX test plan.
+
+## API Endpoints
+{{ endpoints }}
+
+## Configuration
+- Virtual Users: {{ config.virtual_users | default(100) }}
+- Duration: {{ config.duration_seconds | default(300) }} seconds
+- Ramp-Up: {{ config.ramp_up_seconds | default(60) }} seconds
+- Think Time: {{ config.think_time_ms | default(500) }} ms
+- Base URL: {{ config.base_url | default('https://api.example.com') }}
+- Auth: {{ config.auth_type | default('none') }}
+
+## Requirements
+1. Complete XML from <?xml ...?> to </jmeterTestPlan>
+2. ThreadGroup with configured users/ramp-up/duration
+3. HTTP Request Defaults, Cookie Manager, Cache Manager
+4. HTTP Header Manager with Content-Type: application/json
+5. HTTP Samplers for each endpoint with realistic bodies
+6. Response Assertions for success status codes
+7. Summary Report and Simple Data Writer listeners
+
+Output ONLY raw JMX XML. Start with: <?xml version="1.0" encoding="UTF-8"?>
+{% else %}
+Generate a complete, production-ready k6 JavaScript test script.
+
+## API Endpoints
+{{ endpoints }}
+
+## Configuration
+- Virtual Users: {{ config.virtual_users | default(100) }}
+- Duration: {{ config.duration_seconds | default(300) }} seconds
+- Ramp-Up: {{ config.ramp_up_seconds | default(60) }} seconds
+- Think Time: {{ config.think_time_ms | default(500) }} ms
+- Base URL: {{ config.base_url | default('https://api.example.com') }}
+- Auth: {{ config.auth_type | default('none') }}
+
+## Requirements
+1. Export default function and options object
+2. Configure stages for ramp-up then steady state
+3. HTTP requests for each endpoint with proper headers
+4. sleep() between requests matching think time
+5. check() assertions for HTTP status codes
+6. Realistic JSON bodies for POST/PUT requests
+7. __ENV variables for BASE_URL and AUTH_TOKEN
+8. Thresholds for p(95) < 500ms and error rate < 1%
+
+Output ONLY raw JavaScript. No markdown.
+{% endif %}

@@ -1,0 +1,25 @@
+{
+  "dashboard": {
+    "title": "TestAgent Dashboard",
+    "panels": [
+      {
+        "title": "Test Cases Generated",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "testagent_testcases_generated_total"
+          }
+        ]
+      },
+      {
+        "title": "Scripts Generated",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "testagent_scripts_generated_total"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,139 @@
+"""
+Data models for parsed API endpoints, test cases, and reports.
+"""
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import StrEnum
+from typing import Any
+
+
+class TestPriority(StrEnum):
+    """Test case priority levels."""
+
+    __test__ = False
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class TestType(StrEnum):
+    """Test case types."""
+
+    __test__ = False
+
+    FUNCTIONAL = "functional"
+    BOUNDARY = "boundary"
+    NEGATIVE = "negative"
+    PERFORMANCE = "performance"
+    SECURITY = "security"
+    INTEGRATION = "integration"
+
+
+@dataclass
+class APIEndpoint:
+    """Parsed API endpoint representation."""
+
+    method: str
+    path: str
+    summary: str = ""
+    description: str = ""
+    parameters: list[dict[str, Any]] = field(default_factory=list)
+    request_body: dict[str, Any] | None = None
+    responses: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+    @property
+    def full_path(self) -> str:
+        """Return method + path string."""
+        return f"{self.method} {self.path}"
+
+
+@dataclass
+class TestCase:
+    """Generated test case."""
+
+    id: str
+    title: str
+    description: str
+    endpoint: APIEndpoint
+    test_type: TestType
+    priority: TestPriority
+    preconditions: list[str] = field(default_factory=list)
+    steps: list[str] = field(default_factory=list)
+    expected_results: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RequirementItem:
+    """Parsed requirement item."""
+
+    id: str
+    title: str
+    description: str
+    module: str = ""
+    priority: TestPriority = TestPriority.MEDIUM
+    acceptance_criteria: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PerformanceConfig:
+    """Performance test configuration."""
+
+    base_url: str = "https://api.example.com"
+    virtual_users: int = 100
+    duration_seconds: int = 300
+    ramp_up_seconds: int = 60
+    think_time_ms: int = 500
+    auth_type: str = "none"
+
+
+@dataclass
+class ReportMetadata:
+    """Report metadata."""
+
+    title: str
+    created_at: datetime = field(default_factory=datetime.now)
+    author: str = "TestAgent"
+    version: str = "0.1.0"
+    description: str = ""
+
+
+@dataclass
+class TestCaseGenInput:
+    """Input payload for test case generation."""
+
+    __test__ = False  # prevent pytest collection of this class
+
+    endpoints: list[APIEndpoint]
+    requirements: list[RequirementItem] | None = None
+
+
+@dataclass
+class PerfGenInput:
+    """Input payload for performance script generation."""
+
+    endpoints: list[APIEndpoint]
+    config: PerformanceConfig | None = None
+
+
+@dataclass
+class TestCaseReportInput:
+    """Input payload for test case report generation."""
+
+    __test__ = False  # prevent pytest collection of this class
+
+    test_cases: list[TestCase]
+    output_format: str = "markdown"
+
+
+@dataclass
+class PerfReportInput:
+    """Input payload for performance report generation."""
+
+    script_path: str
+    config: PerformanceConfig
+    metrics: dict[str, Any] | None = None
+    analysis: dict[str, Any] | None = None

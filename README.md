@@ -1,2 +1,174 @@
 # TestAgent
-Requirements、API Document‌->Agent Pipeline-> Test Case 、Test Report
+
+**Requirements + API Document -> Agent Pipeline -> Test Cases + Performance Scripts + Test Reports**
+
+TestAgent 是一个 AI 驱动的测试资产生成工具：输入需求文档和 Swagger/OpenAPI 接口文档，自动产出结构化测试用例、性能测试脚本（k6 / JMeter）以及测试报告。
+
+## 特性
+
+- 解析 Swagger/OpenAPI 规范（支持 URL、JSON/YAML 文件、dict 三种输入）
+- 解析需求文档（支持 Markdown、纯文本、JSON 格式）
+- 基于 LLM（OpenAI / Azure OpenAI）生成测试用例，覆盖正向/边界/负向/集成场景
+- 基于 LLM 生成可执行的性能测试脚本（k6 或 JMeter JMX，含 XML 完整性校验）
+- 生成 Markdown / JSON 格式的测试用例报告和性能测试报告模板
+- 分层配置（环境变量 > .env > 默认值）、依赖注入容器、CLI 命令行界面
+
+## 项目结构
+
+```
+TestAgent/
+├── testagent/                 # 主包
+│   ├── config/                # 配置层（settings、数据模型、日志）
+│   ├── parsers/               # 解析层（Swagger、需求文档）
+│   ├── engine/                # AI 引擎层（LLM 客户端、Prompt 构建）
+│   ├── generators/            # 生成层（测试用例、性能脚本）
+│   ├── reports/               # 报告层（测试用例报告、性能报告）
+│   ├── utils/                 # 工具函数
+│   ├── cli.py                 # CLI 命令
+│   └── container.py           # 依赖注入容器
+├── templates/                 # Jinja2 Prompt 模板
+├── examples/                  # 示例输入文件
+├── tests/                     # 单元测试 + 端到端测试
+├── docker/                    # Docker 镜像与编排
+├── k8s/                       # Kubernetes 部署清单
+└── monitoring/                # Prometheus / Grafana 监控配置
+```
+
+## 安装
+
+要求 Python >= 3.11。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+## 配置
+
+复制环境变量模板并填写 API Key：
+
+```bash
+cp .env.example .env
+```
+
+关键配置项：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `OPENAI_API_KEY` | OpenAI API Key | - |
+| `OPENAI_MODEL` | 使用的模型 | `gpt-4o-mini` |
+| `OPENAI_BASE_URL` | API 地址（可指向兼容服务） | `https://api.openai.com/v1` |
+| `AZURE_OPENAI_ENABLED` | 启用 Azure OpenAI | `false` |
+| `PERF_BASE_URL` | 性能测试目标地址 | `https://api.example.com` |
+| `PERF_VIRTUAL_USERS` | 虚拟用户数 | `100` |
+| `PERF_DURATION_SECONDS` | 压测时长（秒） | `300` |
+| `OUTPUT_DIR` | 输出目录 | `./output` |
+| `SCRIPT_FORMAT` | 默认性能脚本格式 | `k6` |
+
+查看当前生效配置：
+
+```bash
+testagent config
+```
+
+## 使用
+
+### 生成测试用例
+
+```bash
+# JSON 格式（默认）
+testagent generate-tests \
+  --swagger examples/sample_swagger.json \
+  --requirements examples/sample_requirements.md \
+  --output ./output/testcases.json
+
+# Markdown 格式
+testagent generate-tests \
+  -s examples/sample_swagger.json \
+  -r examples/sample_requirements.md \
+  -f markdown \
+  -o ./output/testcases.md
+```
+
+Swagger 也可直接传 URL：
+
+```bash
+testagent generate-tests -s https://petstore3.swagger.io/api/v3/openapi.json
+```
+
+### 生成性能测试脚本
+
+```bash
+# k6 脚本（默认）
+testagent generate-perf -s examples/sample_swagger.json --base-url https://api.example.com
+
+# JMeter JMX 脚本
+testagent generate-perf -s examples/sample_swagger.json -f jmeter -o ./output/perf.jmx
+```
+
+输出物：
+
+- `perf_test.js` / `perf_test.jmx`：可直接运行的性能脚本
+- `perf_test.md`：性能测试报告模板（含配置、KPI 表格、执行说明）
+
+### 运行生成的脚本
+
+```bash
+# k6
+k6 run output/perf_test.js
+
+# JMeter
+jmeter -n -t output/perf_test.jmx -l results.jtl
+```
+
+## 开发
+
+```bash
+# 运行测试（25 个用例，含端到端流水线）
+pytest
+
+# 代码检查（ruff lint + format）
+ruff check testagent/ tests/
+ruff format --check testagent/ tests/
+
+# 严格类型检查
+mypy testagent/
+```
+
+## 部署
+
+### Docker
+
+```bash
+docker compose -f docker/docker-compose.yml build
+docker compose -f docker/docker-compose.yml run testagent generate-tests -s /app/swagger.json
+```
+
+### Kubernetes
+
+```bash
+kubectl create secret generic testagent-secrets --from-env-file=.env
+kubectl apply -f k8s/
+```
+
+## 监控
+
+项目内置 Prometheus + Grafana 配置：
+
+```bash
+docker compose -f docker/docker-compose.yml up -d prometheus grafana
+```
+
+- Prometheus: `http://localhost:9090`（配置见 `monitoring/prometheus.yml`）
+- Grafana: `http://localhost:3000`（默认账号 admin/admin，仪表板见 `monitoring/grafana-dashboard.json`）
+
+## 扩展路线
+
+- GUI 测试：预留 `generators` 接口，可新增 `gui_test_generator`（如 Playwright 脚本生成）
+- 多 Agent 协调：引擎层可扩展为多 Agent 流水线（分析 -> 生成 -> 评审）
+- 性能结果分析：接入 `.jtl` / k6 JSON 结果，产出带指标的完整性能报告
+
+## License
+
+Apache License 2.0，见 [LICENSE](LICENSE)。

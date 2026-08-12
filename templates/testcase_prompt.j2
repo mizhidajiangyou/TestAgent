@@ -1,0 +1,29 @@
+Generate comprehensive test cases based on the following API endpoints and requirements.
+
+## API Endpoints
+{{ endpoints }}
+
+{% if requirements %}
+## Requirements
+{{ requirements }}
+{% endif %}
+
+## Output Format
+Return a JSON array of test cases. Each test case must have:
+- "id": unique test case ID (e.g., "TC-001")
+- "title": concise test case title
+- "description": what this test case verifies
+- "endpoint": "METHOD /path" (the target endpoint)
+- "test_type": one of "functional", "boundary", "negative", "performance", "security", "integration"
+- "priority": one of "high", "medium", "low"
+- "preconditions": array of setup steps
+- "steps": array of test execution steps
+- "expected_results": array of expected outcomes
+
+Cover:
+1. Happy path for each endpoint
+2. Boundary value tests for parameters
+3. Negative tests (invalid input, missing auth, etc.)
+4. Integration tests where endpoints depend on each other
+
+Output ONLY the JSON array. No markdown, no explanation.
