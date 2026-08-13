@@ -1,0 +1,44 @@
+Generate API-specific test cases (boundary, security, integration) for the following endpoints.
+Focus on cases that require API-level details (parameters, request body, status codes).
+
+## API Endpoints
+{{ endpoints }}
+
+{% if requirements %}
+## Requirements Context
+{{ requirements }}
+{% endif %}
+
+---
+
+## Output Format
+Return a JSON array with the same schema:
+```json
+{
+  "id": "TC-001",
+  "title": "METHOD /path — what is tested",
+  "description": "what this verifies",
+  "endpoint": "METHOD /path",
+  "test_type": "boundary|security|integration|negative|performance",
+  "priority": "high|medium|low",
+  "preconditions": ["setup"],
+  "steps": ["exact request details: method, URL, headers, body"],
+  "expected_results": ["status code + field-level assertions"],
+  "tags": ["boundary", "security", etc.]
+}
+```
+
+## Focus Areas
+1. **Boundary**: min/max param values, empty strings, long strings, special chars, integer overflow.
+2. **Security**: SQL injection, XSS, missing/expired token (401), wrong role (403), IDOR, rate limiting, sensitive data leakage.
+3. **Integration**: Create→Read, Update→Read, Delete→Read(404), cross-endpoint data flow.
+4. **Negative**: missing required fields, malformed JSON, wrong Content-Type, nonexistent IDs.
+
+Each expected_result must be machine-checkable (explicit status code + field assertions).
+
+{% if output_language == 'chinese' %}
+## Language
+Write ALL text fields in Simplified Chinese. Keep field names, HTTP methods, and status codes in English.
+{% endif %}
+
+Output ONLY the JSON array. No markdown fences, no explanation.

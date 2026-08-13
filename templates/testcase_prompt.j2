@@ -1,45 +1,48 @@
-Generate comprehensive test cases based on the following API endpoints and requirements.
-
-## API Endpoints
-{{ endpoints }}
+Generate test cases for the requirements below{% if endpoints %} together with the listed API endpoints{% endif %}.
 
 {% if requirements %}
 ## Requirements
 {{ requirements }}
 {% endif %}
 
-## Output Format
-Return a JSON array of test cases. Each test case must have:
-- "id": unique test case ID (e.g., "TC-001")
-- "title": concise test case title
-- "description": what this test case verifies
-- "endpoint": "METHOD /path" (the target endpoint)
-- "test_type": one of "functional", "boundary", "negative", "performance", "security", "integration"
-- "priority": one of "high", "medium", "low"
-- "preconditions": array of setup steps
-- "steps": array of test execution steps
-- "expected_results": array of expected outcomes
-- "tags": array of labels (e.g., "smoke", "regression", "auth", "crud", "boundary", "security", "performance")
+{% if endpoints %}
+## API Endpoints
+{{ endpoints }}
+{% endif %}
 
-## Quality Checklist (must follow)
-1. **Endpoint accuracy**: the "endpoint" field must EXACTLY match one of the API Endpoints above ("METHOD /path"). Never invent or mismatch endpoints. Every step that calls an API must use the same endpoint as the "endpoint" field.
-2. **CRUD completeness**: for every resource, cover Create, Read, Update, Delete when the spec exposes them. Never omit an existing operation (e.g., missing PUT/PATCH update cases).
-3. **Assertability**: every expected_result must be machine-checkable: explicit HTTP status code, and specific field value or field presence/absence (e.g., "Response body does NOT contain the password field").
-4. **Boundary values**: test min/max lengths, pagination limit maximum, field case-sensitivity, empty strings.
-5. **Security**: SQL injection / XSS payloads, rate limiting, token expiry & refresh, IDOR (horizontal authorization), password strength policy.
-6. **Performance**: response time baseline (e.g., P95 < 200ms), concurrency/throughput for key endpoints.
-7. **Cleanup & idempotency**: include teardown/cleanup in preconditions for created data; cover duplicate/repeated submissions.
-8. **I18N**: cover unicode / emoji / whitespace / special characters in text fields.
+---
+
+## Output
+Return a JSON array of test cases. Each element:
+```json
+{
+  "id": "TC-001",
+  "title": "concise title",
+  "description": "what this verifies",
+  "endpoint": "METHOD /path"{% if endpoints %} (must be one of the endpoints above){% else %} (use "N/A" if no API spec){% endif %},
+  "test_type": "functional|boundary|negative|security|performance|integration",
+  "priority": "high|medium|low",
+  "preconditions": ["setup steps"],
+  "steps": ["exact execution steps with request details"],
+  "expected_results": ["machine-checkable assertions"],
+  "tags": ["labels"]
+}
+```
+
+## Rules (must follow)
+1. **Assertable**: every `expected_results` entry must be verifiable by a machine — include the explicit HTTP status code and a concrete field-level check (e.g., `"Status 200; response.body.id is not null"`). Avoid vague phrases like "works correctly".
+2. **Endpoint consistency**: when API endpoints are given, the `endpoint` field must EXACTLY match one of them, and the `steps` must actually call that endpoint.
+3. **Tags required**: fill `tags` with relevant labels (e.g., smoke, regression, auth, crud, boundary, security).
+
+## Guidance (use judgment)
+- Generate the cases that best verify the requirements above — prefer fewer, high-value cases over many shallow ones.
+- Cover the meaningful scenarios for each requirement: happy path plus the most important boundary, error, or security case where it genuinely matters. Do not force every requirement to cover all categories.
+- For cases that create or modify data, note how the data is cleaned up so the test stays re-runnable.
+- Keep each case focused on one verification goal; avoid over-explaining.
 
 {% if output_language == 'chinese' %}
 ## Language
-Write ALL text fields (title, description, preconditions, steps, expected_results, tags) in Simplified Chinese.
+Write ALL text fields (title, description, preconditions, steps, expected_results, tags) in Simplified Chinese. Keep field names, HTTP methods, path templates, and status codes in English.
 {% endif %}
 
-Cover:
-1. Happy path for each endpoint
-2. Boundary value tests for parameters
-3. Negative tests (invalid input, missing auth, etc.)
-4. Integration tests where endpoints depend on each other
-
-Output ONLY the JSON array. No markdown, no explanation.
+Output ONLY the JSON array. No markdown fences, no explanation before or after.

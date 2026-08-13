@@ -12,7 +12,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMSettings(BaseSettings):
-    """LLM provider configuration."""
+    """LLM provider configuration.
+
+    ``OPENAI_MODEL`` accepts a comma-separated list of model names. The first
+    model is the primary; the rest are fallback candidates used when the
+    primary call fails (and as the preferred reviewer when ``REVIEW_ENABLED``
+    is true).
+
+    The raw env value is stored as ``model`` (a string, for backward
+    compatibility with single-model configs). The parsed list is exposed via
+    the ``models`` property.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="OPENAI_",
@@ -23,8 +33,29 @@ class LLMSettings(BaseSettings):
 
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
+    # Stored as the raw string (env var ``OPENAI_MODEL``) for backward
+    # compatibility. Use the ``models`` property to get the parsed list.
     model: str = "gpt-4o-mini"
     timeout: int = 300
+    max_output_tokens: int = 16000
+
+    @property
+    def models(self) -> list[str]:
+        """Return the parsed list of model names.
+
+        Splits the raw ``model`` string on commas, strips whitespace, and
+        drops empty parts. Always returns at least one entry (falls back to
+        ``["gpt-4o-mini"]`` when the field is empty).
+        """
+        raw = self.model or ""
+        parts = [p.strip() for p in raw.split(",")]
+        cleaned = [p for p in parts if p]
+        return cleaned or ["gpt-4o-mini"]
+
+    @property
+    def primary_model(self) -> str:
+        """Return the primary (first) model name."""
+        return self.models[0]
 
 
 class AzureLLMSettings(BaseSettings):
@@ -80,6 +111,10 @@ class Settings(BaseSettings):
 
     #: Whether to run a second-pass LLM review after generating test cases.
     review_enabled: bool = Field(default=False, alias="REVIEW_ENABLED")
+    #: Max number of cross-validation rounds when review is enabled.
+    #: Each round alternates between the primary and a secondary model.
+    #: Default 2 = primary generates, secondary reviews once.
+    review_max_rounds: int = Field(default=2, alias="REVIEW_MAX_ROUNDS")
     #: Output language for generated content and reports.
     output_language: Literal["english", "chinese"] = Field(
         default="chinese", alias="OUTPUT_LANGUAGE"

@@ -5,7 +5,7 @@ Provides a lightweight DI container for wiring up components.
 """
 
 from testagent.config.settings import Settings, get_settings
-from testagent.engine.llm_client import OpenAIClient, create_llm_client
+from testagent.engine.llm_client import MultiModelLLMClient, create_llm_client
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.performance_generator import PerformanceGenerator
 from testagent.generators.testcase_generator import TestCaseGenerator
@@ -20,7 +20,7 @@ class Container:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
-        self._llm_client: OpenAIClient | None = None
+        self._llm_client: MultiModelLLMClient | None = None
         self._prompt_builder: PromptBuilder | None = None
         self._swagger_parser: SwaggerParser | None = None
         self._requirement_parser: RequirementParser | None = None
@@ -35,8 +35,8 @@ class Container:
         return self._settings
 
     @property
-    def llm_client(self) -> OpenAIClient:
-        """Return LLM client (lazy init)."""
+    def llm_client(self) -> MultiModelLLMClient:
+        """Return multi-model LLM client (lazy init)."""
         if self._llm_client is None:
             self._llm_client = create_llm_client(self._settings)
         return self._llm_client
@@ -66,10 +66,17 @@ class Container:
     def testcase_generator(self) -> TestCaseGenerator:
         """Return test case generator (lazy init)."""
         if self._testcase_generator is None:
+            # Review uses a non-primary model when available, so cross-validation
+            # happens between two different models. The MultiModelLLMClient
+            # logs a warning and falls back to the primary when only one model
+            # is configured.
+            review_client = self.llm_client.secondary_client()
             self._testcase_generator = TestCaseGenerator(
                 llm_client=self.llm_client,
                 prompt_builder=self.prompt_builder,
                 review_enabled=self._settings.review_enabled,
+                review_llm_client=review_client,
+                review_max_rounds=self._settings.review_max_rounds,
                 output_language=self._settings.output_language,
             )
         return self._testcase_generator

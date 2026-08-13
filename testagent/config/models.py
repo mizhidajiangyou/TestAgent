@@ -107,8 +107,8 @@ class TestCaseGenInput:
 
     __test__ = False  # prevent pytest collection of this class
 
-    endpoints: list[APIEndpoint]
-    requirements: list[RequirementItem] | None = None
+    requirements: list[RequirementItem]
+    endpoints: list[APIEndpoint] = field(default_factory=list)
 
 
 @dataclass

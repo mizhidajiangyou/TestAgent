@@ -1,7 +1,21 @@
 """
 Test case generator using LLM.
 
-Generates structured test cases from API endpoints and requirements.
+Two-phase strategy:
+  Phase 1: Generate from requirements, batched by functional module.
+  Phase 2 (optional): If API endpoints exist, generate API-specific cases
+                       (boundary, security, integration) per endpoint batch.
+Merge and re-number all cases.
+
+Inspired by guardrails' targeted re-ask: when JSON parse fails, the retry
+prompt tells the LLM exactly what went wrong and includes the failed output.
+
+Optional multi-round cross-validation review:
+  When ``review_enabled`` is true, the generator runs ``review_max_rounds``
+  refinement passes. Odd rounds use the secondary LLM (non-primary model),
+  even rounds use the primary model. This way two different models
+  cross-validate each other. If only one model is configured, the secondary
+  falls back to the primary and a warning is logged by the client.
 """
 
 import csv
@@ -13,6 +27,7 @@ from typing import Any
 
 from testagent.config.models import (
     APIEndpoint,
+    RequirementItem,
     TestCase,
     TestCaseGenInput,
     TestPriority,
@@ -26,10 +41,19 @@ from testagent.parsers.swagger_parser import SwaggerParser
 
 logger = logging.getLogger(__name__)
 
-#: Number of attempts when the LLM response cannot be parsed as JSON.
+#: Max parse retries per batch (guardrails-style targeted re-ask).
 MAX_PARSE_RETRIES = 3
 
-#: CSV column order for exported test cases.
+#: Max requirements per module batch (keeps each LLM response small).
+MAX_REQUIREMENTS_PER_BATCH = 3
+
+#: Max endpoints per batch in phase 2.
+MAX_ENDPOINTS_PER_BATCH = 2
+
+#: Default cross-validation rounds when review is enabled.
+DEFAULT_REVIEW_MAX_ROUNDS = 2
+
+#: CSV column order.
 CSV_COLUMNS = [
     "id",
     "title",
@@ -45,7 +69,7 @@ CSV_COLUMNS = [
 
 
 class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
-    """Generate test cases from API specs and requirements."""
+    """Generate test cases from requirements (and optionally API endpoints)."""
 
     __test__ = False
 
@@ -54,51 +78,200 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         llm_client: LLMClient,
         prompt_builder: PromptBuilder,
         review_enabled: bool = False,
+        review_llm_client: LLMClient | None = None,
+        review_max_rounds: int = DEFAULT_REVIEW_MAX_ROUNDS,
         output_language: str = "english",
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
         self._review_enabled = review_enabled
+        # Review client defaults to the primary client when not provided.
+        # The container should pass a secondary (non-primary) client so that
+        # cross-validation actually alternates between two models.
+        self._review_llm: LLMClient = review_llm_client or llm_client
+        # Clamp to at least 1 round; 0 effectively disables review even if
+        # review_enabled is true (we log a warning in that case).
+        self._review_max_rounds = max(1, review_max_rounds)
         self._output_language = output_language
 
+        # Detect whether review will actually use a different model.
+        self._review_is_cross_model = self._review_llm is not self._llm
+        if review_enabled and not self._review_is_cross_model:
+            logger.warning(
+                "Review is enabled but the review LLM client is the same as the "
+                "primary client. Cross-validation will be single-model only. "
+                "Configure multiple models in OPENAI_MODEL to enable true "
+                "multi-model cross-validation."
+            )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def generate(self, data: TestCaseGenInput) -> list[TestCase]:
-        """Generate test cases.
+        """Generate test cases using two-phase batch strategy.
 
-        Args:
-            data: Input payload containing endpoints and requirements.
-
-        Returns:
-            List of generated test cases.
+        Phase 1: Requirements → module-batched generation.
+        Phase 2: Endpoints (if any) → endpoint-batched API-specific cases.
         """
-        endpoints = data.endpoints
         requirements = data.requirements
+        endpoints = data.endpoints
 
-        endpoints_text = SwaggerParser.endpoints_to_text(endpoints)
-        requirements_text = (
-            RequirementParser.requirements_to_text(requirements)
-            if requirements
-            else "No specific requirements provided."
-        )
+        all_cases: list[TestCase] = []
 
-        system_prompt, user_prompt = self._prompt_builder.build_testcase_prompt(
-            endpoints_text=endpoints_text,
-            requirements_text=requirements_text,
-            output_language=self._output_language,
-        )
+        # --- Phase 1: Requirements-driven generation ---
+        if requirements:
+            all_cases.extend(self._generate_from_requirements(requirements, endpoints))
+        elif endpoints:
+            # No requirements but have endpoints — generate from endpoints alone
+            all_cases.extend(self._generate_from_endpoints(endpoints, ""))
+        else:
+            logger.warning("No requirements or endpoints provided; nothing to generate.")
+            return []
 
-        logger.info("Generating test cases via LLM...")
+        # --- Phase 2: API-specific enhancement (only if both req + endpoints) ---
+        if requirements and endpoints:
+            api_cases = self._generate_api_specific(endpoints, requirements)
+            all_cases.extend(api_cases)
 
-        test_cases = self._generate_with_retry(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            endpoints=endpoints,
-            step_label="Generation",
-        )
+        # Re-number sequentially
+        for idx, tc in enumerate(all_cases, 1):
+            tc.id = f"TC-{idx:03d}"
 
-        if self._review_enabled and test_cases:
-            test_cases = self._review_and_refine(test_cases, endpoints, requirements_text)
+        logger.info("Total: %d test cases", len(all_cases))
 
-        return test_cases
+        if self._review_enabled and all_cases:
+            all_cases = self._review_and_refine(all_cases, endpoints, requirements)
+
+        return all_cases
+
+    # ------------------------------------------------------------------
+    # Phase 1: Requirements-driven (module-batched)
+    # ------------------------------------------------------------------
+
+    def _generate_from_requirements(
+        self,
+        requirements: list[RequirementItem],
+        endpoints: list[APIEndpoint],
+    ) -> list[TestCase]:
+        """Generate test cases from requirements, batched by module."""
+        batches = self._split_requirement_batches(requirements)
+        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        all_cases: list[TestCase] = []
+
+        for i, batch in enumerate(batches, 1):
+            req_text = RequirementParser.requirements_to_text(batch)
+            system_prompt, user_prompt = self._prompt_builder.build_testcase_prompt(
+                endpoints_text=endpoints_text,
+                requirements_text=req_text,
+                output_language=self._output_language,
+            )
+            logger.info(
+                "Phase 1 - Batch %d/%d (%d requirements)...",
+                i, len(batches), len(batch),
+            )
+            cases = self._generate_with_retry(
+                system_prompt, user_prompt, endpoints, f"Req batch {i}/{len(batches)}"
+            )
+            all_cases.extend(cases)
+
+        return all_cases
+
+    # ------------------------------------------------------------------
+    # Phase 2: API-specific (endpoint-batched)
+    # ------------------------------------------------------------------
+
+    def _generate_api_specific(
+        self,
+        endpoints: list[APIEndpoint],
+        requirements: list[RequirementItem],
+    ) -> list[TestCase]:
+        """Generate API-specific cases (boundary, security, integration)."""
+        batches = self._split_endpoint_batches(endpoints)
+        req_text = RequirementParser.requirements_to_text(requirements)
+        all_cases: list[TestCase] = []
+
+        for i, batch in enumerate(batches, 1):
+            ep_text = SwaggerParser.endpoints_to_text(batch)
+            system_prompt, user_prompt = self._prompt_builder.build_api_prompt(
+                endpoints_text=ep_text,
+                requirements_text=req_text,
+                output_language=self._output_language,
+            )
+            logger.info(
+                "Phase 2 - Batch %d/%d (%d endpoints, API-specific)...",
+                i, len(batches), len(batch),
+            )
+            cases = self._generate_with_retry(
+                system_prompt, user_prompt, batch, f"API batch {i}/{len(batches)}"
+            )
+            all_cases.extend(cases)
+
+        return all_cases
+
+    def _generate_from_endpoints(
+        self, endpoints: list[APIEndpoint], requirements_text: str
+    ) -> list[TestCase]:
+        """Generate from endpoints only (no requirements)."""
+        batches = self._split_endpoint_batches(endpoints)
+        all_cases: list[TestCase] = []
+
+        for i, batch in enumerate(batches, 1):
+            ep_text = SwaggerParser.endpoints_to_text(batch)
+            system_prompt, user_prompt = self._prompt_builder.build_testcase_prompt(
+                endpoints_text=ep_text,
+                requirements_text=requirements_text or "No specific requirements.",
+                output_language=self._output_language,
+            )
+            logger.info(
+                "Endpoint batch %d/%d (%d endpoints)...",
+                i, len(batches), len(batch),
+            )
+            cases = self._generate_with_retry(
+                system_prompt, user_prompt, batch, f"EP batch {i}/{len(batches)}"
+            )
+            all_cases.extend(cases)
+
+        return all_cases
+
+    # ------------------------------------------------------------------
+    # Batch splitting
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _split_requirement_batches(
+        requirements: list[RequirementItem],
+    ) -> list[list[RequirementItem]]:
+        """Split requirements into module-aware batches."""
+        if not requirements:
+            return []
+        # Group by module, then split large modules
+        modules: dict[str, list[RequirementItem]] = {}
+        for req in requirements:
+            key = req.module or "default"
+            modules.setdefault(key, []).append(req)
+
+        batches: list[list[RequirementItem]] = []
+        for module_reqs in modules.values():
+            for i in range(0, len(module_reqs), MAX_REQUIREMENTS_PER_BATCH):
+                batches.append(module_reqs[i : i + MAX_REQUIREMENTS_PER_BATCH])
+        return batches
+
+    @staticmethod
+    def _split_endpoint_batches(
+        endpoints: list[APIEndpoint],
+    ) -> list[list[APIEndpoint]]:
+        """Split endpoints into small batches."""
+        if not endpoints:
+            return []
+        return [
+            endpoints[i : i + MAX_ENDPOINTS_PER_BATCH]
+            for i in range(0, len(endpoints), MAX_ENDPOINTS_PER_BATCH)
+        ]
+
+    # ------------------------------------------------------------------
+    # LLM call with targeted re-ask (guardrails-inspired)
+    # ------------------------------------------------------------------
 
     def _generate_with_retry(
         self,
@@ -106,121 +279,226 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         user_prompt: str,
         endpoints: list[APIEndpoint],
         step_label: str,
+        client: LLMClient | None = None,
     ) -> list[TestCase]:
-        """Call the LLM and parse its JSON response with retries.
+        """Call LLM with targeted re-ask on parse failure.
+
+        Instead of blindly retrying with the same prompt, the re-ask tells
+        the LLM exactly what went wrong (parse error / truncation) and
+        includes the failed output so it can fix it.
+
+        Inspired by guardrails' NonParseableReAsk / SkeletonReAsk split:
+        we classify the failure and give the LLM a targeted fix hint.
 
         Args:
-            system_prompt: System prompt.
-            user_prompt: User prompt.
-            endpoints: Parsed endpoints for validation.
-            step_label: Logging label (e.g. "Generation" or "Review").
-
-        Returns:
-            Parsed test cases, or an empty list on repeated failure.
+            client: Optional LLM client override (used by review rounds to
+                alternate between primary and secondary models). Defaults to
+                the primary client.
         """
+        llm = client or self._llm
+        last_raw = ""
+
         for attempt in range(1, MAX_PARSE_RETRIES + 1):
-            raw_response = self._llm.chat(system_prompt, user_prompt)
+            if attempt == 1:
+                effective_prompt = user_prompt
+            else:
+                # Targeted re-ask: classify the failure and tell the LLM
+                error_type = self._classify_failure(last_raw)
+                effective_prompt = self._build_reask_prompt(
+                    user_prompt, last_raw, step_label, error_type
+                )
+
+            raw_response = llm.chat(system_prompt, effective_prompt)
+            last_raw = raw_response
+
             items = self._extract_json(raw_response)
+            if items is None:
+                items = self._salvage_truncated_json(raw_response)
 
             if items is not None:
                 test_cases = self._to_test_cases(items, endpoints)
-                logger.info("%s finished: %d test cases", step_label, len(test_cases))
+                logger.info("%s: %d cases (attempt %d)", step_label, len(test_cases), attempt)
                 return test_cases
 
-            logger.error(
-                "%s attempt %d/%d: LLM response is not valid JSON. Preview: %.300s",
-                step_label,
-                attempt,
-                MAX_PARSE_RETRIES,
-                raw_response,
+            logger.warning(
+                "%s attempt %d/%d: cannot parse JSON. Preview: %.200s",
+                step_label, attempt, MAX_PARSE_RETRIES, raw_response,
             )
             self._dump_debug_response(raw_response)
 
-        logger.error("%s gave up after %d parse attempts", step_label, MAX_PARSE_RETRIES)
+        logger.error("%s gave up after %d attempts", step_label, MAX_PARSE_RETRIES)
         return []
+
+    @staticmethod
+    def _classify_failure(raw: str) -> str:
+        """Classify why the LLM output could not be parsed.
+
+        Returns ``"truncated"`` when the output looks like an incomplete JSON
+        array/object (started but never closed), otherwise ``"non_parseable"``
+        for outputs with no usable JSON structure. This mirrors guardrails'
+        distinction between NonParseableReAsk and truncation handling.
+        """
+        text = raw.strip()
+        has_array_start = "[" in text
+        has_array_end = "]" in text
+        has_obj_start = "{" in text
+        # Heuristic: a JSON array/object was started but never closed
+        if (has_array_start and not has_array_end) or (
+            has_obj_start and not has_array_end and "}" not in text
+        ):
+            return "truncated"
+        if has_array_start or has_obj_start:
+            # Some JSON structure exists but still failed to parse
+            return "truncated"
+        return "non_parseable"
+
+    @staticmethod
+    def _build_reask_prompt(
+        original_prompt: str,
+        failed_output: str,
+        label: str,
+        error_type: str = "non_parseable",
+    ) -> str:
+        """Build a targeted re-ask prompt (guardrails pattern).
+
+        Tells the LLM its previous output was not usable, shows the failed
+        output, and asks it to fix and return only valid JSON. The hint is
+        tailored to the failure type so the LLM knows what to fix.
+        """
+        # Truncate failed output to avoid token bloat
+        truncated = failed_output[:2000]
+        if len(failed_output) > 2000:
+            truncated += "\n... [truncated]"
+
+        if error_type == "truncated":
+            diagnosis = (
+                f"Your previous response for '{label}' was TRUNCATED: the JSON "
+                "array/object was started but never closed, so it could not be parsed."
+            )
+            fixes = (
+                "Generate FEWER test cases so the output fits within the token limit. "
+                "Make each case more compact: shorter descriptions, fewer steps, "
+                "concise expected_results. Ensure every object and array is properly closed."
+            )
+        else:
+            diagnosis = (
+                f"Your previous response for '{label}' was NOT valid JSON and could "
+                "not be parsed."
+            )
+            fixes = (
+                "Return ONLY a valid JSON array. Common fixes:\n"
+                "- Remove any text before [ or after ]\n"
+                "- Remove markdown code fences (```)\n"
+                "- Ensure all strings are properly escaped (no unescaped quotes)\n"
+                "- Ensure all objects and arrays are properly closed"
+            )
+
+        return (
+            f"{original_prompt}\n\n"
+            f"---\n"
+            f"IMPORTANT: {diagnosis}\n\n"
+            f"Here is what you returned:\n\n"
+            f"{truncated}\n\n"
+            f"{fixes}\n"
+        )
+
+    # ------------------------------------------------------------------
+    # Review
+    # ------------------------------------------------------------------
 
     def _review_and_refine(
         self,
         test_cases: list[TestCase],
         endpoints: list[APIEndpoint],
-        requirements_text: str,
+        requirements: list[RequirementItem],
     ) -> list[TestCase]:
-        """Review and refine test cases in a fresh conversation (no context).
+        """Run multi-round cross-validation review.
 
-        The current cases are serialized and sent to a brand-new LLM request
-        together with the endpoints and requirements. The reviewer returns the
-        complete improved list, which replaces the original when parseable.
+        Round flow (``review_max_rounds`` total):
+          - Round 1: secondary model reviews the generated cases.
+          - Round 2: primary model reviews round-1 output.
+          - Round 3: secondary reviews round-2 output.
+          - ... alternating until ``review_max_rounds`` exhausted.
 
-        Args:
-            test_cases: Currently generated test cases.
-            endpoints: Parsed endpoints.
-            requirements_text: Requirements as plain text.
-
-        Returns:
-            Refined test cases, or the originals if the review fails.
+        Each round runs in a fresh conversation with no prior context. If a
+        round fails to parse, the previous round's output is kept and the
+        loop continues (so a transient parse failure does not discard
+        accumulated refinement). If every round fails, the original input
+        is returned unchanged.
         """
-        current_json = json.dumps(
-            [self._testcase_to_dict(tc) for tc in test_cases],
-            ensure_ascii=False,
-        )
-        endpoints_text = SwaggerParser.endpoints_to_text(endpoints)
+        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        requirements_text = RequirementParser.requirements_to_text(requirements)
 
-        system_prompt, user_prompt = self._prompt_builder.build_review_prompt(
-            endpoints_text=endpoints_text,
-            requirements_text=requirements_text,
-            test_cases_json=current_json,
-            output_language=self._output_language,
-        )
+        current_cases = test_cases
+        for round_idx in range(1, self._review_max_rounds + 1):
+            # Odd rounds: secondary (non-primary) model.
+            # Even rounds: primary model.
+            # This gives true cross-validation when two models are configured.
+            use_secondary = round_idx % 2 == 1
+            if use_secondary:
+                client = self._review_llm
+                client_label = "secondary" if self._review_is_cross_model else "primary(same)"
+            else:
+                client = self._llm
+                client_label = "primary"
 
-        logger.info("Reviewing %d test cases in a fresh conversation...", len(test_cases))
-        refined = self._generate_with_retry(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            endpoints=endpoints,
-            step_label="Review",
-        )
+            current_json = json.dumps(
+                [self._testcase_to_dict(tc) for tc in current_cases],
+                ensure_ascii=False,
+            )
+            system_prompt, user_prompt = self._prompt_builder.build_review_prompt(
+                endpoints_text=endpoints_text,
+                requirements_text=requirements_text,
+                test_cases_json=current_json,
+                output_language=self._output_language,
+            )
 
-        if not refined:
-            logger.warning("Review returned no usable cases; keeping original %d", len(test_cases))
-            return test_cases
+            logger.info(
+                "Review round %d/%d using %s model (%d cases in)...",
+                round_idx,
+                self._review_max_rounds,
+                client_label,
+                len(current_cases),
+            )
+            refined = self._generate_with_retry(
+                system_prompt,
+                user_prompt,
+                endpoints,
+                f"Review round {round_idx}",
+                client=client,
+            )
 
-        logger.info("Review complete: %d -> %d test cases", len(test_cases), len(refined))
-        return refined
+            if not refined:
+                logger.warning(
+                    "Review round %d returned nothing; keeping previous %d cases.",
+                    round_idx,
+                    len(current_cases),
+                )
+                continue
+
+            logger.info(
+                "Review round %d: %d -> %d", round_idx, len(current_cases), len(refined)
+            )
+            current_cases = refined
+
+        return current_cases
+
+    # ------------------------------------------------------------------
+    # Save
+    # ------------------------------------------------------------------
 
     def save(self, output: list[TestCase], output_path: Path) -> Path:
-        """Save test cases to JSON file.
-
-        Args:
-            output: List of test cases.
-            output_path: Target file path.
-
-        Returns:
-            Saved file path.
-        """
+        """Save to JSON."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
         data = [self._testcase_to_dict(tc) for tc in output]
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-
         logger.info("Saved %d test cases to %s", len(output), output_path)
         return output_path
 
     def save_csv(self, output: list[TestCase], output_path: Path) -> Path:
-        """Save test cases to CSV file.
-
-        List fields are flattened using "; " as separator. The file is
-        written with UTF-8 BOM so it opens correctly in Excel.
-
-        Args:
-            output: List of test cases.
-            output_path: Target file path.
-
-        Returns:
-            Saved file path.
-        """
+        """Save to CSV (UTF-8 BOM for Excel)."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
         with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
             writer.writeheader()
@@ -229,30 +507,26 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 for key in ("preconditions", "steps", "expected_results", "tags"):
                     row[key] = "; ".join(str(v) for v in row[key])
                 writer.writerow(row)
-
         logger.info("Saved %d test cases to %s (csv)", len(output), output_path)
         return output_path
 
+    # ------------------------------------------------------------------
+    # JSON parsing & salvage
+    # ------------------------------------------------------------------
+
     def _extract_json(self, raw: str) -> list[Any] | None:
-        """Extract a JSON array from the raw LLM response.
-
-        Tolerates markdown fences and prose surrounding the JSON payload.
-        """
+        """Extract JSON array from raw LLM response."""
         text = raw.strip()
-
-        # Strip markdown code fences if present
         text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
         text = text.strip()
 
-        # Direct parse
         try:
             parsed = json.loads(text)
             return parsed if isinstance(parsed, list) else [parsed]
         except json.JSONDecodeError:
             pass
 
-        # Locate outermost array/object boundaries within surrounding prose
         for open_ch, close_ch in (("[", "]"), ("{", "}")):
             start = text.find(open_ch)
             end = text.rfind(close_ch)
@@ -262,40 +536,92 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 except json.JSONDecodeError:
                     continue
                 return parsed if isinstance(parsed, list) else [parsed]
+        return None
 
+    @staticmethod
+    def _salvage_truncated_json(raw: str) -> list[Any] | None:
+        """Salvage a truncated JSON array by closing brackets."""
+        text = raw.strip()
+        text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+        text = text.strip()
+
+        bracket_start = text.find("[")
+        if bracket_start == -1:
+            return None
+
+        depth = 0
+        last_complete_obj_end = -1
+        in_string = False
+        escape = False
+
+        for i in range(bracket_start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    last_complete_obj_end = i
+            elif ch == "]" and depth == 0:
+                break
+
+        if last_complete_obj_end == -1:
+            return None
+
+        salvaged = text[: last_complete_obj_end + 1] + "]"
+        salvaged = re.sub(r",\s*\]$", "]", salvaged)
+        try:
+            parsed = json.loads(salvaged)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                logger.info("Salvaged %d cases from truncated response", len(parsed))
+                return parsed
+        except json.JSONDecodeError:
+            pass
         return None
 
     @staticmethod
     def _dump_debug_response(raw: str) -> None:
-        """Persist the unparseable response for debugging."""
+        """Persist unparseable response for debugging."""
         try:
             debug_path = Path("output/.debug_last_llm_response.txt")
             debug_path.parent.mkdir(parents=True, exist_ok=True)
             debug_path.write_text(raw, encoding="utf-8")
-            logger.info("Raw response saved to %s for inspection", debug_path)
+            logger.info("Raw response saved to %s", debug_path)
         except OSError:
             pass
+
+    # ------------------------------------------------------------------
+    # Conversion
+    # ------------------------------------------------------------------
 
     def _to_test_cases(self, items: list[Any], endpoints: list[APIEndpoint]) -> list[TestCase]:
         """Convert parsed JSON items into TestCase objects."""
         endpoint_map = {ep.full_path: ep for ep in endpoints}
-        test_cases: list[TestCase] = []
+        # Fallback endpoint for requirement-only cases (no API spec)
+        fallback_ep = endpoints[0] if endpoints else APIEndpoint(method="N/A", path="N/A")
 
+        test_cases: list[TestCase] = []
         for idx, item in enumerate(items, start=1):
             if not isinstance(item, dict):
                 continue
-
             ep_key = item.get("endpoint", "")
-            endpoint = endpoint_map.get(ep_key, endpoints[0] if endpoints else None)
-
-            if endpoint is None:
-                continue
-
+            endpoint = endpoint_map.get(ep_key, fallback_ep)
             try:
                 test_type = TestType(item.get("test_type", "functional"))
             except ValueError:
                 test_type = TestType.FUNCTIONAL
-
             try:
                 priority = TestPriority(item.get("priority", "medium"))
             except ValueError:
@@ -315,7 +641,6 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     tags=item.get("tags", []),
                 )
             )
-
         return test_cases
 
     @staticmethod
