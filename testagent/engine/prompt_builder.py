@@ -37,6 +37,7 @@ class PromptBuilder:
         self,
         endpoints_text: str,
         requirements_text: str,
+        output_language: str = "english",
         extra_context: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
         """Build prompts for test case generation.
@@ -44,6 +45,7 @@ class PromptBuilder:
         Args:
             endpoints_text: API endpoints as plain text.
             requirements_text: Requirements as plain text.
+            output_language: Target output language ("english" or "chinese").
             extra_context: Additional template variables.
 
         Returns:
@@ -54,10 +56,14 @@ class PromptBuilder:
             "You generate comprehensive, well-structured test cases based on API specifications "
             "and requirement documents. Output only valid JSON."
         )
+        language_instruction = self._language_instruction(output_language)
+        if language_instruction:
+            system_prompt += " " + language_instruction
 
         context = {
             "endpoints": endpoints_text,
             "requirements": requirements_text,
+            "output_language": output_language,
             **(extra_context or {}),
         }
 
@@ -66,7 +72,58 @@ class PromptBuilder:
             user_prompt = template.render(**context)
         except Exception:
             user_prompt = self._build_inline_testcase_prompt(
-                endpoints=endpoints_text, requirements=requirements_text
+                endpoints=endpoints_text,
+                requirements=requirements_text,
+                output_language=output_language,
+            )
+
+        return system_prompt, user_prompt
+
+    def build_review_prompt(
+        self,
+        endpoints_text: str,
+        requirements_text: str,
+        test_cases_json: str,
+        output_language: str = "english",
+    ) -> tuple[str, str]:
+        """Build prompts for reviewing/refining generated test cases.
+
+        Runs as a fresh conversation with no prior context.
+
+        Args:
+            endpoints_text: API endpoints as plain text.
+            requirements_text: Requirements as plain text.
+            test_cases_json: Existing test cases serialized as JSON.
+            output_language: Target output language ("english" or "chinese").
+
+        Returns:
+            Tuple of (system_prompt, user_prompt).
+        """
+        system_prompt = (
+            "You are a meticulous senior QA reviewer. You detect gaps, inconsistencies and "
+            "weak assertions in generated test cases, then produce a complete, improved list. "
+            "Output only valid JSON."
+        )
+        language_instruction = self._language_instruction(output_language)
+        if language_instruction:
+            system_prompt += " " + language_instruction
+
+        context = {
+            "endpoints": endpoints_text,
+            "requirements": requirements_text,
+            "test_cases_json": test_cases_json,
+            "output_language": output_language,
+        }
+
+        try:
+            template = self._env.get_template("review_prompt.j2")
+            user_prompt = template.render(**context)
+        except Exception:
+            user_prompt = self._build_inline_review_prompt(
+                endpoints=endpoints_text,
+                requirements=requirements_text,
+                test_cases_json=test_cases_json,
+                output_language=output_language,
             )
 
         return system_prompt, user_prompt
@@ -76,6 +133,7 @@ class PromptBuilder:
         endpoints_text: str,
         config: dict[str, Any],
         script_format: str = "k6",
+        output_language: str = "english",
     ) -> tuple[str, str]:
         """Build prompts for performance script generation.
 
@@ -83,6 +141,7 @@ class PromptBuilder:
             endpoints_text: API endpoints as plain text.
             config: Performance test configuration.
             script_format: Target format (k6 or jmeter).
+            output_language: Target output language ("english" or "chinese").
 
         Returns:
             Tuple of (system_prompt, user_prompt).
@@ -99,6 +158,9 @@ class PromptBuilder:
                 "Output only complete, runnable k6 JavaScript. "
                 "Never output markdown fences or explanations."
             )
+        language_instruction = self._language_instruction(output_language, code_context=True)
+        if language_instruction:
+            system_prompt += " " + language_instruction
 
         context = {
             "endpoints": endpoints_text,
@@ -116,10 +178,35 @@ class PromptBuilder:
 
         return system_prompt, user_prompt
 
+    @staticmethod
+    def _language_instruction(output_language: str, code_context: bool = False) -> str:
+        """Return a language instruction snippet for prompts.
+
+        Args:
+            output_language: Target language.
+            code_context: Whether the output is code (comments/labels only).
+
+        Returns:
+            Instruction string, or empty when English.
+        """
+        if output_language == "chinese":
+            if code_context:
+                return (
+                    "Write all script comments, user-facing labels and summary text in "
+                    "Simplified Chinese (keep code keywords and identifiers in English)."
+                )
+            return (
+                "Write all text fields (title, description, preconditions, steps, "
+                "expected_results, tags) in Simplified Chinese."
+            )
+        return ""
+
     def _build_inline_testcase_prompt(
         self, endpoints: str, requirements: str, **kwargs: Any
     ) -> str:
         """Fallback inline prompt for test case generation."""
+        language_hint = self._language_instruction(kwargs.get("output_language", "english"))
+        language_section = f"\n{language_hint}" if language_hint else ""
         return f"""Generate comprehensive test cases based on the following API endpoints and requirements.
 
 ## API Endpoints
@@ -139,6 +226,18 @@ Return a JSON array of test cases. Each test case must have:
 - "preconditions": array of setup steps
 - "steps": array of test execution steps
 - "expected_results": array of expected outcomes
+- "tags": array of labels (smoke, regression, auth, crud, boundary, security, performance)
+
+## Quality Checklist (must follow)
+1. "endpoint" must EXACTLY match an endpoint above; steps must use the same endpoint.
+2. Cover Create/Read/Update/Delete for every resource present in the spec.
+3. Every expected_result must be machine-checkable (explicit status code + field value/presence).
+4. Test min/max length boundaries, pagination limit maximum, case-sensitivity, empty strings.
+5. Add SQL injection / XSS, rate limiting, token expiry & refresh, IDOR, password strength tests.
+6. Add P95 response-time baseline and concurrency tests.
+7. Include teardown/cleanup and duplicate-submission (idempotency) cases.
+8. Cover unicode / emoji / whitespace / special characters.
+{language_section}
 
 Cover:
 1. Happy path for each endpoint
@@ -146,6 +245,42 @@ Cover:
 3. Negative tests (invalid input, missing auth, etc.)
 4. Integration tests where endpoints depend on each other
 
+Output ONLY the JSON array. No markdown, no explanation."""
+
+    def _build_inline_review_prompt(
+        self,
+        endpoints: str,
+        requirements: str,
+        test_cases_json: str,
+        output_language: str = "english",
+    ) -> str:
+        """Fallback inline prompt for review/refinement."""
+        language_hint = self._language_instruction(output_language)
+        language_section = f"\n{language_hint}" if language_hint else ""
+        return f"""Review and improve the test cases below. You have no prior context.
+
+## API Endpoints
+{endpoints}
+
+## Requirements
+{requirements}
+
+## Existing Test Cases (JSON)
+{test_cases_json}
+
+## Review Checklist
+1. Every "endpoint" must exactly match an endpoint above; fix mismatches.
+2. Ensure Create/Read/Update/Delete are all covered per resource; add missing ones.
+3. Rewrite vague expected_results into machine-checkable assertions (status code + field value/presence).
+4. Add boundary tests (min/max length, pagination limit, case-sensitivity, empty strings).
+5. Add security tests (SQLi/XSS, rate limiting, token expiry/refresh, IDOR, password strength).
+6. Add performance tests (P95 baseline, concurrency).
+7. Fill "tags" (smoke, regression, auth, crud, boundary, security, performance).
+8. Add teardown/cleanup and idempotency (duplicate submission) cases.
+9. Add unicode/emoji/whitespace handling cases.
+{language_section}
+
+Return the COMPLETE final list of ALL test cases as a single JSON array with the same schema.
 Output ONLY the JSON array. No markdown, no explanation."""
 
     def _build_inline_performance_prompt(

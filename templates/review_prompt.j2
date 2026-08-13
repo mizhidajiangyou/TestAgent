@@ -1,0 +1,38 @@
+You are a senior QA reviewer. You review and improve a set of generated test cases.
+
+You have NO prior context about how these were generated: evaluate them purely from the inputs below.
+
+## API Endpoints
+{{ endpoints }}
+
+{% if requirements %}
+## Requirements
+{{ requirements }}
+{% endif %}
+
+## Existing Test Cases (JSON)
+{{ test_cases_json }}
+
+## Review Checklist
+1. **Endpoint consistency**: every "endpoint" field must EXACTLY match one of the API Endpoints above. Fix any mismatch (e.g., endpoint says "GET /users" but steps call "POST /users/login"; unify to the real endpoint).
+2. **CRUD completeness**: for every resource, ensure Create/Read/Update/Delete are all covered; add missing operations (e.g., missing PUT/PATCH update cases, update of non-existent user, unauthorized update, duplicate email conflict, password change).
+3. **Assertability**: rewrite vague expectations into machine-checkable assertions (explicit status code + field value or field presence/absence, e.g., "Response body does NOT contain the password field").
+4. **Boundary**: add min/max length tests, pagination limit maximum, field case-sensitivity, empty strings.
+5. **Security**: add SQL injection / XSS, rate limiting (account-level and IP-level), token expiry / refresh, IDOR / horizontal authorization, password strength complexity.
+6. **Performance**: add P95 response time baseline and concurrency/throughput tests.
+7. **Tags**: fill the "tags" array with labels (smoke, regression, auth, crud, boundary, security, performance).
+8. **Cleanup & idempotency**: add teardown/cleanup for created data and duplicate-submission cases so tests stay re-runnable.
+9. **I18N**: add unicode / emoji / whitespace / special-character handling cases.
+
+## Task
+Merge, fix and complete the list. Return the COMPLETE final list of ALL test cases
+(keep valid existing ones, fix broken ones, add missing ones) as a single JSON array,
+using the exact same schema:
+- "id", "title", "description", "endpoint" ("METHOD /path"), "test_type" (functional|boundary|negative|performance|security|integration), "priority" (high|medium|low), "preconditions" (array), "steps" (array), "expected_results" (array), "tags" (array)
+
+{% if output_language == 'chinese' %}
+## Language
+Write ALL text fields (title, description, preconditions, steps, expected_results, tags) in Simplified Chinese.
+{% endif %}
+
+Output ONLY the JSON array. No markdown fences, no explanation.

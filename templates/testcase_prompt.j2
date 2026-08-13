@@ -19,6 +19,22 @@ Return a JSON array of test cases. Each test case must have:
 - "preconditions": array of setup steps
 - "steps": array of test execution steps
 - "expected_results": array of expected outcomes
+- "tags": array of labels (e.g., "smoke", "regression", "auth", "crud", "boundary", "security", "performance")
+
+## Quality Checklist (must follow)
+1. **Endpoint accuracy**: the "endpoint" field must EXACTLY match one of the API Endpoints above ("METHOD /path"). Never invent or mismatch endpoints. Every step that calls an API must use the same endpoint as the "endpoint" field.
+2. **CRUD completeness**: for every resource, cover Create, Read, Update, Delete when the spec exposes them. Never omit an existing operation (e.g., missing PUT/PATCH update cases).
+3. **Assertability**: every expected_result must be machine-checkable: explicit HTTP status code, and specific field value or field presence/absence (e.g., "Response body does NOT contain the password field").
+4. **Boundary values**: test min/max lengths, pagination limit maximum, field case-sensitivity, empty strings.
+5. **Security**: SQL injection / XSS payloads, rate limiting, token expiry & refresh, IDOR (horizontal authorization), password strength policy.
+6. **Performance**: response time baseline (e.g., P95 < 200ms), concurrency/throughput for key endpoints.
+7. **Cleanup & idempotency**: include teardown/cleanup in preconditions for created data; cover duplicate/repeated submissions.
+8. **I18N**: cover unicode / emoji / whitespace / special characters in text fields.
+
+{% if output_language == 'chinese' %}
+## Language
+Write ALL text fields (title, description, preconditions, steps, expected_results, tags) in Simplified Chinese.
+{% endif %}
 
 Cover:
 1. Happy path for each endpoint

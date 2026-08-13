@@ -10,6 +10,7 @@ from pathlib import Path
 
 from testagent.config.models import PerfReportInput, ReportMetadata
 from testagent.reports.base import BaseReport
+from testagent.reports.i18n import report_label
 
 logger = logging.getLogger(__name__)
 
@@ -33,20 +34,23 @@ class PerformanceReport(BaseReport[PerfReportInput]):
         config = data.config
         metrics = data.metrics
         analysis = data.analysis
+        lang = data.output_language
 
         lines: list[str] = []
 
         lines.append(f"# {self._metadata.title}")
         lines.append("")
-        lines.append(f"**Author:** {self._metadata.author}")
-        lines.append(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"**Version:** {self._metadata.version}")
+        lines.append(f"**{report_label('author', lang)}:** {self._metadata.author}")
+        lines.append(
+            f"**{report_label('date', lang)}:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        lines.append(f"**{report_label('version', lang)}:** {self._metadata.version}")
         lines.append("")
 
         # Test Configuration
-        lines.append("## Test Configuration")
+        lines.append(f"## {report_label('test_configuration', lang)}")
         lines.append("")
-        lines.append("| Parameter | Value |")
+        lines.append(f"| {report_label('parameter', lang)} | {report_label('value', lang)} |")
         lines.append("|-----------|-------|")
         lines.append(f"| Base URL | `{config.base_url}` |")
         lines.append(f"| Virtual Users | {config.virtual_users} |")
@@ -59,14 +63,14 @@ class PerformanceReport(BaseReport[PerfReportInput]):
 
         # Metrics section (if available)
         if metrics:
-            lines.append("## Test Results")
+            lines.append(f"## {report_label('test_results', lang)}")
             lines.append("")
-            lines.append("### Key Performance Indicators")
+            lines.append(f"### {report_label('kpi', lang)}")
             lines.append("")
 
             summary = metrics.get("summary", {})
             if summary:
-                lines.append("| Metric | Value |")
+                lines.append(f"| {report_label('metric', lang)} | {report_label('value', lang)} |")
                 lines.append("|--------|-------|")
                 lines.append(f"| Total Requests | {summary.get('total_requests', 'N/A')} |")
                 lines.append(f"| Avg Response Time | {summary.get('avg_ms', 'N/A')}ms |")
@@ -79,9 +83,12 @@ class PerformanceReport(BaseReport[PerfReportInput]):
             # Endpoint breakdown
             endpoints = metrics.get("endpoints", {})
             if endpoints:
-                lines.append("### Endpoint Breakdown")
+                lines.append(f"### {report_label('endpoint_breakdown', lang)}")
                 lines.append("")
-                lines.append("| Endpoint | Avg (ms) | P95 (ms) | P99 (ms) | Errors |")
+                lines.append(
+                    f"| {report_label('endpoint', lang)} | Avg (ms) | P95 (ms) | P99 (ms) | "
+                    f"{report_label('errors', lang)} |"
+                )
                 lines.append("|----------|----------|----------|----------|--------|")
                 for ep_name, ep_data in endpoints.items():
                     lines.append(
@@ -93,19 +100,19 @@ class PerformanceReport(BaseReport[PerfReportInput]):
 
         # AI Analysis section (if available)
         if analysis:
-            lines.append("## AI Analysis")
+            lines.append(f"## {report_label('ai_analysis', lang)}")
             lines.append("")
             verdict = analysis.get("verdict", "unknown")
-            lines.append(f"**Verdict:** {verdict.upper()}")
+            lines.append(f"**{report_label('verdict', lang)}:** {verdict.upper()}")
             lines.append("")
 
             if analysis.get("headline"):
-                lines.append(f"**Summary:** {analysis['headline']}")
+                lines.append(f"**{report_label('summary_label', lang)}:** {analysis['headline']}")
                 lines.append("")
 
             findings = analysis.get("findings", [])
             if findings:
-                lines.append("### Findings")
+                lines.append(f"### {report_label('findings', lang)}")
                 lines.append("")
                 for finding in findings:
                     ftype = finding.get("type", "info")
@@ -119,14 +126,14 @@ class PerformanceReport(BaseReport[PerfReportInput]):
 
             next_steps = analysis.get("next_steps", [])
             if next_steps:
-                lines.append("### Recommended Next Steps")
+                lines.append(f"### {report_label('next_steps', lang)}")
                 lines.append("")
                 for i, step in enumerate(next_steps, 1):
                     lines.append(f"{i}. {step}")
                 lines.append("")
 
         # Usage instructions
-        lines.append("## How to Run")
+        lines.append(f"## {report_label('how_to_run', lang)}")
         lines.append("")
         lines.append("### k6")
         lines.append("")

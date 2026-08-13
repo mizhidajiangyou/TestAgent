@@ -69,6 +69,8 @@ class Container:
             self._testcase_generator = TestCaseGenerator(
                 llm_client=self.llm_client,
                 prompt_builder=self.prompt_builder,
+                review_enabled=self._settings.review_enabled,
+                output_language=self._settings.output_language,
             )
         return self._testcase_generator
 
@@ -80,6 +82,7 @@ class Container:
                 llm_client=self.llm_client,
                 prompt_builder=self.prompt_builder,
                 script_format=self._settings.script_format,
+                output_language=self._settings.output_language,
             )
         return self._performance_generator
 

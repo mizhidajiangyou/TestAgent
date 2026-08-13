@@ -12,6 +12,7 @@ from typing import Any
 
 from testagent.config.models import ReportMetadata, TestCase, TestCaseReportInput
 from testagent.reports.base import BaseReport
+from testagent.reports.i18n import priority_label, report_label, type_label
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,8 @@ class TestCaseReport(BaseReport[TestCaseReportInput]):
             Report content as string.
         """
         if data.output_format == "json":
-            return self._generate_json(data.test_cases)
-        return self._generate_markdown(data.test_cases)
+            return self._generate_json(data.test_cases, data.output_language)
+        return self._generate_markdown(data.test_cases, data.output_language)
 
     def save(self, content: str, output_path: Path) -> Path:
         """Save report to file.
@@ -51,16 +52,26 @@ class TestCaseReport(BaseReport[TestCaseReportInput]):
         logger.info("Saved test case report to %s", output_path)
         return output_path
 
-    def _generate_markdown(self, test_cases: list[TestCase]) -> str:
-        """Generate Markdown report."""
+    def _generate_markdown(self, test_cases: list[TestCase], output_language: str) -> str:
+        """Generate Markdown report.
+
+        Args:
+            test_cases: List of test cases.
+            output_language: "english" or "chinese".
+
+        Returns:
+            Markdown report content.
+        """
         lines: list[str] = []
 
         lines.append(f"# {self._metadata.title}")
         lines.append("")
-        lines.append(f"**Author:** {self._metadata.author}")
-        lines.append(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"**Version:** {self._metadata.version}")
-        lines.append(f"**Total Test Cases:** {len(test_cases)}")
+        lines.append(f"**{report_label('author', output_language)}:** {self._metadata.author}")
+        lines.append(
+            f"**{report_label('date', output_language)}:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        lines.append(f"**{report_label('version', output_language)}:** {self._metadata.version}")
+        lines.append(f"**{report_label('total_test_cases', output_language)}:** {len(test_cases)}")
         lines.append("")
 
         # Summary by type
@@ -70,51 +81,61 @@ class TestCaseReport(BaseReport[TestCaseReportInput]):
             type_counts[tc.test_type.value] = type_counts.get(tc.test_type.value, 0) + 1
             priority_counts[tc.priority.value] = priority_counts.get(tc.priority.value, 0) + 1
 
-        lines.append("## Summary")
+        lines.append(f"## {report_label('summary', output_language)}")
         lines.append("")
-        lines.append("### By Test Type")
+        lines.append(f"### {report_label('by_type', output_language)}")
         lines.append("")
-        lines.append("| Type | Count |")
+        lines.append(
+            f"| {report_label('type', output_language)} | {report_label('count', output_language)} |"
+        )
         lines.append("|------|-------|")
         for t, c in sorted(type_counts.items()):
-            lines.append(f"| {t} | {c} |")
+            lines.append(f"| {type_label(t, output_language)} | {c} |")
         lines.append("")
 
-        lines.append("### By Priority")
+        lines.append(f"### {report_label('by_priority', output_language)}")
         lines.append("")
-        lines.append("| Priority | Count |")
+        lines.append(
+            f"| {report_label('priority', output_language)} | {report_label('count', output_language)} |"
+        )
         lines.append("|----------|-------|")
         for p, c in sorted(priority_counts.items()):
-            lines.append(f"| {p} | {c} |")
+            lines.append(f"| {priority_label(p, output_language)} | {c} |")
         lines.append("")
 
         # Detailed test cases
-        lines.append("## Test Cases")
+        lines.append(f"## {report_label('test_cases', output_language)}")
         lines.append("")
 
         for tc in test_cases:
             lines.append(f"### {tc.id}: {tc.title}")
             lines.append("")
-            lines.append(f"- **Endpoint:** `{tc.endpoint.full_path}`")
-            lines.append(f"- **Type:** {tc.test_type.value}")
-            lines.append(f"- **Priority:** {tc.priority.value}")
-            lines.append(f"- **Description:** {tc.description}")
+            lines.append(
+                f"- **{report_label('endpoint', output_language)}:** `{tc.endpoint.full_path}`"
+            )
+            lines.append(
+                f"- **{report_label('type', output_language)}:** {type_label(tc.test_type.value, output_language)}"
+            )
+            lines.append(
+                f"- **{report_label('priority', output_language)}:** {priority_label(tc.priority.value, output_language)}"
+            )
+            lines.append(f"- **{report_label('description', output_language)}:** {tc.description}")
             lines.append("")
 
             if tc.preconditions:
-                lines.append("**Preconditions:**")
+                lines.append(f"**{report_label('preconditions', output_language)}:**")
                 for step in tc.preconditions:
                     lines.append(f"1. {step}")
                 lines.append("")
 
             if tc.steps:
-                lines.append("**Steps:**")
+                lines.append(f"**{report_label('steps', output_language)}:**")
                 for i, step in enumerate(tc.steps, 1):
                     lines.append(f"{i}. {step}")
                 lines.append("")
 
             if tc.expected_results:
-                lines.append("**Expected Results:**")
+                lines.append(f"**{report_label('expected_results', output_language)}:**")
                 for result in tc.expected_results:
                     lines.append(f"- {result}")
                 lines.append("")
@@ -124,8 +145,16 @@ class TestCaseReport(BaseReport[TestCaseReportInput]):
 
         return "\n".join(lines)
 
-    def _generate_json(self, test_cases: list[TestCase]) -> str:
-        """Generate JSON report."""
+    def _generate_json(self, test_cases: list[TestCase], output_language: str) -> str:
+        """Generate JSON report.
+
+        Args:
+            test_cases: List of test cases.
+            output_language: "english" or "chinese" (affects summary labels).
+
+        Returns:
+            JSON report content.
+        """
         by_type: dict[str, int] = {}
         by_priority: dict[str, int] = {}
         cases: list[dict[str, Any]] = []

@@ -26,10 +26,12 @@ class PerformanceGenerator(BaseGenerator[PerfGenInput, str]):
         llm_client: LLMClient,
         prompt_builder: PromptBuilder,
         script_format: str = "k6",
+        output_language: str = "english",
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
         self._format = script_format
+        self._output_language = output_language
 
     def generate(self, data: PerfGenInput) -> str:
         """Generate a performance test script.
@@ -56,6 +58,7 @@ class PerformanceGenerator(BaseGenerator[PerfGenInput, str]):
             endpoints_text=endpoints_text,
             config=config_dict,
             script_format=self._format,
+            output_language=self._output_language,
         )
 
         logger.info("Generating %s performance script via LLM...", self._format)

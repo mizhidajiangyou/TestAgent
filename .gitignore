@@ -220,3 +220,5 @@ __marimo__/
 # TestAgent output
 output/
 *.jtl
+
+task.md

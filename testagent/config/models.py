@@ -127,6 +127,7 @@ class TestCaseReportInput:
 
     test_cases: list[TestCase]
     output_format: str = "markdown"
+    output_language: str = "english"
 
 
 @dataclass
@@ -137,3 +138,4 @@ class PerfReportInput:
     config: PerformanceConfig
     metrics: dict[str, Any] | None = None
     analysis: dict[str, Any] | None = None
+    output_language: str = "english"

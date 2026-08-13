@@ -56,7 +56,7 @@ def main(ctx: click.Context, verbose: bool) -> None:
     "--format",
     "-f",
     "output_format",
-    type=click.Choice(["json", "markdown"]),
+    type=click.Choice(["json", "csv", "markdown"]),
     default="json",
     help="Output format",
 )
@@ -90,10 +90,17 @@ def generate_tests(
     output_path = Path(output)
     if output_format == "markdown":
         report = container.testcase_report.generate(
-            TestCaseReportInput(test_cases=test_cases, output_format="markdown")
+            TestCaseReportInput(
+                test_cases=test_cases,
+                output_format="markdown",
+                output_language=container.settings.output_language,
+            )
         )
         output_path = output_path.with_suffix(".md")
         container.testcase_report.save(report, output_path)
+    elif output_format == "csv":
+        output_path = output_path.with_suffix(".csv")
+        container.testcase_generator.save_csv(test_cases, output_path)
     else:
         container.testcase_generator.save(test_cases, output_path)
 
@@ -161,6 +168,7 @@ def generate_perf(
         llm_client=container.llm_client,
         prompt_builder=container.prompt_builder,
         script_format=fmt,
+        output_language=container.settings.output_language,
     )
     script = generator.generate(PerfGenInput(endpoints=endpoints, config=perf_config))
 
@@ -177,7 +185,11 @@ def generate_perf(
     # Generate report
     console.print("[bold blue]Generating report...[/]")
     report = container.performance_report.generate(
-        PerfReportInput(script_path=str(output_path), config=perf_config)
+        PerfReportInput(
+            script_path=str(output_path),
+            config=perf_config,
+            output_language=container.settings.output_language,
+        )
     )
     report_path = output_path.with_suffix(".md")
     container.performance_report.save(report, report_path)
@@ -213,6 +225,10 @@ def config(ctx: click.Context) -> None:
     console.print("[bold]Output Settings:[/]")
     console.print(f"  Output Dir: {settings.output_dir}")
     console.print(f"  Script Format: {settings.script_format}")
+    console.print()
+    console.print("[bold]Pipeline Settings:[/]")
+    console.print(f"  Review Enabled: {'yes' if settings.review_enabled else 'no'}")
+    console.print(f"  Output Language: {settings.output_language}")
 
 
 if __name__ == "__main__":

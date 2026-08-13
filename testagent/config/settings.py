@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     script_format: Literal["k6", "jmeter"] = Field(default="k6", alias="SCRIPT_FORMAT")
 
+    #: Whether to run a second-pass LLM review after generating test cases.
+    review_enabled: bool = Field(default=False, alias="REVIEW_ENABLED")
+    #: Output language for generated content and reports.
+    output_language: Literal["english", "chinese"] = Field(
+        default="chinese", alias="OUTPUT_LANGUAGE"
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

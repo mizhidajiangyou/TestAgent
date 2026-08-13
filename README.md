@@ -10,7 +10,7 @@ TestAgent 是一个 AI 驱动的测试资产生成工具：输入需求文档和
 - 解析需求文档（支持 Markdown、纯文本、JSON 格式）
 - 基于 LLM（OpenAI / Azure OpenAI）生成测试用例，覆盖正向/边界/负向/集成场景
 - 基于 LLM 生成可执行的性能测试脚本（k6 或 JMeter JMX，含 XML 完整性校验）
-- 生成 Markdown / JSON 格式的测试用例报告和性能测试报告模板
+- 生成 Markdown / JSON 格式的测试用例报告和性能测试报告模板，测试用例支持导出 CSV（Excel 友好）
 - 分层配置（环境变量 > .env > 默认值）、依赖注入容器、CLI 命令行界面
 
 ## 项目结构
@@ -65,6 +65,8 @@ cp .env.example .env
 | `PERF_DURATION_SECONDS` | 压测时长（秒） | `300` |
 | `OUTPUT_DIR` | 输出目录 | `./output` |
 | `SCRIPT_FORMAT` | 默认性能脚本格式 | `k6` |
+| `REVIEW_ENABLED` | 生成后是否二次复检（新对话无上下文，补齐/修正用例） | `false` |
+| `OUTPUT_LANGUAGE` | 输出语言，`chinese` 或 `english`（用例内容与报告标题） | `chinese` |
 
 查看当前生效配置：
 
@@ -89,6 +91,13 @@ testagent generate-tests \
   -r examples/sample_requirements.md \
   -f markdown \
   -o ./output/testcases.md
+
+# CSV 格式（UTF-8 BOM，Excel 直接打开中文不乱码）
+testagent generate-tests \
+  -s examples/sample_swagger.json \
+  -r examples/sample_requirements.md \
+  -f csv \
+  -o ./output/testcases.csv
 ```
 
 Swagger 也可直接传 URL：
@@ -96,6 +105,24 @@ Swagger 也可直接传 URL：
 ```bash
 testagent generate-tests -s https://petstore3.swagger.io/api/v3/openapi.json
 ```
+
+### 二次复检（Review）
+
+设置 `REVIEW_ENABLED=true` 后，生成完首批用例会再起一个**全新的对话（无上下文）**，把当前用例 JSON + 接口 + 需求喂给 LLM 做整体复检：修正接口不匹配、补齐 CRUD/边界/安全/性能用例、把预期结果改写成可断言的格式、填充 tags、补充清理与幂等用例，最后输出**完整合并后的最终列表**。
+
+```bash
+REVIEW_ENABLED=true testagent generate-tests \
+  -s examples/sample_swagger.json \
+  -r examples/sample_requirements.md \
+  -f markdown \
+  -o ./output/testcases.md
+```
+
+复检解析失败时自动回退到原始用例，不会丢失已有结果。
+
+### 输出语言
+
+`OUTPUT_LANGUAGE=chinese`（默认）时，用例内容（标题/步骤/预期结果）和报告（标题/汇总表/类型/优先级）均为中文；设为 `english` 恢复英文输出。
 
 ### 生成性能测试脚本
 
