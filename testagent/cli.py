@@ -1,7 +1,8 @@
 """
 CLI entry point for TestAgent.
 
-Provides commands for generating test cases and performance scripts.
+Provides commands for generating test cases, performance scripts, GUI test
+scripts, and interactive conversational refinement.
 """
 
 from pathlib import Path
@@ -9,9 +10,12 @@ from typing import Any
 
 import click
 from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
 
 from testagent.config.logging import setup_logging
 from testagent.config.models import (
+    GUITestGenInput,
     PerfGenInput,
     PerformanceConfig,
     PerfReportInput,
@@ -50,9 +54,16 @@ EXAMPLES:
   # Generate JMeter JMX script
   testagent generate-perf -s swagger.json -f jmeter -o ./output/perf.jmx
 
+  # Generate Playwright GUI test script
+  testagent generate-gui -r requirements.md --url https://example.com -o ./output/gui_test.py
+
+  # Interactive conversational refinement (generate then refine via dialogue)
+  testagent chat -r requirements.md -s swagger.json
+
   # Run generated scripts
   k6 run output/perf_test.js
   jmeter -n -t output/perf_test.jmx -l results.jtl
+  pytest output/gui_test.py --browser chromium
 
 ENVIRONMENT:
   All settings can be overridden via env vars or .env file (see .env.example).
@@ -324,6 +335,256 @@ def generate_perf(
     container.performance_report.save(report, report_path)
     console.print(f"  Report saved to [cyan]{report_path}[/]")
     console.print(f"  Token usage: [dim]{container.llm_client.usage.summary()}[/]")
+
+
+GENERATE_GUI_EXAMPLES = """
+EXAMPLES:
+  # Generate Playwright test from requirements + target URL
+  testagent generate-gui -r requirements.md --url https://example.com
+
+  # With Swagger context for API-aware GUI tests
+  testagent generate-gui -r requirements.md -s swagger.json --url https://app.example.com
+
+  # Save to custom path
+  testagent generate-gui -r requirements.md --url https://example.com -o tests/test_login.py
+
+  # Run the generated script
+  pytest output/gui_test.py --browser chromium
+"""
+
+
+@main.command(cls=TestAgentCommand, examples_text=GENERATE_GUI_EXAMPLES)
+@click.option(
+    "--requirements",
+    "-r",
+    required=True,
+    help="Path to requirements document (supports .md, .txt, .json, .pdf, .docx)",
+)
+@click.option(
+    "--swagger",
+    "-s",
+    default=None,
+    help="Path or URL to Swagger/OpenAPI spec (optional, for API context)",
+)
+@click.option(
+    "--url",
+    default=None,
+    help="Target web application URL for GUI testing",
+)
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    help="Output file path (default: ./output/gui_test.py)",
+)
+@click.pass_context
+def generate_gui(
+    ctx: click.Context,
+    requirements: str,
+    swagger: str | None,
+    url: str | None,
+    output: str | None,
+) -> None:
+    """Generate Playwright Python test script for web/GUI testing."""
+    container: Container = ctx.obj["container"]
+    settings = container.settings
+
+    console.print("[bold blue]Parsing requirements...[/]")
+    req_items = container.requirement_parser.parse(requirements)
+    console.print(f"  Found [green]{len(req_items)}[/] requirements")
+
+    endpoints = []
+    if swagger:
+        console.print("[bold blue]Parsing Swagger spec...[/]")
+        endpoints = container.swagger_parser.parse(swagger)
+        console.print(f"  Found [green]{len(endpoints)}[/] endpoints")
+
+    if not url:
+        url = settings.perf.base_url
+        console.print(f"  [dim]Using default base URL: {url}[/]")
+
+    console.print("[bold blue]Generating Playwright GUI test script via LLM...[/]")
+    from testagent.generators.gui_test_generator import GUITestGenerator
+
+    generator = GUITestGenerator(
+        llm_client=container.llm_client,
+        prompt_builder=container.prompt_builder,
+        output_language=settings.output_language,
+    )
+    script = generator.generate(
+        GUITestGenInput(
+            requirements=req_items,
+            url=url,
+            endpoints=endpoints,
+            output_language=settings.output_language,
+        )
+    )
+
+    output_path = Path(output) if output else Path(settings.output_dir) / "gui_test.py"
+    generator.save(script, output_path)
+    console.print(f"[bold green]Done![/] Script saved to [cyan]{output_path}[/]")
+    console.print(f"  Token usage: [dim]{container.llm_client.usage.summary()}[/]")
+    console.print(f"  [dim]Run with: pytest {output_path} --browser chromium[/]")
+
+
+CHAT_EXAMPLES = """
+EXAMPLES:
+  # Start interactive chat with requirements + swagger context
+  testagent chat -r requirements.md -s swagger.json
+
+  # Chat with just requirements
+  testagent chat -r requirements.md
+
+  # Chat with a specific session ID (resume previous session)
+  testagent chat -r requirements.md --session my-session-1
+
+  # In the chat, type natural language:
+  #   > Generate test cases for the user registration module
+  #   > Add more boundary test cases for the password field
+  #   > Validate the current test cases
+  #   > Refine the test cases to be more concise
+  #   > exit
+"""
+
+
+@main.command(cls=TestAgentCommand, examples_text=CHAT_EXAMPLES)
+@click.option(
+    "--requirements",
+    "-r",
+    default=None,
+    help="Path to requirements document (optional, for context)",
+)
+@click.option(
+    "--swagger",
+    "-s",
+    default=None,
+    help="Path or URL to Swagger/OpenAPI spec (optional, for context)",
+)
+@click.option(
+    "--session",
+    default=None,
+    help="Session ID to resume (default: new auto-generated session)",
+)
+@click.option(
+    "--max-iterations",
+    type=int,
+    default=None,
+    help="Max refine iterations per message (default: from config)",
+)
+@click.pass_context
+def chat(
+    ctx: click.Context,
+    requirements: str | None,
+    swagger: str | None,
+    session: str | None,
+    max_iterations: int | None,
+) -> None:
+    """Interactive conversational refinement of generated artifacts.
+
+    Supports continuous dialogue to generate, validate, and refine
+    test cases, performance scripts, and GUI test scripts. Inspired
+    by langgraph's StateGraph + checkpoint pattern: conversation state
+    persists across turns within the same session.
+    """
+    container: Container = ctx.obj["container"]
+    settings = container.settings
+
+    # Parse context if provided
+    context: dict[str, Any] = {}
+    if requirements:
+        console.print("[bold blue]Parsing requirements...[/]")
+        req_items = container.requirement_parser.parse(requirements)
+        context["requirements"] = (
+            container.requirement_parser.requirements_to_text(req_items)
+            if hasattr(container.requirement_parser, "requirements_to_text")
+            else str(req_items)
+        )
+        console.print(f"  Found [green]{len(req_items)}[/] requirements")
+
+    if swagger:
+        console.print("[bold blue]Parsing Swagger spec...[/]")
+        endpoints = container.swagger_parser.parse(swagger)
+        from testagent.parsers.swagger_parser import SwaggerParser
+
+        context["endpoints"] = SwaggerParser.endpoints_to_text(endpoints)
+        console.print(f"  Found [green]{len(endpoints)}[/] endpoints")
+
+    # Get or create conversation session
+    manager = container.conversation_manager
+    existing = manager.get_session(session) if session else None
+    if existing is not None:
+        conv_session = existing
+        console.print(f"[green]Resumed session: {session}[/]")
+    else:
+        conv_session = manager.create_session(session)
+        console.print(f"[green]New session: {conv_session.session_id}[/]")
+
+    console.print()
+    console.print(
+        Panel(
+            "[bold]TestAgent Chat[/]\n"
+            "Type natural language to generate, validate, or refine artifacts.\n"
+            "Commands: [cyan]generate[/], [cyan]refine[/], [cyan]validate[/], "
+            "[cyan]save[/], [cyan]history[/], [cyan]exit[/]",
+            border_style="blue",
+        )
+    )
+    console.print()
+
+    # When the caller overrides max_iterations, apply it to this session so
+    # the refine loop respects the per-turn ceiling.
+    if max_iterations:
+        conv_session.set_max_iterations(max(1, max_iterations))
+
+    while True:
+        try:
+            user_input = Prompt.ask("[bold cyan]You[/]")
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]Goodbye![/]")
+            break
+
+        if not user_input.strip():
+            continue
+
+        lower = user_input.strip().lower()
+        if lower in ("exit", "quit", "bye"):
+            console.print("[dim]Goodbye![/]")
+            break
+
+        # Handle special commands
+        if lower == "history":
+            history = conv_session.get_history()
+            for msg in history:
+                color = "cyan" if msg.role == "user" else "green"
+                console.print(f"[{color}]{msg.role}[/]: {msg.content[:200]}")
+            continue
+
+        if lower == "save":
+            artifact = conv_session.get_latest_artifact()
+            if artifact:
+                output_path = Path(settings.output_dir) / f"artifact_{artifact.id}.txt"
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(artifact.content, encoding="utf-8")
+                console.print(f"[green]Saved artifact v{artifact.version} to {output_path}[/]")
+            else:
+                console.print("[yellow]No artifact to save.[/]")
+            continue
+
+        # Send message to conversation session
+        console.print("[bold blue]Assistant:[/]")
+        try:
+            response = conv_session.send(user_input, context=context)
+            console.print(response)
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/]")
+
+        console.print()
+        console.print(
+            f"[dim]Iteration: {conv_session.iteration} | "
+            f"Artifacts: {len(conv_session.get_artifacts())} | "
+            f"Token usage: {container.llm_client.usage.summary()}[/]"
+        )
+        console.print()
 
 
 @main.command()

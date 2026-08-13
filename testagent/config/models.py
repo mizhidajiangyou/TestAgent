@@ -120,6 +120,23 @@ class PerfGenInput:
 
 
 @dataclass
+class GUITestGenInput:
+    """Input payload for GUI (Playwright) test script generation.
+
+    Inspired by stagehand's approach: the LLM analyzes requirements and the
+    target URL, then generates Playwright test steps using robust locator
+    strategies (``get_by_role`` / ``get_by_label`` / ``get_by_text``).
+    """
+
+    __test__ = False  # prevent pytest collection of this class
+
+    requirements: list[RequirementItem]
+    url: str | None = None
+    endpoints: list[APIEndpoint] = field(default_factory=list)
+    output_language: str = "english"
+
+
+@dataclass
 class TestCaseReportInput:
     """Input payload for test case report generation."""
 

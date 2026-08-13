@@ -30,6 +30,20 @@ class PromptBuilder:
         else:
             self._env = Environment(loader=BaseLoader(), autoescape=False)
 
+    def render_template(self, name: str, **context: Any) -> str | None:
+        """Render a named Jinja2 template by name.
+
+        Returns the rendered string, or ``None`` when the template cannot be
+        found or rendering fails. Enables callers (e.g. the conversation
+        engine) to use optional template files with inline fallbacks.
+        """
+        try:
+            template = self._env.get_template(name)
+            return template.render(**context)
+        except Exception:
+            logger.debug("Template '%s' not available; caller should use inline fallback.", name)
+            return None
+
     def build_testcase_prompt(
         self,
         endpoints_text: str,
@@ -185,6 +199,48 @@ class PromptBuilder:
 
         return system_prompt, user_prompt
 
+    def build_gui_test_prompt(
+        self,
+        url: str,
+        requirements_text: str,
+        endpoints_text: str = "",
+        output_language: str = "english",
+    ) -> tuple[str, str]:
+        """Build prompts for GUI (Playwright) test script generation.
+
+        Inspired by stagehand: the LLM is asked to emit Playwright steps using
+        robust locators (``get_by_role`` / ``get_by_label`` / ``get_by_text``)
+        and ``expect()`` assertions, rather than fragile CSS/XPath selectors.
+        """
+        system_prompt = (
+            "You are a senior QA automation engineer specializing in Playwright "
+            "and pytest. Generate complete, runnable, maintainable GUI test "
+            "scripts. Output only valid Python code."
+        )
+        lang_hint = self._language_instruction(output_language, code_context=True)
+        if lang_hint:
+            system_prompt += " " + lang_hint
+
+        context = {
+            "url": url,
+            "requirements": requirements_text,
+            "endpoints": endpoints_text,
+            "output_language": output_language,
+        }
+
+        try:
+            template = self._env.get_template("gui_test_prompt.j2")
+            user_prompt = template.render(**context)
+        except Exception:
+            user_prompt = self._build_inline_gui_test_prompt(
+                url=url,
+                requirements=requirements_text,
+                endpoints=endpoints_text,
+                output_language=output_language,
+            )
+
+        return system_prompt, user_prompt
+
     @staticmethod
     def _language_instruction(output_language: str, code_context: bool = False) -> str:
         """Return a language instruction snippet for prompts."""
@@ -323,3 +379,45 @@ Output ONLY raw JMX XML starting with <?xml version="1.0"?>"""
 - Base URL: {config.get("base_url", "https://api.example.com")}
 
 Output ONLY raw JavaScript. No markdown."""
+
+    def _build_inline_gui_test_prompt(
+        self,
+        url: str,
+        requirements: str,
+        endpoints: str,
+        output_language: str = "english",
+        **kwargs: Any,
+    ) -> str:
+        """Fallback inline prompt for GUI (Playwright) test script generation."""
+        lang_hint = self._language_instruction(output_language, code_context=True)
+        lang_section = f"\n## Language\n{lang_hint}\n" if lang_hint else ""
+        ep_section = f"\n## API Context (for reference)\n{endpoints}\n" if endpoints else ""
+        return f"""Generate a complete Playwright Python test script for web/GUI testing.
+
+## Target URL
+{url}
+
+## Requirements
+{requirements}
+{ep_section}
+## Script Requirements
+1. Use Playwright's Python sync API (from playwright.sync_api import Page, expect)
+2. Use pytest as the test framework
+3. Use ROBUST locators (in priority order):
+   - page.get_by_role() - FIRST CHOICE for all interactive elements
+   - page.get_by_label() - for form inputs with associated labels
+   - page.get_by_placeholder() - for inputs without labels
+   - page.get_by_text() - for non-interactive text elements
+   - page.locator() - LAST RESORT only, with specific CSS selectors
+4. Use expect() for ALL assertions (not raw assert)
+5. Include proper waits: page.wait_for_load_state("networkidle") after navigation
+6. Generate multiple test methods covering: happy path, form validation,
+   error handling, navigation/routing, UI state changes
+7. Include a setup fixture that navigates to the target URL
+8. Add descriptive docstrings to each test method
+9. Use pytest markers: @pytest.mark.smoke, @pytest.mark.regression
+{lang_section}
+## Output
+Output ONLY the Python script code. No markdown fences, no explanations.
+The script must be syntactically valid Python runnable with:
+  pytest test_script.py --browser chromium"""

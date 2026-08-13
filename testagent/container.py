@@ -5,6 +5,7 @@ Provides a lightweight DI container for wiring up components.
 """
 
 from testagent.config.settings import Settings, get_settings
+from testagent.engine.conversation import ConversationManager
 from testagent.engine.llm_client import MultiModelLLMClient, create_llm_client
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.performance_generator import PerformanceGenerator
@@ -28,6 +29,7 @@ class Container:
         self._performance_generator: PerformanceGenerator | None = None
         self._testcase_report: TestCaseReport | None = None
         self._performance_report: PerformanceReport | None = None
+        self._conversation_manager: ConversationManager | None = None
 
     @property
     def settings(self) -> Settings:
@@ -106,3 +108,18 @@ class Container:
         if self._performance_report is None:
             self._performance_report = PerformanceReport()
         return self._performance_report
+
+    @property
+    def conversation_manager(self) -> ConversationManager:
+        """Return conversation manager (lazy init).
+
+        Reuses ``review_max_rounds`` as the max refine iterations per turn.
+        """
+        if self._conversation_manager is None:
+            self._conversation_manager = ConversationManager(
+                llm_client=self.llm_client,
+                prompt_builder=self.prompt_builder,
+                max_iterations=self._settings.review_max_rounds,
+                output_language=self._settings.output_language,
+            )
+        return self._conversation_manager

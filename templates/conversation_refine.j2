@@ -1,0 +1,22 @@
+You are refining a previously generated artifact based on user feedback.
+
+## User Request
+{{ user_message }}
+
+## Previous Feedback
+{{ feedback }}
+
+## Current Artifact (version {{ artifact_version }})
+{{ artifact_content }}
+
+## Instructions
+Apply the user's requested changes. Preserve what works, fix what's broken, add what's missing.
+Output the complete refined artifact (not just the diff).
+
+{% if artifact_type == "test_cases" %}
+Output ONLY a valid JSON array of test cases.
+{% elif artifact_type == "performance_script" %}
+Output ONLY the complete script code.
+{% else %}
+Output the complete refined content.
+{% endif %}

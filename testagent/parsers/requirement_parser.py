@@ -1,7 +1,8 @@
 """
 Requirement document parser.
 
-Supports plain text (.txt), Markdown (.md), and structured JSON (.json) formats.
+Supports plain text (.txt), Markdown (.md), and structured JSON (.json) formats,
+plus binary document formats (PDF, DOCX, HTML, PPTX) via :class:`DocumentParser`.
 Extracts requirement items with ID, title, description, and acceptance criteria.
 """
 
@@ -13,6 +14,7 @@ from typing import Any, cast
 
 from testagent.config.models import RequirementItem, TestPriority
 from testagent.parsers.base import BaseParser, ParseSource
+from testagent.parsers.document_parser import DocumentParser
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,13 @@ class RequirementParser(BaseParser):
 
         logger.info("Parsing requirement document: %s", source)
         suffix = path.suffix.lower()
+
+        # Binary formats: extract text with DocumentParser first, then parse as
+        # markdown so headings, tables and lists are preserved as requirements.
+        if suffix in (".pdf", ".docx", ".doc", ".html", ".htm", ".pptx"):
+            doc_parser = DocumentParser()
+            text = doc_parser.parse(path)
+            return self._parse_markdown(text)
 
         if suffix == ".json":
             with open(path, encoding="utf-8") as f:

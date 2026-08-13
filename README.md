@@ -2,16 +2,19 @@
 
 **Requirements + API Document -> Agent Pipeline -> Test Cases + Performance Scripts + Test Reports**
 
-TestAgent 是一个 AI 驱动的测试资产生成工具：输入需求文档和 Swagger/OpenAPI 接口文档，自动产出结构化测试用例、性能测试脚本（k6 / JMeter）以及测试报告。
+TestAgent 是一个 AI 驱动的测试资产生成工具：输入需求文档和 Swagger/OpenAPI 接口文档，自动产出结构化测试用例、性能测试脚本（k6 / JMeter）、GUI 测试脚本（Playwright）以及测试报告，并支持通过连续对话对生成的资产进行校验和迭代优化。
 
 ## 特性
 
 - 解析 Swagger/OpenAPI 规范（支持 URL、JSON/YAML 文件、dict 三种输入）
-- 解析需求文档（支持 Markdown、纯文本、JSON 格式）
+- 解析需求文档（支持 Markdown、纯文本、JSON，以及 PDF/DOCX/HTML/PPTX 等二进制格式）
 - 基于 LLM（OpenAI / Azure OpenAI）生成测试用例，覆盖正向/边界/负向/集成场景
 - **多模型 fallback**：`OPENAI_MODEL` 支持逗号分隔配置多个模型，首选模型失败时自动尝试后续模型
 - **多轮交叉校验 Review**：`REVIEW_ENABLED=true` 时，奇数轮用非首选模型、偶数轮用首选模型交替评审，单模型场景自动降级并告警
 - 基于 LLM 生成可执行的性能测试脚本（k6 或 JMeter JMX，含 XML 完整性校验）
+- **GUI 测试生成**：基于需求 + 目标 URL 生成 Playwright Python 测试脚本（stagehand 风格的健壮定位器与 `expect()` 断言）
+- **会话式精炼引擎**：`testagent chat` 提供交互式连续对话，对已生成的测试用例/脚本/代码进行 generate → validate → refine 迭代优化（langgraph 风格的状态管理与版本链）
+- **健壮文档解析**：PDF/DOCX/HTML/PPTX 三级回退（docling → 格式专属库 → 纯文本），自动探测可用后端
 - 生成 Markdown / JSON 格式的测试用例报告和性能测试报告模板，测试用例支持导出 CSV（Excel 友好）
 - 分层配置（环境变量 > .env > 默认值）、依赖注入容器、CLI 命令行界面
 
@@ -21,9 +24,9 @@ TestAgent 是一个 AI 驱动的测试资产生成工具：输入需求文档和
 TestAgent/
 ├── testagent/                 # 主包
 │   ├── config/                # 配置层（settings、数据模型、日志）
-│   ├── parsers/               # 解析层（Swagger、需求文档）
-│   ├── engine/                # AI 引擎层（LLM 客户端、Prompt 构建）
-│   ├── generators/            # 生成层（测试用例、性能脚本）
+│   ├── parsers/               # 解析层（Swagger、需求文档、DocumentParser）
+│   ├── engine/                # AI 引擎层（LLM 客户端、Prompt 构建、会话引擎）
+│   ├── generators/            # 生成层（测试用例、性能脚本、GUI 脚本）
 │   ├── reports/               # 报告层（测试用例报告、性能报告）
 │   ├── utils/                 # 工具函数
 │   ├── cli.py                 # CLI 命令
@@ -158,6 +161,55 @@ testagent generate-perf -s examples/sample_swagger.json -f jmeter -o ./output/pe
 - `perf_test.js` / `perf_test.jmx`：可直接运行的性能脚本
 - `perf_test.md`：性能测试报告模板（含配置、KPI 表格、执行说明）
 
+### 生成 GUI 测试脚本（Playwright）
+
+基于需求文档 + 目标 URL 生成 Playwright Python 测试脚本，使用健壮的定位器策略（`get_by_role` / `get_by_label` / `get_by_text`）和 `expect()` 机器可校验断言（参考 stagehand 的无障碍树定位思路）。
+
+```bash
+# 基础用法
+testagent generate-gui -r examples/sample_requirements.md --url https://example.com
+
+# 带 Swagger 上下文（API-aware GUI 测试）
+testagent generate-gui -r requirements.md -s swagger.json --url https://app.example.com
+
+# 指定输出路径
+testagent generate-gui -r requirements.md --url https://example.com -o tests/test_login.py
+```
+
+生成的脚本可直接用 pytest 运行：
+
+```bash
+pytest output/gui_test.py --browser chromium
+```
+
+### 连续对话精炼（Chat）
+
+`testagent chat` 提供交互式对话界面，可对已生成的测试用例、性能脚本、GUI 脚本进行 generate → validate → refine 迭代优化。会话状态在内存中持久化，支持跨轮精炼和版本追溯（参考 langgraph 的 StateGraph + checkpointer 模式）。
+
+```bash
+# 带需求 + Swagger 上下文启动对话
+testagent chat -r requirements.md -s swagger.json
+
+# 仅带需求
+testagent chat -r requirements.md
+
+# 恢复之前的会话
+testagent chat -r requirements.md --session my-session-1
+```
+
+对话中可用自然语言下指令：
+
+```
+> 生成用户注册模块的测试用例
+> 给密码字段补充更多边界用例
+> 验证当前测试用例
+> 精简一下用例描述
+> save
+> exit
+```
+
+内置命令：`generate` / `refine` / `validate` / `save`（保存最新 artifact）/ `history`（查看历史）/ `exit`。
+
 ### 运行生成的脚本
 
 ```bash
@@ -166,12 +218,15 @@ k6 run output/perf_test.js
 
 # JMeter
 jmeter -n -t output/perf_test.jmx -l results.jtl
+
+# Playwright GUI 测试
+pytest output/gui_test.py --browser chromium
 ```
 
 ## 开发
 
 ```bash
-# 运行测试（68 个用例，含端到端流水线 + 多模型 fallback + 多轮 review）
+# 运行测试（192 个用例，含端到端流水线 + 多模型 fallback + 多轮 review + 会话引擎 + GUI 生成器 + 文档解析器）
 pytest
 
 # 代码检查（ruff lint + format）
@@ -211,9 +266,9 @@ docker compose -f docker/docker-compose.yml up -d prometheus grafana
 
 ## 扩展路线
 
-- GUI 测试：预留 `generators` 接口，可新增 `gui_test_generator`（如 Playwright 脚本生成）
 - 多 Agent 协调：引擎层可扩展为多 Agent 流水线（分析 -> 生成 -> 评审）
 - 性能结果分析：接入 `.jtl` / k6 JSON 结果，产出带指标的完整性能报告
+- 会话持久化：将会话状态序列化到磁盘/数据库，支持跨进程恢复
 
 ## License
 

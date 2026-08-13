@@ -34,6 +34,16 @@ dev = [
     "types-requests>=2.31.0",
     "types-PyYAML>=6.0.0",
 ]
+documents = [
+    "python-docx>=1.1.0",
+    "pdfplumber>=0.11.0",
+    "beautifulsoup4>=4.12.0",
+    "markdownify>=0.13.0",
+    "python-pptx>=0.6.23",
+]
+documents-full = [
+    "docling>=2.12.0",
+]
 
 [project.scripts]
 testagent = "testagent.cli:main"
@@ -55,6 +65,17 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "docling.*",
+    "pdfplumber.*",
+    "docx.*",
+    "bs4.*",
+    "markdownify.*",
+    "pptx.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
