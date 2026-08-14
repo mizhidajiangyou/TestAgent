@@ -241,10 +241,43 @@ mypy testagent/
 
 ### Docker
 
+镜像入口为 `testagent`，`docker run` 后直接跟 CLI 参数即可。结果默认写到容器内 `/app/output`，用 `-v` 把宿主目录挂进去即可在当前目录拿到产物。
+
+```bash
+# 构建镜像（在仓库根目录执行）
+docker build -f docker/Dockerfile -t testagent .
+
+# 推荐：把当前目录挂为 /work，输入文件与 output 都在宿主侧
+docker run --rm -v "$PWD":/work -w /work \
+    -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    testagent generate-tests -r requirements.md -s swagger.json \
+    -o output/testcases.json
+
+# 仅挂载 output 目录（输入用 URL 或镜像内置文件）
+docker run --rm -v "$PWD/output":/app/output \
+    -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    testagent generate-tests -s https://example.com/openapi.json -o output/testcases.json
+
+# 增量生成：以历史用例为基线，只补净新用例
+docker run --rm -v "$PWD":/work -w /work -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    testagent generate-tests -r new_requirements.md -H output/testcases.json -o output/testcases.json
+
+# 启动 Web GUI（可被其他平台通过 iframe 嵌入）
+docker run --rm -p 8000:8000 -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    testagent serve --host 0.0.0.0 --port 8000
+```
+
+也可以用 docker compose：
+
 ```bash
 docker compose -f docker/docker-compose.yml build
-docker compose -f docker/docker-compose.yml run testagent generate-tests -s /app/swagger.json
+docker compose -f docker/docker-compose.yml run --rm testagent \
+    generate-tests -r /work/requirements.md -s /work/swagger.json -o output/testcases.json
+docker compose -f docker/docker-compose.yml up serve        # Web GUI
+docker compose -f docker/docker-compose.yml up -d prometheus grafana  # 监控
 ```
+
+> 镜像内置 `documents` + `web` 可选依赖，支持 PDF/DOCX/HTML/PPTX 解析与 Web GUI；以非 root 用户运行。
 
 ### Kubernetes
 

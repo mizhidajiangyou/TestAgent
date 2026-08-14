@@ -44,6 +44,10 @@ documents = [
 documents-full = [
     "docling>=2.12.0",
 ]
+web = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+]
 
 [project.scripts]
 testagent = "testagent.cli:main"
@@ -58,6 +62,10 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
+# The web GUI embeds a large HTML/JS string with intentional Simplified-Chinese
+# UI text (fullwidth punctuation). The ambiguous-character rules are
+# false-positives there, so disable RUF001/002/003 for that module.
+"testagent/web/app.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -74,6 +82,7 @@ module = [
     "bs4.*",
     "markdownify.*",
     "pptx.*",
+    "uvicorn.*",
 ]
 ignore_missing_imports = true
 

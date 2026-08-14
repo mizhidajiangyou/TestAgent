@@ -278,9 +278,7 @@ class MultiModelLLMClient:
                         exc,
                     )
 
-        raise RuntimeError(
-            f"All {len(self._clients)} model(s) failed. Last error: {last_error}"
-        )
+        raise RuntimeError(f"All {len(self._clients)} model(s) failed. Last error: {last_error}")
 
     # ------------------------------------------------------------------
     # Secondary client for review

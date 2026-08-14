@@ -109,6 +109,11 @@ class TestCaseGenInput:
 
     requirements: list[RequirementItem]
     endpoints: list[APIEndpoint] = field(default_factory=list)
+    #: Previously generated test cases (JSON file path or list of TestCase).
+    #: When provided, the generator treats them as a baseline and merges
+    #: new requirements on top, preserving unchanged historical cases and
+    #: only generating net-new cases for the new requirements.
+    historical_cases: list["TestCase"] = field(default_factory=list)
 
 
 @dataclass

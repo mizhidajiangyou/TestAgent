@@ -87,7 +87,7 @@ class TestE2EPipeline:
             MOCK_TESTCASE_RESPONSE,  # Phase 1: requirements batch
             MOCK_TESTCASE_RESPONSE,  # Phase 2: API batch 1/2
             MOCK_TESTCASE_RESPONSE,  # Phase 2: API batch 2/2
-            MOCK_K6_RESPONSE,        # Performance script
+            MOCK_K6_RESPONSE,  # Performance script
         ]
 
         container = Container()

@@ -58,7 +58,7 @@ export default function () {
 """
 
 # A valid Playwright GUI script used as the LLM "generate" response.
-_VALID_GUI_SCRIPT = '''import re
+_VALID_GUI_SCRIPT = """import re
 from playwright.sync_api import Page, expect
 
 
@@ -68,7 +68,7 @@ def test_login(page: Page) -> None:
     page.get_by_label("Password").fill("secret")
     page.get_by_role("button", name="Sign in").click()
     expect(page).to_have_url(re.compile(r"/dashboard"))
-'''
+"""
 
 
 class TestExtractJson:
@@ -78,11 +78,11 @@ class TestExtractJson:
         assert _extract_json('[{"a": 1}]') == [{"a": 1}]
 
     def test_fenced_json(self) -> None:
-        text = "```json\n[{\"a\": 1}]\n```"
+        text = '```json\n[{"a": 1}]\n```'
         assert _extract_json(text) == [{"a": 1}]
 
     def test_json_with_prose(self) -> None:
-        text = "Here are the cases:\n[{\"id\": 1}]\nDone."
+        text = 'Here are the cases:\n[{"id": 1}]\nDone.'
         assert _extract_json(text) == [{"id": 1}]
 
     def test_object_extraction(self) -> None:
@@ -340,7 +340,9 @@ class TestActionInference:
         assert ConversationSession._infer_action("hello there") == "chat"
 
     def test_infer_artifact_type_performance(self) -> None:
-        assert ConversationSession._infer_artifact_type("generate perf script") == "performance_script"
+        assert (
+            ConversationSession._infer_artifact_type("generate perf script") == "performance_script"
+        )
         assert ConversationSession._infer_artifact_type("生成性能脚本") == "performance_script"
 
     def test_infer_artifact_type_gui(self) -> None:
@@ -407,9 +409,7 @@ class TestSessionStateAndProperties:
 
     def test_load_seed_artifacts_from_context(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.chat.return_value = json.dumps(
-            {"passed": True, "issues": [], "suggestions": []}
-        )
+        mock_llm.chat.return_value = json.dumps({"passed": True, "issues": [], "suggestions": []})
         session = ConversationSession(
             session_id="s",
             llm_client=mock_llm,
@@ -436,9 +436,19 @@ class TestSessionStateAndProperties:
             prompt_builder=PromptBuilder(),
         )
         # Seed a test_cases and a performance_script artifact.
-        session.send("generate test cases", context={"artifacts": [
-            {"id": "a1", "type": "test_cases", "content": _VALID_TEST_CASES_JSON, "version": 1}
-        ]})
+        session.send(
+            "generate test cases",
+            context={
+                "artifacts": [
+                    {
+                        "id": "a1",
+                        "type": "test_cases",
+                        "content": _VALID_TEST_CASES_JSON,
+                        "version": 1,
+                    }
+                ]
+            },
+        )
         latest_tc = session.get_latest_artifact("test_cases")
         latest_perf = session.get_latest_artifact("performance_script")
         assert latest_tc is not None
@@ -456,23 +466,17 @@ class TestProgrammaticValidation:
         )
 
     def test_validate_invalid_json_test_cases(self) -> None:
-        art = Artifact(
-            id="x", type="test_cases", content="not json", version=1, created_at="t"
-        )
+        art = Artifact(id="x", type="test_cases", content="not json", version=1, created_at="t")
         feedback = self.session._validate_artifact(art)
         assert "not valid JSON" in feedback
 
     def test_validate_non_array_test_cases(self) -> None:
-        art = Artifact(
-            id="x", type="test_cases", content='{"a": 1}', version=1, created_at="t"
-        )
+        art = Artifact(id="x", type="test_cases", content='{"a": 1}', version=1, created_at="t")
         feedback = self.session._validate_artifact(art)
         assert "not a JSON array" in feedback
 
     def test_validate_empty_test_cases_array(self) -> None:
-        art = Artifact(
-            id="x", type="test_cases", content="[]", version=1, created_at="t"
-        )
+        art = Artifact(id="x", type="test_cases", content="[]", version=1, created_at="t")
         feedback = self.session._validate_artifact(art)
         assert "empty" in feedback
 
@@ -521,16 +525,12 @@ class TestProgrammaticValidation:
         assert "syntax" in feedback.lower()
 
     def test_validate_unknown_artifact_type(self) -> None:
-        art = Artifact(
-            id="x", type="unknown_type", content="x", version=1, created_at="t"
-        )
+        art = Artifact(id="x", type="unknown_type", content="x", version=1, created_at="t")
         feedback = self.session._validate_artifact(art)
         assert "Unknown artifact type" in feedback
 
     def test_validate_empty_script(self) -> None:
-        art = Artifact(
-            id="x", type="gui_script", content="   ", version=1, created_at="t"
-        )
+        art = Artifact(id="x", type="gui_script", content="   ", version=1, created_at="t")
         feedback = self.session._validate_artifact(art)
         assert "empty" in feedback
 

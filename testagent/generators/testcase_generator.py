@@ -113,15 +113,24 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         Phase 1: Requirements → module-batched generation.
         Phase 2: Endpoints (if any) → endpoint-batched API-specific cases.
+
+        When ``data.historical_cases`` is non-empty, the historical cases are
+        used as a baseline: the LLM is asked to produce **only net-new or
+        updated** cases for the new requirements (the historical context is
+        injected into the prompt so the LLM avoids duplicating coverage).
+        Historical cases are then merged with the new cases and re-numbered.
         """
         requirements = data.requirements
         endpoints = data.endpoints
+        historical_cases = data.historical_cases
 
         all_cases: list[TestCase] = []
 
         # --- Phase 1: Requirements-driven generation ---
         if requirements:
-            all_cases.extend(self._generate_from_requirements(requirements, endpoints))
+            all_cases.extend(
+                self._generate_from_requirements(requirements, endpoints, historical_cases)
+            )
         elif endpoints:
             # No requirements but have endpoints — generate from endpoints alone
             all_cases.extend(self._generate_from_endpoints(endpoints, ""))
@@ -133,6 +142,11 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         if requirements and endpoints:
             api_cases = self._generate_api_specific(endpoints, requirements)
             all_cases.extend(api_cases)
+
+        # --- Merge historical cases (baseline) with newly generated cases ---
+        if historical_cases:
+            merged = self._merge_historical_cases(historical_cases, all_cases)
+            all_cases = merged
 
         # Re-number sequentially
         for idx, tc in enumerate(all_cases, 1):
@@ -153,10 +167,20 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self,
         requirements: list[RequirementItem],
         endpoints: list[APIEndpoint],
+        historical_cases: list[TestCase] | None = None,
     ) -> list[TestCase]:
-        """Generate test cases from requirements, batched by module."""
+        """Generate test cases from requirements, batched by module.
+
+        When ``historical_cases`` is provided, a summary of the historical
+        coverage is injected into the prompt so the LLM generates only
+        net-new or updated cases (avoiding duplicates).
+        """
         batches = self._split_requirement_batches(requirements)
         endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        historical_text = (
+            self._historical_cases_to_text(historical_cases) if historical_cases else ""
+        )
+
         all_cases: list[TestCase] = []
 
         for i, batch in enumerate(batches, 1):
@@ -165,10 +189,13 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 endpoints_text=endpoints_text,
                 requirements_text=req_text,
                 output_language=self._output_language,
+                extra_context={"historical_cases": historical_text} if historical_text else None,
             )
             logger.info(
                 "Phase 1 - Batch %d/%d (%d requirements)...",
-                i, len(batches), len(batch),
+                i,
+                len(batches),
+                len(batch),
             )
             cases = self._generate_with_retry(
                 system_prompt, user_prompt, endpoints, f"Req batch {i}/{len(batches)}"
@@ -200,7 +227,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             )
             logger.info(
                 "Phase 2 - Batch %d/%d (%d endpoints, API-specific)...",
-                i, len(batches), len(batch),
+                i,
+                len(batches),
+                len(batch),
             )
             cases = self._generate_with_retry(
                 system_prompt, user_prompt, batch, f"API batch {i}/{len(batches)}"
@@ -225,7 +254,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             )
             logger.info(
                 "Endpoint batch %d/%d (%d endpoints)...",
-                i, len(batches), len(batch),
+                i,
+                len(batches),
+                len(batch),
             )
             cases = self._generate_with_retry(
                 system_prompt, user_prompt, batch, f"EP batch {i}/{len(batches)}"
@@ -322,7 +353,10 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
             logger.warning(
                 "%s attempt %d/%d: cannot parse JSON. Preview: %.200s",
-                step_label, attempt, MAX_PARSE_RETRIES, raw_response,
+                step_label,
+                attempt,
+                MAX_PARSE_RETRIES,
+                raw_response,
             )
             self._dump_debug_response(raw_response)
 
@@ -382,8 +416,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             )
         else:
             diagnosis = (
-                f"Your previous response for '{label}' was NOT valid JSON and could "
-                "not be parsed."
+                f"Your previous response for '{label}' was NOT valid JSON and could not be parsed."
             )
             fixes = (
                 "Return ONLY a valid JSON array. Common fixes:\n"
@@ -476,12 +509,86 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 )
                 continue
 
-            logger.info(
-                "Review round %d: %d -> %d", round_idx, len(current_cases), len(refined)
-            )
+            logger.info("Review round %d: %d -> %d", round_idx, len(current_cases), len(refined))
             current_cases = refined
 
         return current_cases
+
+    # ------------------------------------------------------------------
+    # Historical case merging
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _historical_cases_to_text(cases: list[TestCase] | None) -> str:
+        """Render historical cases as a compact text summary for prompt injection.
+
+        Includes id, title, endpoint, test_type and a one-line description so
+        the LLM can see what's already covered and avoid regenerating the same
+        scenarios.
+        """
+        if not cases:
+            return ""
+        lines = [f"Total existing cases: {len(cases)}", ""]
+        for tc in cases:
+            line = f"- [{tc.id}] {tc.title} | {tc.endpoint.full_path} | {tc.test_type.value}"
+            if tc.description:
+                # Truncate long descriptions to keep the prompt compact.
+                desc = tc.description[:120]
+                if len(tc.description) > 120:
+                    desc += "..."
+                line += f" | {desc}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _merge_historical_cases(
+        historical: list[TestCase], new_cases: list[TestCase]
+    ) -> list[TestCase]:
+        """Merge historical baseline cases with newly generated cases.
+
+        De-duplicates by a fuzzy key (title + endpoint + test_type) so that if
+        the LLM regenerated a case that already exists historically, the
+        historical version is kept (preserving its original detail) and the
+        duplicate new case is dropped.
+
+        Returns the merged list with historical cases first, then net-new cases.
+        """
+        merged: list[TestCase] = []
+        seen_keys: set[str] = set()
+
+        # Historical cases form the baseline.
+        for tc in historical:
+            key = TestCaseGenerator._case_dedup_key(tc)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                merged.append(tc)
+
+        # Append only net-new cases (not already in the baseline).
+        new_count = 0
+        for tc in new_cases:
+            key = TestCaseGenerator._case_dedup_key(tc)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                merged.append(tc)
+                new_count += 1
+
+        logger.info(
+            "Merged %d historical + %d net-new = %d total (dedup removed %d duplicates)",
+            len(historical),
+            new_count,
+            len(merged),
+            len(new_cases) - new_count,
+        )
+        return merged
+
+    @staticmethod
+    def _case_dedup_key(tc: TestCase) -> str:
+        """Build a fuzzy de-duplication key for a test case.
+
+        Uses lowercased title + endpoint + test_type so minor formatting
+        differences (case, trailing spaces) don't cause false duplicates.
+        """
+        return f"{tc.title.strip().lower()}|{tc.endpoint.full_path.lower()}|{tc.test_type.value}"
 
     # ------------------------------------------------------------------
     # Save
@@ -509,6 +616,86 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 writer.writerow(row)
         logger.info("Saved %d test cases to %s (csv)", len(output), output_path)
         return output_path
+
+    @staticmethod
+    def load_historical_cases(path: str | Path) -> list[TestCase]:
+        """Load previously generated test cases from a JSON file.
+
+        Supports the JSON array format produced by :meth:`save`. Each element
+        must have at least ``id``, ``title``, ``endpoint``, ``test_type`` and
+        ``priority``; missing optional fields default to empty lists.
+
+        Args:
+            path: Path to the historical test cases JSON file.
+
+        Returns:
+            List of :class:`TestCase` objects. Returns an empty list when the
+            file cannot be parsed (with a warning logged).
+        """
+        file_path = Path(path)
+        if not file_path.exists():
+            logger.warning("Historical test cases file not found: %s", path)
+            return []
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to parse historical cases from %s: %s", path, exc)
+            return []
+        if not isinstance(data, list):
+            logger.warning("Historical cases file %s is not a JSON array", path)
+            return []
+
+        cases: list[TestCase] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            tc = TestCaseGenerator._dict_to_testcase(item)
+            if tc is not None:
+                cases.append(tc)
+        logger.info("Loaded %d historical test cases from %s", len(cases), path)
+        return cases
+
+    @staticmethod
+    def _dict_to_testcase(item: dict[str, Any]) -> TestCase | None:
+        """Convert a dict (from JSON) back to a TestCase object.
+
+        Returns ``None`` when required fields are missing or invalid.
+        """
+        try:
+            endpoint_str = str(item.get("endpoint", "N/A N/A"))
+            parts = endpoint_str.split(None, 1)
+            method = parts[0] if len(parts) >= 1 else "N/A"
+            path = parts[1] if len(parts) >= 2 else "N/A"
+            endpoint = APIEndpoint(method=method, path=path)
+
+            test_type_str = str(item.get("test_type", "functional")).lower()
+            try:
+                test_type = TestType(test_type_str)
+            except ValueError:
+                test_type = TestType.FUNCTIONAL
+
+            priority_str = str(item.get("priority", "medium")).lower()
+            try:
+                priority = TestPriority(priority_str)
+            except ValueError:
+                priority = TestPriority.MEDIUM
+
+            return TestCase(
+                id=str(item.get("id", "")),
+                title=str(item.get("title", "")),
+                description=str(item.get("description", "")),
+                endpoint=endpoint,
+                test_type=test_type,
+                priority=priority,
+                preconditions=list(item.get("preconditions", [])),
+                steps=list(item.get("steps", [])),
+                expected_results=list(item.get("expected_results", [])),
+                tags=list(item.get("tags", [])),
+            )
+        except (KeyError, TypeError) as exc:
+            logger.warning("Failed to convert dict to TestCase: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # JSON parsing & salvage

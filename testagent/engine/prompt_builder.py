@@ -55,11 +55,24 @@ class PromptBuilder:
 
         Works with or without API endpoints. When endpoints_text is empty,
         the prompt focuses on requirements only.
+
+        When ``extra_context["historical_cases"]`` is a non-empty string, it is
+        injected into the prompt so the LLM generates only net-new or updated
+        cases (avoiding duplicates with the historical baseline).
         """
+        historical_cases = ""
+        if extra_context and isinstance(extra_context.get("historical_cases"), str):
+            historical_cases = extra_context["historical_cases"]
+
         system_prompt = (
             "You are a senior QA engineer. Generate comprehensive, well-structured "
             "test cases from requirements and API specifications. Output only valid JSON."
         )
+        if historical_cases:
+            system_prompt += (
+                " Historical test cases are provided as a baseline — generate ONLY "
+                "net-new or updated cases that are NOT already covered by the baseline."
+            )
         lang_hint = self._language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
@@ -68,6 +81,7 @@ class PromptBuilder:
             "endpoints": endpoints_text,
             "requirements": requirements_text,
             "output_language": output_language,
+            "historical_cases": historical_cases,
             **(extra_context or {}),
         }
 
@@ -79,6 +93,7 @@ class PromptBuilder:
                 endpoints=endpoints_text,
                 requirements=requirements_text,
                 output_language=output_language,
+                historical_cases=historical_cases,
             )
 
         return system_prompt, user_prompt
@@ -263,14 +278,21 @@ class PromptBuilder:
         lang_hint = self._language_instruction(kwargs.get("output_language", "english"))
         lang_section = f"\n{lang_hint}" if lang_hint else ""
         ep_section = f"\n## API Endpoints\n{endpoints}\n" if endpoints else ""
-        ep_rule = (
-            "(must match an endpoint above)" if endpoints else '(use "N/A" if no API spec)'
-        )
+        ep_rule = "(must match an endpoint above)" if endpoints else '(use "N/A" if no API spec)'
+        historical_cases = kwargs.get("historical_cases", "")
+        hist_section = ""
+        if historical_cases:
+            hist_section = (
+                "\n## Historical Test Cases (baseline — do NOT regenerate these)\n"
+                "The following cases already exist. Generate ONLY net-new or updated "
+                "cases that add coverage NOT already provided below.\n"
+                f"{historical_cases}\n"
+            )
         return f"""Generate test cases for the requirements below.
 
 ## Requirements
 {requirements}
-{ep_section}
+{ep_section}{hist_section}
 ## Output
 Return a JSON array of test cases. Each element:
 - "id": "TC-XXX"
@@ -297,9 +319,7 @@ Return a JSON array of test cases. Each element:
 
 Output ONLY the JSON array. No markdown, no explanation."""
 
-    def _build_inline_api_prompt(
-        self, endpoints: str, requirements: str, **kwargs: Any
-    ) -> str:
+    def _build_inline_api_prompt(self, endpoints: str, requirements: str, **kwargs: Any) -> str:
         """Fallback inline prompt for API-specific generation."""
         lang_hint = self._language_instruction(kwargs.get("output_language", "english"))
         lang_section = f"\n{lang_hint}" if lang_hint else ""

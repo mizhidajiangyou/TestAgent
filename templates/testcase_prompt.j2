@@ -10,6 +10,13 @@ Generate test cases for the requirements below{% if endpoints %} together with t
 {{ endpoints }}
 {% endif %}
 
+{% if historical_cases %}
+## Historical Test Cases (baseline — do NOT regenerate these)
+The following test cases already exist. Generate ONLY net-new or updated cases
+that add coverage NOT already provided below. Do not duplicate these scenarios.
+{{ historical_cases }}
+{% endif %}
+
 ---
 
 ## Output

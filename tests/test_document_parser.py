@@ -211,7 +211,9 @@ class TestParseDocx:
         table_pos = text.find("Field")
         assert heading_pos < para_pos < table_pos
 
-    def test_parse_docx_table_markdown_format(self, parser: DocumentParser, docx_file: Path) -> None:
+    def test_parse_docx_table_markdown_format(
+        self, parser: DocumentParser, docx_file: Path
+    ) -> None:
         text = parser.parse(docx_file)
         # Markdown table should have a separator row with ---.
         lines = text.split("\n")
@@ -247,7 +249,9 @@ class TestParseHtml:
         assert "Rule" in text
         assert "|" in text
 
-    def test_parse_html_removes_script_and_style(self, parser: DocumentParser, html_file: Path) -> None:
+    def test_parse_html_removes_script_and_style(
+        self, parser: DocumentParser, html_file: Path
+    ) -> None:
         text = parser.parse(html_file)
         assert "alert" not in text
         assert "color: red" not in text
@@ -261,7 +265,9 @@ class TestParseHtml:
 class TestParsePptx:
     """Tests for PPTX parsing via python-pptx."""
 
-    def test_parse_pptx_extracts_slide_marker(self, parser: DocumentParser, pptx_file: Path) -> None:
+    def test_parse_pptx_extracts_slide_marker(
+        self, parser: DocumentParser, pptx_file: Path
+    ) -> None:
         text = parser.parse(pptx_file)
         assert "Slide 1" in text
 
@@ -294,7 +300,9 @@ class TestParsePdf:
         # pdfplumber backend adds "## Page N" markers.
         assert "Page" in text or "Password" in text
 
-    def test_parse_pdf_extracts_password_policy(self, parser: DocumentParser, pdf_file: Path) -> None:
+    def test_parse_pdf_extracts_password_policy(
+        self, parser: DocumentParser, pdf_file: Path
+    ) -> None:
         text = parser.parse(pdf_file)
         assert "Password" in text or "password" in text
 
@@ -319,13 +327,17 @@ class TestParseTextFallback:
         assert "# Title" in text
         assert "Content here" in text
 
-    def test_parse_unknown_suffix_reads_as_text(self, parser: DocumentParser, tmp_path: Path) -> None:
+    def test_parse_unknown_suffix_reads_as_text(
+        self, parser: DocumentParser, tmp_path: Path
+    ) -> None:
         unknown = tmp_path / "doc.log"
         unknown.write_text("log line 1\nlog line 2\n", encoding="utf-8")
         text = parser.parse(unknown)
         assert "log line 1" in text
 
-    def test_parse_non_utf8_falls_back_to_replace(self, parser: DocumentParser, tmp_path: Path) -> None:
+    def test_parse_non_utf8_falls_back_to_replace(
+        self, parser: DocumentParser, tmp_path: Path
+    ) -> None:
         binary_file = tmp_path / "binary.dat"
         binary_file.write_bytes(b"\xff\xfe\x00\x01invalid utf8")
         # Should not raise; replaces errors.

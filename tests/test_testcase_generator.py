@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 from testagent.config.models import (
     APIEndpoint,
     RequirementItem,
+    TestCase,
     TestCaseGenInput,
+    TestPriority,
     TestType,
 )
 from testagent.engine.prompt_builder import PromptBuilder
@@ -167,15 +169,33 @@ class TestTestCaseGenerator:
         """
         refined = json.dumps(
             [
-                {"id": "TC-001", "title": "Get users", "endpoint": "GET /users",
-                 "test_type": "functional", "priority": "high",
-                 "steps": ["Send GET"], "expected_results": ["Status 200"]},
-                {"id": "TC-002", "title": "Create user", "endpoint": "POST /users",
-                 "test_type": "functional", "priority": "high",
-                 "steps": ["Send POST"], "expected_results": ["Status 201"]},
-                {"id": "TC-003", "title": "Update user", "endpoint": "POST /users",
-                 "test_type": "boundary", "priority": "medium",
-                 "steps": ["Send request"], "expected_results": ["Status 400"]},
+                {
+                    "id": "TC-001",
+                    "title": "Get users",
+                    "endpoint": "GET /users",
+                    "test_type": "functional",
+                    "priority": "high",
+                    "steps": ["Send GET"],
+                    "expected_results": ["Status 200"],
+                },
+                {
+                    "id": "TC-002",
+                    "title": "Create user",
+                    "endpoint": "POST /users",
+                    "test_type": "functional",
+                    "priority": "high",
+                    "steps": ["Send POST"],
+                    "expected_results": ["Status 201"],
+                },
+                {
+                    "id": "TC-003",
+                    "title": "Update user",
+                    "endpoint": "POST /users",
+                    "test_type": "boundary",
+                    "priority": "medium",
+                    "steps": ["Send request"],
+                    "expected_results": ["Status 400"],
+                },
             ]
         )
         self.mock_llm.chat.side_effect = [MOCK_LLM_RESPONSE, refined]
@@ -225,16 +245,28 @@ class TestTestCaseGenerator:
         secondary_llm = MagicMock()
         refined_round1 = json.dumps(
             [
-                {"id": "TC-001", "title": "Get users", "endpoint": "GET /users",
-                 "test_type": "functional", "priority": "high",
-                 "steps": ["Send GET"], "expected_results": ["Status 200"]},
+                {
+                    "id": "TC-001",
+                    "title": "Get users",
+                    "endpoint": "GET /users",
+                    "test_type": "functional",
+                    "priority": "high",
+                    "steps": ["Send GET"],
+                    "expected_results": ["Status 200"],
+                },
             ]
         )
         refined_round2 = json.dumps(
             [
-                {"id": "TC-001", "title": "Get users (refined)", "endpoint": "GET /users",
-                 "test_type": "functional", "priority": "high",
-                 "steps": ["Send GET with auth"], "expected_results": ["Status 200"]},
+                {
+                    "id": "TC-001",
+                    "title": "Get users (refined)",
+                    "endpoint": "GET /users",
+                    "test_type": "functional",
+                    "priority": "high",
+                    "steps": ["Send GET with auth"],
+                    "expected_results": ["Status 200"],
+                },
             ]
         )
         secondary_llm.chat.return_value = refined_round1
@@ -266,9 +298,7 @@ class TestTestCaseGenerator:
                 review_llm_client=None,  # falls back to primary
                 review_max_rounds=1,
             )
-        assert any(
-            "same as the primary client" in rec.message for rec in caplog.records
-        )
+        assert any("same as the primary client" in rec.message for rec in caplog.records)
         # Generator still functions
         self.mock_llm.chat.return_value = MOCK_LLM_RESPONSE
         test_cases = generator.generate(self._input_endpoints_only())
@@ -412,3 +442,198 @@ class TestTestCaseGenerator:
         """Test that salvage returns None for non-JSON input."""
         assert TestCaseGenerator._salvage_truncated_json("not json at all") is None
         assert TestCaseGenerator._salvage_truncated_json("") is None
+
+
+class TestHistoricalCases:
+    """Tests for historical-case loading, merging, and incremental generation."""
+
+    def setup_method(self) -> None:
+        self.mock_llm = MagicMock()
+        self.mock_llm.chat.return_value = MOCK_LLM_RESPONSE
+        self.prompt_builder = PromptBuilder()
+        self.generator = TestCaseGenerator(
+            llm_client=self.mock_llm,
+            prompt_builder=self.prompt_builder,
+        )
+
+    def _historical_case(self, title: str = "Get users successfully") -> TestCase:
+        return TestCase(
+            id="TC-OLD-001",
+            title=title,
+            description="legacy case",
+            endpoint=APIEndpoint(method="GET", path="/users"),
+            test_type=TestType.FUNCTIONAL,
+            priority=TestPriority.HIGH,
+            preconditions=["auth"],
+            steps=["GET /users"],
+            expected_results=["200"],
+        )
+
+    # --- load_historical_cases ---
+
+    def test_load_historical_cases_from_file(self, tmp_path) -> None:
+        """Load cases from a JSON file produced by save()."""
+        cases = [self._historical_case()]
+        path = tmp_path / "hist.json"
+        self.generator.save(cases, path)
+        loaded = TestCaseGenerator.load_historical_cases(path)
+        assert len(loaded) == 1
+        assert loaded[0].title == "Get users successfully"
+        assert loaded[0].endpoint.full_path == "GET /users"
+
+    def test_load_historical_cases_missing_file(self, tmp_path) -> None:
+        """Missing file returns empty list (with a warning)."""
+        loaded = TestCaseGenerator.load_historical_cases(tmp_path / "nope.json")
+        assert loaded == []
+
+    def test_load_historical_cases_invalid_json(self, tmp_path) -> None:
+        """Invalid JSON returns empty list."""
+        path = tmp_path / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+        assert TestCaseGenerator.load_historical_cases(path) == []
+
+    def test_load_historical_cases_non_array(self, tmp_path) -> None:
+        """A JSON object (not array) returns empty list."""
+        path = tmp_path / "obj.json"
+        path.write_text('{"id": "TC-001"}', encoding="utf-8")
+        assert TestCaseGenerator.load_historical_cases(path) == []
+
+    def test_load_historical_cases_skips_bad_items(self, tmp_path) -> None:
+        """Non-dict items are skipped without failing the whole load."""
+        path = tmp_path / "mixed.json"
+        path.write_text(
+            json.dumps(
+                [
+                    "not a dict",
+                    {
+                        "id": "TC-001",
+                        "title": "A",
+                        "endpoint": "GET /users",
+                        "test_type": "functional",
+                        "priority": "high",
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        loaded = TestCaseGenerator.load_historical_cases(path)
+        assert len(loaded) == 1
+        assert loaded[0].title == "A"
+
+    # --- _dict_to_testcase ---
+
+    def test_dict_to_testcase_defaults(self) -> None:
+        """Missing optional fields default to empty lists; bad enums fall back."""
+        tc = TestCaseGenerator._dict_to_testcase(
+            {
+                "id": "TC-1",
+                "title": "T",
+                "endpoint": "GET /x",
+                "test_type": "weird",
+                "priority": "nope",
+            }
+        )
+        assert tc is not None
+        assert tc.test_type == TestType.FUNCTIONAL
+        assert tc.priority == TestPriority.MEDIUM
+        assert tc.preconditions == []
+        assert tc.tags == []
+
+    def test_dict_to_testcase_none_on_bad_data(self) -> None:
+        """Malformed input returns None instead of raising."""
+        # endpoint that splits to a single token still works (path defaults)
+        assert TestCaseGenerator._dict_to_testcase({"title": "T"}) is not None
+        # A dict raising during construction is caught -> None
+        assert TestCaseGenerator._dict_to_testcase({"id": 123}) is not None
+
+    # --- dedup + merge ---
+
+    def test_case_dedup_key_case_insensitive(self) -> None:
+        """Dedup key is case-insensitive on title and endpoint."""
+        a = self._historical_case("Get Users Successfully")
+        b = self._historical_case("get users successfully")
+        assert TestCaseGenerator._case_dedup_key(a) == TestCaseGenerator._case_dedup_key(b)
+
+    def test_merge_keeps_baseline_and_appends_net_new(self) -> None:
+        """Historical baseline is preserved; only net-new cases are appended."""
+        historical = [self._historical_case("Get users successfully")]
+        new_cases = [
+            self._historical_case("Get users successfully"),  # duplicate -> dropped
+            TestCase(
+                id="TC-NEW",
+                title="Delete user",
+                description="delete a user",
+                endpoint=APIEndpoint("DELETE", "/users/{id}"),
+                test_type=TestType.NEGATIVE,
+                priority=TestPriority.MEDIUM,
+            ),
+        ]
+        merged = TestCaseGenerator._merge_historical_cases(historical, new_cases)
+        assert len(merged) == 2
+        assert merged[0].title == "Get users successfully"  # baseline first
+        assert merged[1].title == "Delete user"  # net-new appended
+
+    def test_merge_empty_historical(self) -> None:
+        """Empty baseline just returns the new cases (deduped among themselves)."""
+        new_cases = [
+            self._historical_case("A"),
+            self._historical_case("A"),  # dup
+        ]
+        merged = TestCaseGenerator._merge_historical_cases([], new_cases)
+        assert len(merged) == 1
+
+    # --- generate with historical_cases ---
+
+    def test_generate_merges_historical_baseline(self) -> None:
+        """generate() merges historical baseline with newly generated cases."""
+        historical = [self._historical_case("Get users successfully")]
+        # LLM returns 2 cases, one of which duplicates the historical baseline.
+        result = self.generator.generate(
+            TestCaseGenInput(
+                requirements=_REQUIREMENTS,
+                endpoints=_ENDPOINTS,
+                historical_cases=historical,
+            )
+        )
+        # historical(1) + 2 new - 1 duplicate = 2 total
+        assert len(result) == 2
+        # IDs are re-numbered sequentially
+        assert result[0].id == "TC-001"
+        assert result[1].id == "TC-002"
+
+    def test_generate_injects_historical_context_into_prompt(self) -> None:
+        """Historical cases are summarized and injected into the LLM prompt."""
+        historical = [self._historical_case()]
+        self.generator.generate(
+            TestCaseGenInput(
+                requirements=_REQUIREMENTS,
+                endpoints=[],
+                historical_cases=historical,
+            )
+        )
+        # First call's system prompt should mention the baseline instruction.
+        system_prompt_arg = self.mock_llm.chat.call_args.args[0]
+        assert "baseline" in system_prompt_arg.lower()
+        # User prompt should include the historical case summary.
+        user_prompt_arg = self.mock_llm.chat.call_args.args[1]
+        assert "Get users successfully" in user_prompt_arg
+
+    def test_generate_without_historical_no_baseline_hint(self) -> None:
+        """Without historical cases, the prompt has no baseline instruction."""
+        self.generator.generate(TestCaseGenInput(requirements=_REQUIREMENTS, endpoints=[]))
+        system_prompt_arg = self.mock_llm.chat.call_args.args[0]
+        assert "baseline" not in system_prompt_arg.lower()
+
+    # --- prompt builder integration ---
+
+    def test_build_prompt_with_historical_context(self) -> None:
+        """PromptBuilder injects historical baseline text when provided."""
+        builder = PromptBuilder()
+        system_prompt, user_prompt = builder.build_testcase_prompt(
+            endpoints_text="GET /users",
+            requirements_text="req",
+            output_language="english",
+            extra_context={"historical_cases": "- [TC-001] Get users | GET /users | functional"},
+        )
+        assert "baseline" in system_prompt.lower()
+        assert "Get users" in user_prompt

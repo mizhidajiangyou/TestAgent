@@ -15,9 +15,7 @@ def _make_client(model_name: str, chat_return: str | Exception = "ok") -> OpenAI
     else:
         inner.chat.completions.create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content=chat_return), finish_reason="stop")],
-            usage=MagicMock(
-                prompt_tokens=10, completion_tokens=5, total_tokens=15
-            ),
+            usage=MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
     return OpenAIClient(client=inner, model=model_name, timeout=1.0, max_output_tokens=100)
 

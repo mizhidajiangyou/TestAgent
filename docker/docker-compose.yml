@@ -1,4 +1,21 @@
-version: "3.8"
+# TestAgent docker-compose.
+#
+# Usage:
+#   # Build the image once
+#   docker compose -f docker/docker-compose.yml build
+#
+#   # Generate test cases (results land in ./output on the host)
+#   docker compose -f docker/docker-compose.yml run --rm testagent \
+#       generate-tests -r /work/requirements.md -s /work/swagger.json \
+#       -o output/testcases.json
+#
+#   # Or run the web GUI
+#   docker compose -f docker/docker-compose.yml up serve
+#
+# Equivalent raw docker commands (no compose):
+#   docker build -f docker/Dockerfile -t testagent .
+#   docker run --rm -v "$PWD":/work -w /work -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+#       testagent generate-tests -r requirements.md -o output/testcases.json
 
 services:
   testagent:
@@ -8,8 +25,21 @@ services:
     env_file:
       - ../.env
     volumes:
-      - ../output:/app/output
-    command: ["config"]
+      # Mount the repo root so both input files and ./output are on the host.
+      - ..:/work
+    working_dir: /work
+    # Default command shows help; override via `compose run --rm testagent <args>`.
+    command: ["--help"]
+
+  serve:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - ../.env
+    ports:
+      - "8000:8000"
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
 
   prometheus:
     image: prom/prometheus:latest

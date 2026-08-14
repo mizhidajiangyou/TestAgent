@@ -1,0 +1,38 @@
+# Build context exclusions for TestAgent docker image.
+# Keeps `docker build` fast by skipping reference repos, venvs, and artifacts.
+
+# Reference / learning repos (huge — must never enter the image)
+cankao/
+
+# Python artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build & test outputs
+output/
+*.jtl
+*.log
+
+# Local env / secrets (never bake credentials into the image)
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# CI / git
+.git/
+.github/
+
+# Other deployment artifacts not needed in the CLI image
+k8s/
+monitoring/

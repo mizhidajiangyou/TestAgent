@@ -5,6 +5,7 @@ Provides commands for generating test cases, performance scripts, GUI test
 scripts, and interactive conversational refinement.
 """
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from testagent.config.models import (
     TestCaseReportInput,
 )
 from testagent.container import Container
+from testagent.generators.testcase_generator import TestCaseGenerator
 
 console = Console()
 
@@ -40,6 +42,9 @@ EXAMPLES:
 
   # Generate CSV (Excel-friendly, UTF-8 BOM)
   testagent generate-tests -s swagger.json -r requirements.md -f csv -o ./output/testcases.csv
+
+  # Incremental generation: reuse previous cases as baseline, only add net-new cases
+  testagent generate-tests -s swagger.json -r new_requirements.md -H ./output/testcases.json
 
   # Parse Swagger from URL
   testagent generate-tests -s https://petstore3.swagger.io/api/v3/openapi.json
@@ -59,6 +64,9 @@ EXAMPLES:
 
   # Interactive conversational refinement (generate then refine via dialogue)
   testagent chat -r requirements.md -s swagger.json
+
+  # Start the web GUI (embeddable via iframe in other platforms)
+  testagent serve --port 8000
 
   # Run generated scripts
   k6 run output/perf_test.js
@@ -99,6 +107,9 @@ EXAMPLES:
 
   # Requirements only (no Swagger)
   testagent generate-tests -r requirements.md -o cases.json
+
+  # Incremental: reuse a previous test case baseline, only generate net-new cases
+  testagent generate-tests -s swagger.json -r new_requirements.md -H ./output/testcases.json
 """
 
 GENERATE_PERF_EXAMPLES = """
@@ -194,6 +205,12 @@ def main(ctx: click.Context, verbose: bool) -> None:
     default="json",
     help="Output format",
 )
+@click.option(
+    "--historical-cases",
+    "-H",
+    default=None,
+    help="Path to historical test cases JSON file (baseline for incremental generation)",
+)
 @click.pass_context
 def generate_tests(
     ctx: click.Context,
@@ -201,6 +218,7 @@ def generate_tests(
     requirements: str | None,
     output: str,
     output_format: str,
+    historical_cases: str | None,
 ) -> None:
     """Generate test cases from requirements and/or API spec."""
     container: Container = ctx.obj["container"]
@@ -221,11 +239,29 @@ def generate_tests(
         req_items = container.requirement_parser.parse(requirements)
         console.print(f"  Found [green]{len(req_items)}[/] requirements")
 
+    historical = []
+    if historical_cases:
+        historical = TestCaseGenerator.load_historical_cases(historical_cases)
+        console.print(
+            f"  Loaded [green]{len(historical)}[/] historical cases as baseline "
+            f"from [cyan]{historical_cases}[/]"
+        )
+
     console.print("[bold blue]Generating test cases via LLM...[/]")
     test_cases = container.testcase_generator.generate(
-        TestCaseGenInput(endpoints=endpoints, requirements=req_items)
+        TestCaseGenInput(
+            endpoints=endpoints,
+            requirements=req_items,
+            historical_cases=historical,
+        )
     )
-    console.print(f"  Generated [green]{len(test_cases)}[/] test cases")
+    if historical:
+        console.print(
+            f"  Merged: [green]{len(historical)}[/] historical + net-new = "
+            f"[green]{len(test_cases)}[/] total"
+        )
+    else:
+        console.print(f"  Generated [green]{len(test_cases)}[/] test cases")
 
     output_path = Path(output)
     if output_format == "markdown":
@@ -585,6 +621,82 @@ def chat(
             f"Token usage: {container.llm_client.usage.summary()}[/]"
         )
         console.print()
+
+
+SERVE_EXAMPLES = """
+EXAMPLES:
+  # Start the web GUI on the default port (8000)
+  testagent serve
+
+  # Custom host/port
+  testagent serve --host 0.0.0.0 --port 8080
+
+  # Restrict iframe embedding to specific origins (default: allow all)
+  WEB_FRAME_ANCESTORS="https://app.example.com https://portal.example.com" testagent serve
+
+  # Embed in another platform via iframe
+  #   <iframe src="http://localhost:8000/" width="100%" height="800"></iframe>
+
+  # Install the web extra first if not already installed:
+  #   pip install -e ".[web]"
+"""
+
+
+@main.command(cls=TestAgentCommand, examples_text=SERVE_EXAMPLES)
+@click.option(
+    "--host",
+    default="0.0.0.0",
+    help="Host to bind the web server to (default: 0.0.0.0)",
+)
+@click.option(
+    "--port",
+    "-p",
+    type=int,
+    default=8000,
+    help="Port to bind the web server to (default: 8000)",
+)
+@click.option(
+    "--reload",
+    is_flag=True,
+    help="Enable auto-reload (development only)",
+)
+@click.pass_context
+def serve(
+    ctx: click.Context,
+    host: str,
+    port: int,
+    reload: bool,
+) -> None:
+    """Start the web GUI (FastAPI) for browser-based test case generation.
+
+    The page is embeddable in other platforms via ``<iframe>``. By default
+    any origin may embed it; restrict origins with the WEB_FRAME_ANCESTORS
+    env var (space-separated).
+    """
+    try:
+        import uvicorn
+    except ImportError as exc:
+        console.print(
+            "[red]FastAPI/uvicorn are not installed. Install the web extra:[/]\n"
+            '  [cyan]pip install -e ".[web]"[/]'
+        )
+        raise SystemExit(2) from exc
+
+    from testagent.web.app import create_app
+
+    container: Container = ctx.obj["container"]
+    app = create_app(container)
+
+    console.print(
+        Panel(
+            f"[bold]TestAgent Web GUI[/]\n"
+            f"Open: [cyan]http://{host}:{port}/[/]\n"
+            f'Embed: <iframe src="http://{host}:{port}/"></iframe>\n'
+            f"frame-ancestors: [dim]{os.environ.get('WEB_FRAME_ANCESTORS', '*')}[/]",
+            border_style="blue",
+        )
+    )
+    uvicorn.run(app, host=host, port=port, reload=reload)
 
 
 @main.command()
