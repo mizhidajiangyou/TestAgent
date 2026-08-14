@@ -253,9 +253,11 @@ docker pull mzdjy/testagent:latest
 #### 快速使用（Docker Hub 镜像）
 
 ```bash
-# 1) 推荐：把当前目录挂为 /work，输入文件与 output 都在宿主侧
-docker run --rm -v "$PWD":/work -w /work \
+# 1) 推荐：把当前目录挂为 /work，输入文件， output 提前创建给777权限。
+docker run --rm -v "$PWD":/work -v "$PWD/output":/work/output -w /work \
     -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    -e OPENAI_BASE_URL="$OPENAI_BASE_URL" \
+    -e OPENAI_MODEL="$OPENAI_MODEL" \
     mzdjy/testagent:latest generate-tests \
     -r requirements.md -s swagger.json \
     -o output/testcases.json
