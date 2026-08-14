@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  # ------------------------------------------------------------------
+  # Lint + type-check + tests (runs on every push and PR)
+  # ------------------------------------------------------------------
+  test:
+    name: Lint & Test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,documents,web]"
+
+      - name: Ruff check
+        run: ruff check testagent/ tests/
+
+      - name: Ruff format check
+        run: ruff format --check testagent/ tests/
+
+      - name: Mypy
+        run: mypy testagent/
+
+      - name: Pytest
+        run: pytest tests/ -q
+
+  # ------------------------------------------------------------------
+  # Build & push Docker image to Docker Hub
+  # Only on push to main/master or version tags (skipped on PRs).
+  # ------------------------------------------------------------------
+  docker:
+    name: Build & Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image repo and tags
+        id: meta
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          REPO="mzdjy/testagent"
+          echo "repo=${REPO}" >> "$GITHUB_OUTPUT"
+
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          TAGS="${REPO}:${SHORT_SHA}"
+
+          # Branch pushes → branch name + latest on the default branch.
+          if [[ "${GITHUB_REF}" == refs/heads/* ]]; then
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            TAGS="${TAGS},${REPO}:${BRANCH}"
+            if [[ "${BRANCH}" == "main" || "${BRANCH}" == "master" ]]; then
+              TAGS="${TAGS},${REPO}:latest"
+            fi
+          fi
+
+          # Version tags (v1.2.3) → 1.2.3 + latest.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            TAGS="${TAGS},${REPO}:${VERSION},${REPO}:latest"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tags: ${TAGS}"
+
+      - name: Build image
+        env:
+          REPO: ${{ steps.meta.outputs.repo }}
+        run: docker build -f docker/Dockerfile -t "${REPO}:ci" .
+
+      - name: Login to Docker Hub
+        run: docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD2 }}
+
+      - name: Tag and push
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          REPO: ${{ steps.meta.outputs.repo }}
+        run: |
+          IFS=',' read -ra TAG_LIST <<< "${TAGS}"
+          for tag in "${TAG_LIST[@]}"; do
+            docker tag "${REPO}:ci" "${tag}"
+            docker push "${tag}"
+          done
