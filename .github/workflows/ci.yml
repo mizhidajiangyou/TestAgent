@@ -48,14 +48,23 @@ jobs:
   # ------------------------------------------------------------------
   # Build & push Docker image to Docker Hub
   # Only on push to main/master or version tags (skipped on PRs).
+  # Uses Docker Buildx for multi-platform builds (linux/amd64 + linux/arm64).
   # ------------------------------------------------------------------
   docker:
-    name: Build & Push Docker Image
+    name: Build & Push Docker Image (amd64 + arm64)
     needs: test
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
+
+      # Set up QEMU for cross-compiling foreign architectures (arm64 on x86 runner)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # Create a Buildx builder instance with multi-platform support
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Compute image repo and tags
         id: meta
@@ -88,21 +97,14 @@ jobs:
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
           echo "Resolved tags: ${TAGS}"
 
-      - name: Build image
-        env:
-          REPO: ${{ steps.meta.outputs.repo }}
-        run: docker build -f docker/Dockerfile -t "${REPO}:ci" .
-
       - name: Login to Docker Hub
         run: docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD2 }}
 
-      - name: Tag and push
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          REPO: ${{ steps.meta.outputs.repo }}
-        run: |
-          IFS=',' read -ra TAG_LIST <<< "${TAGS}"
-          for tag in "${TAG_LIST[@]}"; do
-            docker tag "${REPO}:ci" "${tag}"
-            docker push "${tag}"
-          done
+      - name: Build and push multi-platform image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}

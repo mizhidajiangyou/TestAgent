@@ -241,7 +241,55 @@ mypy testagent/
 
 ### Docker
 
-镜像入口为 `testagent`，`docker run` 后直接跟 CLI 参数即可。结果默认写到容器内 `/app/output`，用 `-v` 把宿主目录挂进去即可在当前目录拿到产物。
+CI/CD 流水线已自动将镜像推送到 Docker Hub，可直接拉取使用，无需本地构建：
+
+```bash
+# 拉取最新镜像（main 分支构建，对应 GitHub Actions latest tag）
+docker pull mzdjy/testagent:latest
+```
+
+镜像入口为 `testagent`，`docker run mzdjy/testagent:latest <args>` 等价于直接调用 CLI。结果默认写到容器内 `/app/output`，用 `-v` 把宿主目录挂进去即可在当前目录拿到产物。
+
+#### 快速使用（Docker Hub 镜像）
+
+```bash
+# 1) 推荐：把当前目录挂为 /work，输入文件与 output 都在宿主侧
+docker run --rm -v "$PWD":/work -w /work \
+    -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    mzdjy/testagent:latest generate-tests \
+    -r requirements.md -s swagger.json \
+    -o output/testcases.json
+
+# 2) 仅挂载 output 目录（输入用 URL，无需本地文件）
+docker run --rm -v "$PWD/output":/app/output \
+    -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    mzdjy/testagent:latest generate-tests \
+    -s https://petstore3.swagger.io/api/v3/openapi.json \
+    -o output/testcases.json
+
+# 3) 增量生成：以历史用例为基线，只补净新用例
+docker run --rm -v "$PWD":/work -w /work \
+    -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    mzdjy/testagent:latest generate-tests \
+    -r new_requirements.md -H output/testcases.json \
+    -o output/testcases.json
+
+# 4) 生成 GUI 测试脚本（Playwright）
+docker run --rm -v "$PWD":/work -w /work \
+    -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    mzdjy/testagent:latest generate-gui \
+    -r requirements.md --url https://example.com \
+    -o output/gui_test.py
+
+# 5) 启动 Web GUI（可被其他平台通过 iframe 嵌入）
+docker run --rm -p 8000:8000 \
+    -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    mzdjy/testagent:latest serve --host 0.0.0.0 --port 8000
+```
+
+#### 本地自建镜像
+
+需要修改镜像内容时也可从源码构建：
 
 ```bash
 # 构建镜像（在仓库根目录执行）
