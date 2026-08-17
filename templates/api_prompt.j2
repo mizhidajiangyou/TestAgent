@@ -1,5 +1,6 @@
 Generate API-specific test cases (boundary, security, integration) for the following endpoints.
-Focus on cases that require API-level details (parameters, request body, status codes).
+This is PHASE 2: add ONLY cases that require API-level details (parameters, request body, status codes).
+Do NOT regenerate functional/happy-path CRUD or the uniqueness(409) cases already produced in Phase 1.
 
 ## API Endpoints
 {{ endpoints }}
@@ -7,6 +8,13 @@ Focus on cases that require API-level details (parameters, request body, status 
 {% if requirements %}
 ## Requirements Context
 {{ requirements }}
+{% endif %}
+
+{% if already_covered %}
+## Already covered by Phase 1 (DO NOT regenerate these scenarios)
+The following cases were already generated in Phase 1. Skip any scenario listed here;
+only ADD new boundary / security / negative / concurrency cases not present below.
+{{ already_covered }}
 {% endif %}
 
 ---
@@ -37,9 +45,11 @@ Focus on cases that require API-level details (parameters, request body, status 
 4. **Auth & cleanup**: if the endpoint requires auth, get a token in `preconditions`. For create/modify cases, state cleanup (DELETE the created resource) in the last step or `description`.
 5. **Tags required**: at least one tag from each category — scope (smoke, regression), domain (auth, crud, pagination), type (boundary, security, negative, integration).
 6. **Brevity (HARD)**: keep output compact to avoid the token limit. Write each `step` as ONE line (method + path + essential headers + JSON body). Write each `expected_results` entry as `Status <code>; <field> <op> <value>` with NO prose. Keep `description` to one sentence. Generate the MINIMUM cases that cover the focus areas (one per equivalence class).
+7. **Error contract (HARD)**: Use EXACTLY the status codes and `error.code` values from the ERROR CONTRACT in the system prompt. Do NOT invent codes (no `PASSWORD_TOO_SHORT` / `INVALID_EMAIL` / `LIMIT_TOO_LARGE` / `PARSE_ERROR` as standalone); use `VALIDATION_ERROR` + `error.details.<field>` for body validation, `INVALID_<NAME>` for bad params, `MALFORMED_JSON` for bad body, all with **400**. Never use **422** — use 400. Auth: 401 (missing/invalid/expired token), 403 (wrong role).
+8. **Test isolation / concurrency (HARD)**: Each case MUST use UNIQUE data (uuid/timestamp suffix on emails/usernames); NEVER reuse fixed emails like `dup@example.com` across cases. Each case cleans up ONLY its own data. Do NOT assert global counts unless the case creates exactly that many users itself and queries its own set; prefer asserting on the created resource's own response. This keeps cases safe under concurrent execution.
 
 ## Focus Areas (cover with concrete payloads)
-1. **Boundary**: min/max param values, empty strings, over-long strings, special chars, integer overflow, `page=0`/`limit=0`/`limit` huge, negative IDs.
+1. **Boundary**: min/max param values, empty strings, over-long strings, special chars, integer overflow, `page=0`/`limit=0`/`limit` huge, negative IDs. **Password complexity**: missing uppercase / missing digit / no special char / all-lowercase — assert **400 VALIDATION_ERROR** with `error.details.password`. If the requirements/spec do NOT define a password complexity policy, still generate these cases but flag it in `description` as "potential spec gap: password complexity policy undefined" and assert the API's documented rule; do not invent a code beyond the contract.
 2. **Security**: SQL injection (`' OR '1'='1`) and XSS (`<script>`) in string params; missing/expired/wrong token ⇒ 401; wrong role ⇒ 403; IDOR (`/users/{otherUserid}` as another user); rate limiting / account lockout (e.g. 5 failures ⇒ lock 10 min); sensitive data leakage (password must NOT appear in responses).
 3. **Integration**: Create→Read, Update→Read, Delete→Read(404), cross-endpoint data consistency.
 4. **Negative**: missing required fields, malformed JSON, wrong Content-Type, nonexistent IDs ⇒ 404, duplicate unique field ⇒ 409.

@@ -24,6 +24,27 @@ JSON_MODE_TEST_CASES_INSTRUCTION = (
     "Do NOT return a bare JSON array."
 )
 
+#: Canonical error contract shared by BOTH generation phases and the review
+#: pass. Defining it ONCE here (injected into every system prompt) is what
+#: prevents Phase 1 and Phase 2 from inventing two different, contradictory
+#: status-code / error-code conventions (the "spec inconsistency" defect).
+ERROR_CONTRACT = (
+    " ERROR CONTRACT — use EXACTLY these status codes and error.code values for "
+    "EVERY case (both phases and review must agree): "
+    "2xx = 200 OK / 201 Created / 204 No Content. "
+    "400 BAD_REQUEST for ALL client-input errors, with error.code: "
+    "'VALIDATION_ERROR' + error.details.<field> for body validation (e.g. password "
+    "length, email format); 'INVALID_<NAME>' for bad path/query params (INVALID_ID, "
+    "INVALID_PAGE, INVALID_LIMIT); 'MALFORMED_JSON' for unparseable body. "
+    "Do NOT use 422 — use 400. "
+    "401 UNAUTHORIZED = missing / invalid / expired token. "
+    "403 FORBIDDEN = authenticated but wrong role (non-admin on an admin endpoint). "
+    "404 NOT_FOUND = unknown resource id. "
+    "409 DUPLICATE_<FIELD> = unique-constraint violation (DUPLICATE_EMAIL). "
+    "415 UNSUPPORTED_MEDIA_TYPE = wrong Content-Type. "
+    "429 TOO_MANY_REQUESTS = rate limit / account lockout."
+)
+
 
 class PromptBuilder:
     """Build LLM prompts from templates or inline strings."""
@@ -92,6 +113,7 @@ class PromptBuilder:
         lang_hint = self._language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
+        system_prompt += ERROR_CONTRACT
         if json_mode:
             system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
 
@@ -124,6 +146,7 @@ class PromptBuilder:
         requirements_text: str,
         output_language: str = "english",
         json_mode: bool = False,
+        already_covered: str = "",
     ) -> tuple[str, str]:
         """Build prompts for API-specific test case generation.
 
@@ -138,6 +161,7 @@ class PromptBuilder:
         lang_hint = self._language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
+        system_prompt += ERROR_CONTRACT
         if json_mode:
             system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
 
@@ -146,6 +170,7 @@ class PromptBuilder:
             "requirements": requirements_text,
             "output_language": output_language,
             "json_mode": json_mode,
+            "already_covered": already_covered,
         }
 
         try:
@@ -157,6 +182,7 @@ class PromptBuilder:
                 requirements=requirements_text,
                 output_language=output_language,
                 json_mode=json_mode,
+                already_covered=already_covered,
             )
 
         return system_prompt, user_prompt
@@ -181,6 +207,7 @@ class PromptBuilder:
         lang_hint = self._language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
+        system_prompt += ERROR_CONTRACT
         if json_mode:
             system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
 
@@ -358,33 +385,46 @@ class PromptBuilder:
 - Prefer fewer, high-value cases over many shallow ones.
 - Cover meaningful scenarios (happy path + important boundary/error/security where it matters); do not force every category per requirement.
 - For data-creating cases, note cleanup so tests stay re-runnable.
+- Error contract: 400 for all client-input errors (VALIDATION_ERROR+details.<field> for body, INVALID_<NAME> for params, MALFORMED_JSON); 401 missing/invalid/expired token; 403 wrong role; 404 unknown id; 409 DUPLICATE_<FIELD>; 415 wrong Content-Type. Do NOT use 422.
+- Test isolation: use UNIQUE data per case (uuid/timestamp suffix on emails); never reuse fixed emails across cases; clean up only own data; do not assert global counts unless self-contained.
 {lang_section}
 
 {output_footer}"""
 
     def _build_inline_api_prompt(
-        self, endpoints: str, requirements: str, json_mode: bool = False, **kwargs: Any
+        self,
+        endpoints: str,
+        requirements: str,
+        json_mode: bool = False,
+        already_covered: str = "",
+        **kwargs: Any,
     ) -> str:
         """Fallback inline prompt for API-specific generation."""
         lang_hint = self._language_instruction(kwargs.get("output_language", "english"))
         lang_section = f"\n{lang_hint}" if lang_hint else ""
+        covered_section = ""
+        if already_covered:
+            covered_section = (
+                f"\n## Already covered by Phase 1 (do NOT regenerate these scenarios)\n{already_covered}\n"
+            )
         if json_mode:
             output_footer = (
                 'Output ONLY the JSON object {"test_cases": [...]}. No markdown, no explanation.'
             )
         else:
             output_footer = "Output ONLY a JSON array. No markdown, no explanation."
-        return f"""Generate API-specific test cases (boundary, security, integration).
+        return f"""Generate API-specific test cases (boundary, security, integration). This is Phase 2 — add ONLY cases not already covered.
 
 ## API Endpoints
 {endpoints}
 
 ## Requirements Context
 {requirements}
-
-Focus on: boundary values, security (SQLi/XSS/IDOR/auth), integration (CRUD flow), negative cases.
+{covered_section}
+Focus on: parameter bounds (page/limit/id extremes), password complexity, security (SQLi/XSS/IDOR/expired token/role), negative (malformed JSON, wrong Content-Type), concurrency/isolation. Skip functional/happy CRUD and uniqueness(409) cases already done in Phase 1.
 Each expected_result must be machine-checkable (explicit status code + field assertion; no vague terms like 成功/失败/works).
-Endpoint field must match one of the listed endpoints exactly (method+path); do not invent endpoints. Include realistic request bodies and Authorization for protected endpoints; state cleanup for create/modify cases.
+Error contract: 400 for all client-input errors (VALIDATION_ERROR+details.<field> for body, INVALID_<NAME> for params, MALFORMED_JSON); 401 missing/invalid/expired token; 403 wrong role; 404 unknown id; 409 DUPLICATE_<FIELD>; 415 wrong Content-Type. Do NOT use 422.
+Endpoint field must match one of the listed endpoints exactly (method+path); do not invent endpoints. Use UNIQUE data per case (no fixed shared emails); clean up only own data.
 {lang_section}
 
 {output_footer}"""
@@ -426,6 +466,8 @@ Endpoint field must match one of the listed endpoints exactly (method+path); do 
 4. Add boundary, security, performance, idempotency, i18n cases.
 5. Fill tags.
 6. Preserve existing IDs (do not renumber). State a one-line reason for each change in description.
+7. DEDUPLICATE: remove cases that target the SAME endpoint AND the SAME scenario intent, even if titles differ (e.g. "list without token → 401" vs "unauthenticated list → 403" are duplicates of the same scenario). Keep the one with stronger assertions.
+8. RECONCILE contradictions: if two cases describe the same (endpoint, scenario) but assert different status codes, force BOTH to the canonical contract — 401 missing/invalid/expired token; 403 wrong role; 404 unknown id; 409 DUPLICATE_<FIELD>; 400 for all client-input errors (VALIDATION_ERROR+details for body, INVALID_<NAME> for params; NO 422).
 
 Return the COMPLETE final list. After the JSON, on a new line output: SUMMARY: added=<N> fixed=<N> removed=<N>
 {lang_section}

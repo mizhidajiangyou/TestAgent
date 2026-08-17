@@ -24,6 +24,8 @@ You have NO prior context about how these were generated: evaluate them purely f
 8. **Tags**: fill the "tags" array with labels from scope (smoke/regression), domain (auth/crud/pagination), type (boundary/security/negative/integration).
 9. **Cleanup & idempotency**: add teardown/cleanup for created data and duplicate-submission cases so tests stay re-runnable.
 10. **I18N**: unicode / emoji / whitespace / special-character handling.
+11. **Deduplicate by scenario, not by title**: if two cases target the SAME endpoint AND the SAME scenario intent (e.g. "list without token → 401" vs "unauthenticated list → 403"), they are duplicates — keep ONE (prefer the stronger assertion) and drop the other. This removes cross-phase duplication even when titles differ.
+12. **Reconcile contradictions to the contract**: if cases describe the same (endpoint, scenario) but assert different status codes, force BOTH to the canonical ERROR CONTRACT — 401 = missing/invalid/expired token; 403 = wrong role; 404 = unknown id; 409 = DUPLICATE_<FIELD>; 400 = all client-input errors (VALIDATION_ERROR + error.details.<field> for body, INVALID_<NAME> for params; NEVER 422).
 
 ## Hard constraints
 - **Preserve existing IDs**: keep each case's `id` unchanged unless you are removing the case. Do NOT renumber.

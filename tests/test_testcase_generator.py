@@ -103,6 +103,49 @@ class TestTestCaseGenerator:
         assert len(test_cases) == 4
         assert self.mock_llm.chat.call_count == 2
 
+    def test_phase2_receives_phase1_coverage(self) -> None:
+        """Regression: Phase 2 API prompt must receive Phase-1 coverage text.
+
+        When both requirements and endpoints are provided, the generator feeds
+        the Phase-1 case summary into Phase 2 via ``already_covered`` so that
+        the two phases do not regenerate the same scenario (kills cross-phase
+        duplication / spec inconsistency).
+        """
+        # Replace the generator's PromptBuilder with a mock so we can inspect
+        # the arguments passed to build_api_prompt. Both prompt builders must
+        # return a 2-tuple (system, user) because generate() unpacks them.
+        self.prompt_builder = MagicMock()
+        self.prompt_builder.build_testcase_prompt.return_value = ("sys", "user")
+        self.prompt_builder.build_api_prompt.return_value = ("sys", "user")
+        self.generator._prompt_builder = self.prompt_builder
+
+        self.generator.generate(self._input_both())
+
+        # Phase 2 must have been invoked exactly once (single endpoint batch).
+        assert self.prompt_builder.build_api_prompt.called
+        # Capture the already_covered kwarg from the Phase-2 call.
+        call_kwargs = self.prompt_builder.build_api_prompt.call_args.kwargs
+        already_covered = call_kwargs.get("already_covered", "")
+        assert already_covered, "Phase 2 should receive non-empty already_covered"
+        # The coverage text must reference a Phase-1 case so Phase 2 can avoid
+        # duplicating it. MOCK_LLM_RESPONSE's first case title is below.
+        assert "Get users successfully" in already_covered
+
+    def test_phase2_not_invoked_without_requirements(self) -> None:
+        """Regression: Phase 2 (API-specific) only runs when requirements exist.
+
+        With endpoints-only input there is no Phase 1 to cover, so build_api_prompt
+        must NOT be called and no already_covered wiring is needed.
+        """
+        self.prompt_builder = MagicMock()
+        self.prompt_builder.build_testcase_prompt.return_value = ("sys", "user")
+        self.prompt_builder.build_api_prompt.return_value = ("sys", "user")
+        self.generator._prompt_builder = self.prompt_builder
+
+        self.generator.generate(self._input_endpoints_only())
+
+        assert not self.prompt_builder.build_api_prompt.called
+
     def test_generate_calls_llm(self) -> None:
         """Test that generate calls LLM client."""
         self.generator.generate(self._input_endpoints_only())

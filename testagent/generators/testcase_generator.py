@@ -148,22 +148,30 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         historical_cases = data.historical_cases
 
         all_cases: list[TestCase] = []
+        phase1_cases: list[TestCase] = []
 
         # --- Phase 1: Requirements-driven generation ---
         if requirements:
-            all_cases.extend(
-                self._generate_from_requirements(requirements, endpoints, historical_cases)
+            phase1_cases = self._generate_from_requirements(
+                requirements, endpoints, historical_cases
             )
+            all_cases.extend(phase1_cases)
         elif endpoints:
             # No requirements but have endpoints — generate from endpoints alone
-            all_cases.extend(self._generate_from_endpoints(endpoints, ""))
+            phase1_cases = self._generate_from_endpoints(endpoints, "")
+            all_cases.extend(phase1_cases)
         else:
             logger.warning("No requirements or endpoints provided; nothing to generate.")
             return []
 
         # --- Phase 2: API-specific enhancement (only if both req + endpoints) ---
         if requirements and endpoints:
-            api_cases = self._generate_api_specific(endpoints, requirements)
+            # Feed Phase 1 coverage into Phase 2 so it does NOT regenerate the
+            # same scenarios (kills cross-phase duplication / inconsistency).
+            covered_text = self._historical_cases_to_text(phase1_cases)
+            api_cases = self._generate_api_specific(
+                endpoints, requirements, already_covered=covered_text
+            )
             all_cases.extend(api_cases)
 
         # --- Merge historical cases (baseline) with newly generated cases ---
@@ -236,8 +244,13 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self,
         endpoints: list[APIEndpoint],
         requirements: list[RequirementItem],
+        already_covered: str = "",
     ) -> list[TestCase]:
-        """Generate API-specific cases (boundary, security, integration)."""
+        """Generate API-specific cases (boundary, security, integration).
+
+        ``already_covered`` is a text summary of the Phase 1 cases, injected so
+        Phase 2 avoids regenerating scenarios already produced.
+        """
         batches = self._split_endpoint_batches(endpoints)
         req_text = RequirementParser.requirements_to_text(requirements)
         all_cases: list[TestCase] = []
@@ -249,6 +262,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 requirements_text=req_text,
                 output_language=self._output_language,
                 json_mode=self._json_mode,
+                already_covered=already_covered,
             )
             logger.info(
                 "Phase 2 - Batch %d/%d (%d endpoints, API-specific)...",
