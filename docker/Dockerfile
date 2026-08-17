@@ -27,14 +27,20 @@
 #
 # All settings can be overridden with -e flags (see .env.example).
 
-FROM python:3.11-slim AS runtime
+FROM python:3.14-slim AS runtime
+
+# uv: a single static binary, copied from the official image (no pip needed).
+# UV_LINK_MODE=copy avoids bind-mount issues on some filesystems;
+# UV_COMPILE_BYTECODE=1 precompiles .pyc for faster cold start.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # Keep Python output unbuffered, disable pyc clutter, and default the output
 # directory to the conventional mount point.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_NO_CACHE_DIR=1 \
     OUTPUT_DIR=/app/output
 
 WORKDIR /app
@@ -42,12 +48,12 @@ WORKDIR /app
 # Install the package with document-parsing + web-GUI extras. These deps
 # (python-docx, pdfplumber, beautifulsoup4, markdownify, python-pptx, fastapi,
 # uvicorn) all ship manylinux/macos wheels, so no system build tools are
-# required — keeping the image small.
+# required — keeping the image small. uv installs ~10x faster than pip.
 COPY pyproject.toml README.md ./
 COPY testagent/ testagent/
 COPY templates/ templates/
 
-RUN pip install --no-cache-dir ".[documents,web]"
+RUN uv pip install --system ".[documents,web]"
 
 # Pre-create the output mount point so a read-only-ish bind still works and
 # ownership is correct before we drop privileges.

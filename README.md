@@ -41,12 +41,12 @@ TestAgent/
 
 ## 安装
 
-要求 Python >= 3.11。
+要求 Python >= 3.14。推荐使用 [uv](https://docs.astral.sh/uv/) 管理虚拟环境与依赖：
 
 ```bash
-python3 -m venv .venv
+uv venv --python 3.14
 source .venv/bin/activate
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 ```
 
 ## 配置

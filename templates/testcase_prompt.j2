@@ -1,55 +1,58 @@
 Generate test cases for the requirements below{% if endpoints %} together with the listed API endpoints{% endif %}.
-
 {% if requirements %}
 ## Requirements
 {{ requirements }}
 {% endif %}
-
 {% if endpoints %}
 ## API Endpoints
 {{ endpoints }}
 {% endif %}
-
 {% if historical_cases %}
 ## Historical Test Cases (baseline — do NOT regenerate these)
 The following test cases already exist. Generate ONLY net-new or updated cases
-that add coverage NOT already provided below. Do not duplicate these scenarios.
+that add coverage NOT already provided below. Before generating, analyze the
+historical cases and identify genuine coverage gaps. If a scenario is already
+covered (even with slightly different wording or status codes), do NOT regenerate it.
 {{ historical_cases }}
 {% endif %}
-
 ---
-
 ## Output
 Return a JSON array of test cases. Each element:
 ```json
 {
-  "id": "TC-001",
+  "id": "TC-XXX",
   "title": "concise title",
-  "description": "what this verifies",
+  "description": "what this verifies and why it matters",
   "endpoint": "METHOD /path"{% if endpoints %} (must be one of the endpoints above){% else %} (use "N/A" if no API spec){% endif %},
   "test_type": "functional|boundary|negative|security|performance|integration",
   "priority": "high|medium|low",
-  "preconditions": ["setup steps"],
-  "steps": ["exact execution steps with request details"],
+  "preconditions": ["setup steps including data seeding and token acquisition"],
+  "steps": ["exact execution steps with full request details (method, path, headers, body)"],
   "expected_results": ["machine-checkable assertions"],
   "tags": ["labels"]
 }
 ```
-
-## Rules (must follow)
-1. **Assertable**: every `expected_results` entry must be verifiable by a machine — include the explicit HTTP status code and a concrete field-level check (e.g., `"Status 200; response.body.id is not null"`). Avoid vague phrases like "works correctly".
-2. **Endpoint consistency**: when API endpoints are given, the `endpoint` field must EXACTLY match one of them, and the `steps` must actually call that endpoint.
-3. **Tags required**: fill `tags` with relevant labels (e.g., smoke, regression, auth, crud, boundary, security).
+## Rules (must follow strictly)
+1. **Assertable**: Every `expected_results` entry MUST contain an explicit HTTP status code AND at least one concrete field-level check. Use exact values, not ranges or alternatives. Correct: `"Status 409; response.body.error.code == 'DUPLICATE_EMAIL'"`. Wrong: `"Status 400 or 422; message contains 'exists'"`. Wrong: `"works correctly"`.
+2. **Endpoint consistency**: When API endpoints are given, the `endpoint` field MUST exactly match one of them (including HTTP method), and the `steps` MUST call that exact endpoint. If testing an unsupported method on a valid path, set endpoint to the actual method+path and note in description that it verifies 405.
+3. **Tags required**: Include at least one tag from each applicable category: scope (smoke, regression), domain (auth, crud, pagination), type (boundary, security, negative).
+4. **No duplicates**: Do not generate cases that differ only by expected status code for the same input. If the spec defines multiple valid status codes, pick the canonical one and document the alternative in description.
+5. **ID placeholder**: Use `"TC-XXX"` as the id value. The caller will assign sequential IDs after merging with historical cases.
+6. **Dynamic data over hardcoded IDs**: Prefer creating test data within preconditions or steps and capturing IDs from responses. Only use hardcoded IDs when the requirement explicitly references a seeded fixture.
+7. **Self-check before output**: Before returning the JSON array, review every generated case — remove duplicates (same input + same verification goal, regardless of wording), drop cases with invalid assertions or mismatched endpoints, and fix any missing required fields. Output only verified, error-free cases.
+8. **Unified error codes**: Error responses for the same business scenario MUST use a consistent error code. If multiple cases verify the same type of business error (e.g., resource not found, permission denied, validation failure), the error code in their `expected_results` must be identical — no semantically equivalent errors with different codes.
+9. **Avoid excessive redundancy**: Cases must be differentiated. Do not generate multiple cases for the same verification goal that differ only in trivial input values but share identical assertion logic. One representative case per equivalence class is sufficient; no need to enumerate every equivalent input.
 
 ## Guidance (use judgment)
-- Generate the cases that best verify the requirements above — prefer fewer, high-value cases over many shallow ones.
-- Cover the meaningful scenarios for each requirement: happy path plus the most important boundary, error, or security case where it genuinely matters. Do not force every requirement to cover all categories.
-- For cases that create or modify data, note how the data is cleaned up so the test stays re-runnable.
-- Keep each case focused on one verification goal; avoid over-explaining.
-
+- Prioritize high-value cases: happy path, then critical security, key boundaries, integration flows. Skip low-value edge cases unless explicitly required.
+- For CRUD resources, ensure Create, Read, Update, Delete are all covered if endpoints exist. If Update (PUT/PATCH) is missing but implied by requirements, flag it in description as a potential spec gap and generate the case with the expected method+path.
+- Security cases should target OWASP Top 10 risks relevant to the specific endpoint. Do not generate generic security cases that apply identically to every endpoint.
+- Integration cases must span at least two endpoints and verify cross-endpoint data consistency.
+- Keep each case focused on ONE verification goal; avoid over-explaining.
+- For cases that create or modify data, note how the data is cleaned up (within description or steps) so the test stays re-runnable.
+- When `historical_cases` is provided, your primary job is GAP ANALYSIS. State in each new case description what gap it fills relative to the baseline.
 {% if output_language == 'chinese' %}
 ## Language
-Write ALL text fields (title, description, preconditions, steps, expected_results, tags) in Simplified Chinese. Keep field names, HTTP methods, path templates, and status codes in English.
+Write ALL text fields (title, description, preconditions, steps, expected_results, tags) in Simplified Chinese. Keep field names, HTTP methods, path templates, status codes, error codes, and JSON field paths in English.
 {% endif %}
-
 Output ONLY the JSON array. No markdown fences, no explanation before or after.
