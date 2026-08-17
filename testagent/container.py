@@ -9,6 +9,7 @@ from testagent.engine.conversation import ConversationManager
 from testagent.engine.llm_client import MultiModelLLMClient, create_llm_client
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.performance_generator import PerformanceGenerator
+from testagent.generators.gui_test_generator import GUITestGenerator
 from testagent.generators.testcase_generator import TestCaseGenerator
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
@@ -26,6 +27,7 @@ class Container:
         self._swagger_parser: SwaggerParser | None = None
         self._requirement_parser: RequirementParser | None = None
         self._testcase_generator: TestCaseGenerator | None = None
+        self._gui_generator: GUITestGenerator | None = None
         self._performance_generator: PerformanceGenerator | None = None
         self._testcase_report: TestCaseReport | None = None
         self._performance_report: PerformanceReport | None = None
@@ -80,8 +82,20 @@ class Container:
                 review_llm_client=review_client,
                 review_max_rounds=self._settings.review_max_rounds,
                 output_language=self._settings.output_language,
+                json_mode=self._settings.llm.json_mode,
             )
         return self._testcase_generator
+
+    @property
+    def gui_generator(self) -> GUITestGenerator:
+        """Return GUI (Playwright) test generator (lazy init)."""
+        if self._gui_generator is None:
+            self._gui_generator = GUITestGenerator(
+                llm_client=self.llm_client,
+                prompt_builder=self.prompt_builder,
+                output_language=self._settings.output_language,
+            )
+        return self._gui_generator
 
     @property
     def performance_generator(self) -> PerformanceGenerator:

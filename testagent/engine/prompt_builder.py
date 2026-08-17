@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 
+#: System-prompt suffix appended when JSON mode is enabled. OpenAI's
+#: ``json_object`` response format rejects a bare JSON array, so the payload
+#: must be wrapped in a single top-level object keyed ``test_cases``.
+JSON_MODE_TEST_CASES_INSTRUCTION = (
+    " CRITICAL: You MUST return a JSON OBJECT with exactly one top-level key "
+    '"test_cases", whose value is the JSON array of test cases described '
+    'above. Example shape: {"test_cases": [ { ...single case object... } ]}. '
+    "Do NOT return a bare JSON array."
+)
+
 
 class PromptBuilder:
     """Build LLM prompts from templates or inline strings."""
@@ -50,6 +60,7 @@ class PromptBuilder:
         requirements_text: str,
         output_language: str = "english",
         extra_context: dict[str, Any] | None = None,
+        json_mode: bool = False,
     ) -> tuple[str, str]:
         """Build prompts for test case generation.
 
@@ -59,6 +70,11 @@ class PromptBuilder:
         When ``extra_context["historical_cases"]`` is a non-empty string, it is
         injected into the prompt so the LLM generates only net-new or updated
         cases (avoiding duplicates with the historical baseline).
+
+        When ``json_mode`` is true, the output contract switches to a JSON
+        object ``{"test_cases": [...]}`` (required by OpenAI's ``json_object``
+        response format) and the wrapper instruction is appended to the system
+        prompt; the template / inline fallback both honor the same contract.
         """
         historical_cases = ""
         if extra_context and isinstance(extra_context.get("historical_cases"), str):
@@ -76,12 +92,15 @@ class PromptBuilder:
         lang_hint = self._language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
+        if json_mode:
+            system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
 
         context = {
             "endpoints": endpoints_text,
             "requirements": requirements_text,
             "output_language": output_language,
             "historical_cases": historical_cases,
+            "json_mode": json_mode,
             **(extra_context or {}),
         }
 
@@ -94,6 +113,7 @@ class PromptBuilder:
                 requirements=requirements_text,
                 output_language=output_language,
                 historical_cases=historical_cases,
+                json_mode=json_mode,
             )
 
         return system_prompt, user_prompt
@@ -103,6 +123,7 @@ class PromptBuilder:
         endpoints_text: str,
         requirements_text: str,
         output_language: str = "english",
+        json_mode: bool = False,
     ) -> tuple[str, str]:
         """Build prompts for API-specific test case generation.
 
@@ -117,11 +138,14 @@ class PromptBuilder:
         lang_hint = self._language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
+        if json_mode:
+            system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
 
         context = {
             "endpoints": endpoints_text,
             "requirements": requirements_text,
             "output_language": output_language,
+            "json_mode": json_mode,
         }
 
         try:
@@ -132,6 +156,7 @@ class PromptBuilder:
                 endpoints=endpoints_text,
                 requirements=requirements_text,
                 output_language=output_language,
+                json_mode=json_mode,
             )
 
         return system_prompt, user_prompt
@@ -142,6 +167,7 @@ class PromptBuilder:
         requirements_text: str,
         test_cases_json: str,
         output_language: str = "english",
+        json_mode: bool = False,
     ) -> tuple[str, str]:
         """Build prompts for reviewing/refining generated test cases.
 
@@ -155,12 +181,15 @@ class PromptBuilder:
         lang_hint = self._language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
+        if json_mode:
+            system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
 
         context = {
             "endpoints": endpoints_text,
             "requirements": requirements_text,
             "test_cases_json": test_cases_json,
             "output_language": output_language,
+            "json_mode": json_mode,
         }
 
         try:
@@ -172,6 +201,7 @@ class PromptBuilder:
                 requirements=requirements_text,
                 test_cases_json=test_cases_json,
                 output_language=output_language,
+                json_mode=json_mode,
             )
 
         return system_prompt, user_prompt
@@ -272,7 +302,7 @@ class PromptBuilder:
         return ""
 
     def _build_inline_testcase_prompt(
-        self, endpoints: str, requirements: str, **kwargs: Any
+        self, endpoints: str, requirements: str, json_mode: bool = False, **kwargs: Any
     ) -> str:
         """Fallback inline prompt for test case generation."""
         lang_hint = self._language_instruction(kwargs.get("output_language", "english"))
@@ -288,13 +318,24 @@ class PromptBuilder:
                 "cases that add coverage NOT already provided below.\n"
                 f"{historical_cases}\n"
             )
+        if json_mode:
+            output_shape = (
+                'Return a JSON OBJECT with exactly one top-level key "test_cases" whose '
+                "value is the array described below. Do NOT return a bare array."
+            )
+            output_footer = (
+                'Output ONLY the JSON object {"test_cases": [...]}. No markdown, no explanation.'
+            )
+        else:
+            output_shape = "Return a JSON array of test cases. Each element:"
+            output_footer = "Output ONLY the JSON array. No markdown, no explanation."
         return f"""Generate test cases for the requirements below.
 
 ## Requirements
 {requirements}
 {ep_section}{hist_section}
 ## Output
-Return a JSON array of test cases. Each element:
+{output_shape}
 - "id": "TC-XXX"
 - "title": concise title
 - "description": what this verifies
@@ -317,12 +358,20 @@ Return a JSON array of test cases. Each element:
 - For data-creating cases, note cleanup so tests stay re-runnable.
 {lang_section}
 
-Output ONLY the JSON array. No markdown, no explanation."""
+{output_footer}"""
 
-    def _build_inline_api_prompt(self, endpoints: str, requirements: str, **kwargs: Any) -> str:
+    def _build_inline_api_prompt(
+        self, endpoints: str, requirements: str, json_mode: bool = False, **kwargs: Any
+    ) -> str:
         """Fallback inline prompt for API-specific generation."""
         lang_hint = self._language_instruction(kwargs.get("output_language", "english"))
         lang_section = f"\n{lang_hint}" if lang_hint else ""
+        if json_mode:
+            output_footer = (
+                'Output ONLY the JSON object {"test_cases": [...]}. No markdown, no explanation.'
+            )
+        else:
+            output_footer = "Output ONLY a JSON array. No markdown, no explanation."
         return f"""Generate API-specific test cases (boundary, security, integration).
 
 ## API Endpoints
@@ -335,7 +384,7 @@ Focus on: boundary values, security (SQLi/XSS/IDOR/auth), integration (CRUD flow
 Each expected_result must be machine-checkable.
 {lang_section}
 
-Output ONLY a JSON array. No markdown, no explanation."""
+{output_footer}"""
 
     def _build_inline_review_prompt(
         self,
@@ -343,11 +392,22 @@ Output ONLY a JSON array. No markdown, no explanation."""
         requirements: str,
         test_cases_json: str,
         output_language: str = "english",
+        json_mode: bool = False,
     ) -> str:
         """Fallback inline prompt for review/refinement."""
         lang_hint = self._language_instruction(output_language)
         lang_section = f"\n{lang_hint}" if lang_hint else ""
         ep_section = f"\n## API Endpoints\n{endpoints}\n" if endpoints else ""
+        if json_mode:
+            output_footer = (
+                'Return the COMPLETE final list as a JSON object {"test_cases": [...]}.\n'
+                "Output ONLY that JSON object. No markdown, no explanation."
+            )
+        else:
+            output_footer = (
+                "Return the COMPLETE final list as a single JSON array.\n"
+                "Output ONLY the JSON array. No markdown, no explanation."
+            )
         return f"""Review and improve the test cases below. You have no prior context.
 
 ## Business Requirements
@@ -364,8 +424,7 @@ Output ONLY a JSON array. No markdown, no explanation."""
 5. Fill tags.
 {lang_section}
 
-Return the COMPLETE final list as a single JSON array.
-Output ONLY the JSON array. No markdown, no explanation."""
+{output_footer}"""
 
     def _build_inline_performance_prompt(
         self, endpoints: str, config: dict[str, Any], script_format: str, **kwargs: Any

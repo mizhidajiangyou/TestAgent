@@ -2,7 +2,10 @@
 
 import csv
 import json
+import logging
 from unittest.mock import MagicMock
+
+import pytest
 
 from testagent.config.models import (
     APIEndpoint,
@@ -637,3 +640,64 @@ class TestHistoricalCases:
         )
         assert "baseline" in system_prompt.lower()
         assert "Get users" in user_prompt
+
+
+class TestTestCaseGeneratorJsonMode:
+    """Tests for the optional OpenAI JSON mode (response_format + envelope)."""
+
+    def setup_method(self) -> None:
+        self.mock_llm = MagicMock()
+        self.prompt_builder = PromptBuilder()
+        self.generator = TestCaseGenerator(
+            llm_client=self.mock_llm,
+            prompt_builder=self.prompt_builder,
+            json_mode=True,
+        )
+
+    def test_json_mode_forwards_response_format(self) -> None:
+        """With json_mode, every chat call passes response_format json_object."""
+        envelope = {"test_cases": json.loads(MOCK_LLM_RESPONSE)}
+        self.mock_llm.chat.return_value = json.dumps(envelope)
+        self.generator.generate(TestCaseGenInput(requirements=[], endpoints=_ENDPOINTS))
+        assert self.mock_llm.chat.call_count >= 1
+        for call in self.mock_llm.chat.call_args_list:
+            assert call.kwargs.get("response_format") == {"type": "json_object"}
+
+    def test_json_mode_unwraps_test_cases_envelope(self) -> None:
+        """A {"test_cases": [...]} envelope is unwrapped into a flat list."""
+        envelope = {"test_cases": json.loads(MOCK_LLM_RESPONSE)}
+        self.mock_llm.chat.return_value = json.dumps(envelope)
+        cases = self.generator.generate(TestCaseGenInput(requirements=[], endpoints=_ENDPOINTS))
+        assert len(cases) == 2
+        assert cases[0].id == "TC-001"
+
+    def test_default_mode_does_not_forward_response_format(self) -> None:
+        """Without json_mode, response_format is not sent (portable backends)."""
+        default_gen = TestCaseGenerator(
+            llm_client=self.mock_llm,
+            prompt_builder=self.prompt_builder,
+        )
+        self.mock_llm.chat.return_value = MOCK_LLM_RESPONSE
+        default_gen.generate(TestCaseGenInput(requirements=[], endpoints=_ENDPOINTS))
+        for call in self.mock_llm.chat.call_args_list:
+            assert call.kwargs.get("response_format") is None
+
+    def test_json_mode_emits_backend_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Enabling json_mode warns the operator to confirm backend support."""
+        with caplog.at_level(logging.WARNING, logger="testagent.generators.testcase_generator"):
+            TestCaseGenerator(
+                llm_client=self.mock_llm,
+                prompt_builder=self.prompt_builder,
+                json_mode=True,
+            )
+        assert any("OPENAI_JSON_MODE is enabled" in r.message for r in caplog.records)
+
+    def test_default_mode_emits_no_json_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Default (json_mode off) does not warn about the backend."""
+        with caplog.at_level(logging.WARNING, logger="testagent.generators.testcase_generator"):
+            TestCaseGenerator(
+                llm_client=self.mock_llm,
+                prompt_builder=self.prompt_builder,
+            )
+        assert not any("OPENAI_JSON_MODE is enabled" in r.message for r in caplog.records)
+

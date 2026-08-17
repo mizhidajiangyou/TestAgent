@@ -33,13 +33,16 @@ from testagent.config.models import (
     TestPriority,
     TestType,
 )
-from testagent.engine.llm_client import LLMClient
+from testagent.engine.llm_client import JSON_OBJECT_FORMAT, LLMClient
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.base import BaseGenerator
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
 
 logger = logging.getLogger(__name__)
+
+#: Keys that may wrap a test-case list when JSON mode is enabled.
+_TEST_CASES_WRAPPER_KEYS = ("test_cases", "cases", "data")
 
 #: Max parse retries per batch (guardrails-style targeted re-ask).
 MAX_PARSE_RETRIES = 3
@@ -81,6 +84,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         review_llm_client: LLMClient | None = None,
         review_max_rounds: int = DEFAULT_REVIEW_MAX_ROUNDS,
         output_language: str = "english",
+        json_mode: bool = False,
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
@@ -93,6 +97,25 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         # review_enabled is true (we log a warning in that case).
         self._review_max_rounds = max(1, review_max_rounds)
         self._output_language = output_language
+        # When true, every generation/review call requests OpenAI JSON mode and
+        # the model wraps its cases in {"test_cases": [...]}. Opt-in only — see
+        # settings.OPENAI_JSON_MODE; disabled backends (non-OpenAI compatible)
+        # must keep this False.
+        self._json_mode = json_mode
+        # JSON mode sends response_format={"type":"json_object"} to the LLM.
+        # Endpoints that silently ignore this param (some "OpenAI-compatible"
+        # proxies, qwen/glm, etc.) will NOT be forced into JSON and may return
+        # free-form text -> parse failures. The caller must confirm the backend
+        # genuinely enforces JSON mode before enabling it.
+        if self._json_mode:
+            logger.warning(
+                "OPENAI_JSON_MODE is enabled: every generation/review call will "
+                "send response_format={'type':'json_object'} to the LLM. Only "
+                "backends that truly enforce JSON mode (e.g. real OpenAI) are "
+                "safe here. OpenAI-compatible proxies that silently ignore this "
+                "param (qwen/glm, some gateways) may return non-JSON and fail to "
+                "parse. Keep OPENAI_JSON_MODE=false on such endpoints."
+            )
 
         # Detect whether review will actually use a different model.
         self._review_is_cross_model = self._review_llm is not self._llm
@@ -190,6 +213,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 requirements_text=req_text,
                 output_language=self._output_language,
                 extra_context={"historical_cases": historical_text} if historical_text else None,
+                json_mode=self._json_mode,
             )
             logger.info(
                 "Phase 1 - Batch %d/%d (%d requirements)...",
@@ -224,6 +248,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 endpoints_text=ep_text,
                 requirements_text=req_text,
                 output_language=self._output_language,
+                json_mode=self._json_mode,
             )
             logger.info(
                 "Phase 2 - Batch %d/%d (%d endpoints, API-specific)...",
@@ -251,6 +276,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 endpoints_text=ep_text,
                 requirements_text=requirements_text or "No specific requirements.",
                 output_language=self._output_language,
+                json_mode=self._json_mode,
             )
             logger.info(
                 "Endpoint batch %d/%d (%d endpoints)...",
@@ -339,7 +365,11 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     user_prompt, last_raw, step_label, error_type
                 )
 
-            raw_response = llm.chat(system_prompt, effective_prompt)
+            raw_response = llm.chat(
+                system_prompt,
+                effective_prompt,
+                response_format=JSON_OBJECT_FORMAT if self._json_mode else None,
+            )
             last_raw = raw_response
 
             items = self._extract_json(raw_response)
@@ -484,6 +514,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 requirements_text=requirements_text,
                 test_cases_json=current_json,
                 output_language=self._output_language,
+                json_mode=self._json_mode,
             )
 
             logger.info(
@@ -710,7 +741,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         try:
             parsed = json.loads(text)
-            return parsed if isinstance(parsed, list) else [parsed]
+            # Unify the bare-array and {"test_cases": [...]} envelope contracts
+            # so both default and JSON-mode output normalize to a flat list.
+            return self._unwrap_test_cases(parsed)
         except json.JSONDecodeError:
             pass
 
@@ -722,7 +755,25 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     parsed = json.loads(text[start : end + 1])
                 except json.JSONDecodeError:
                     continue
-                return parsed if isinstance(parsed, list) else [parsed]
+                return self._unwrap_test_cases(parsed)
+        return None
+
+    @staticmethod
+    def _unwrap_test_cases(parsed: Any) -> list[Any] | None:
+        """Normalize a parsed JSON value into a list of test-case dicts.
+
+        Handles both the bare-array contract (default) and the
+        ``{"test_cases": [...]}`` envelope produced when JSON mode is enabled.
+        A single bare object (legacy/edge case) is wrapped in a list.
+        """
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            for key in _TEST_CASES_WRAPPER_KEYS:
+                if key in parsed and isinstance(parsed[key], list):
+                    cases: list[Any] = parsed[key]
+                    return cases
+            return [parsed]
         return None
 
     @staticmethod

@@ -29,6 +29,7 @@ from typing import Any
 
 from testagent.engine.llm_client import LLMClient
 from testagent.engine.prompt_builder import PromptBuilder
+from testagent.generators.gui_test_generator import DEFAULT_TARGET_URL
 
 logger = logging.getLogger(__name__)
 
@@ -464,7 +465,19 @@ class ConversationSession:
                 script_format=script_format,
                 output_language=self._output_language,
             )
-        # gui_script / code: generic inline prompt.
+        if artifact_type == "gui_script":
+            # GUI scripts are Playwright Python and must target a real URL.
+            # The caller supplies it via context ``gui_url``; fall back to the
+            # generator's default when absent so interactive chat still works.
+            url = str(ctx.get("gui_url") or "").strip() or DEFAULT_TARGET_URL
+            requirements_text = self._requirements_text or user_message
+            return self._prompt_builder.build_gui_test_prompt(
+                url=url,
+                requirements_text=requirements_text,
+                endpoints_text=self._endpoints_text,
+                output_language=self._output_language,
+            )
+        # code (and any other type): generic inline prompt.
         system_prompt = (
             "You are a senior test automation engineer. Generate the requested artifact."
         )
@@ -733,9 +746,18 @@ class ConversationSession:
                     )
 
     def _validate_script(self, artifact: Artifact, issues: list[str], script_kind: str) -> None:
-        content = artifact.content
+        content = _strip_code_fences(artifact.content)
         if not content.strip():
             issues.append("Script content is empty.")
+            return
+        # GUI scripts are Python (Playwright) — verify real syntax, which is
+        # stricter than bracket balancing and catches malformed statements.
+        if script_kind == "gui":
+            try:
+                ast.parse(content)
+            except SyntaxError as exc:
+                lineno = exc.lineno or "?"
+                issues.append(f"Python syntax error: {exc.msg} (line {lineno}).")
             return
         # JMeter JMX is XML; everything else is treated as JS-like.
         if content.lstrip().startswith("<?xml") or "<jmeterTestPlan" in content:

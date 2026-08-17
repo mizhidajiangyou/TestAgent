@@ -9,19 +9,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ------------------------------------------------------------------
-  # Lint + type-check + tests (runs on every push and PR)
-  # ------------------------------------------------------------------
   test:
     name: Lint & Test (py3.14)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Python (astral-sh/setup-uv 不负责装 Python，仅负责装 uv 二进制。
-      # 不开启 setup-python 的 pip cache：因为依赖用 uv 安装（uv 写自己
-      # 的 ~/.cache/uv，不写 ~/.cache/pip），cache: pip 会导致 Post job
-      # cleanup 阶段 "Cache folder path ... doesn't exist on disk" 致命错误。
       - name: Set up Python 3.14
         uses: actions/setup-python@v5
         with:
@@ -35,23 +28,11 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system -e ".[dev,documents,web]"
 
-      - name: Ruff check
-        run: ruff check testagent/ tests/
+      - run: ruff check testagent/ tests/
+      - run: ruff format --check testagent/ tests/
+      - run: mypy testagent/
+      - run: pytest tests/ -q
 
-      - name: Ruff format check
-        run: ruff format --check testagent/ tests/
-
-      - name: Mypy
-        run: mypy testagent/
-
-      - name: Pytest
-        run: pytest tests/ -q
-
-  # ------------------------------------------------------------------
-  # Build & push Docker image to Docker Hub
-  # Only on push to main/master or version tags (skipped on PRs).
-  # Uses Docker Buildx for multi-platform builds (linux/amd64 + linux/arm64).
-  # ------------------------------------------------------------------
   docker:
     name: Build & Push Docker Image (amd64 + arm64)
     needs: test
@@ -60,13 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Set up QEMU for cross-compiling foreign architectures (arm64 on x86 runner)
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      # Create a Buildx builder instance with multi-platform support
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Compute image repo and tags
         id: meta
@@ -81,7 +57,6 @@ jobs:
           SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
           TAGS="${REPO}:${SHORT_SHA}"
 
-          # Branch pushes → branch name + latest on the default branch.
           if [[ "${GITHUB_REF}" == refs/heads/* ]]; then
             BRANCH="${GITHUB_REF#refs/heads/}"
             TAGS="${TAGS},${REPO}:${BRANCH}"
@@ -90,7 +65,6 @@ jobs:
             fi
           fi
 
-          # Version tags (v1.2.3) → 1.2.3 + latest.
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
             TAGS="${TAGS},${REPO}:${VERSION},${REPO}:latest"

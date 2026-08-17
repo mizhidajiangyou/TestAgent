@@ -26,7 +26,8 @@ You have NO prior context about how these were generated: evaluate them purely f
 
 ## Task
 Merge, fix and complete the list. Return the COMPLETE final list of ALL test cases
-(keep valid existing ones, fix broken ones, add missing ones) as a single JSON array,
+(keep valid existing ones, fix broken ones, add missing ones)
+{% if json_mode %}as a JSON OBJECT {"test_cases": [...]}{% else %}as a single JSON array{% endif %},
 using the exact same schema:
 - "id", "title", "description", "endpoint" ("METHOD /path"), "test_type" (functional|boundary|negative|performance|security|integration), "priority" (high|medium|low), "preconditions" (array), "steps" (array), "expected_results" (array), "tags" (array)
 
@@ -35,4 +36,8 @@ using the exact same schema:
 Write ALL text fields (title, description, preconditions, steps, expected_results, tags) in Simplified Chinese.
 {% endif %}
 
+{% if json_mode %}
+Wrap the final list in a single JSON object: {"test_cases": [ ... ]}. Output ONLY that JSON object. Do not return a bare array.
+{% else %}
 Output ONLY the JSON array. No markdown fences, no explanation.
+{% endif %}

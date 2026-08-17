@@ -600,3 +600,45 @@ class TestConversationManager:
         assert len(retrieved.get_artifacts()) == 1
         retrieved.send("validate")
         assert len(retrieved.get_history()) == 4  # 2 per turn
+
+
+class TestConversationGuiRouting:
+    """Tests for gui_script routing through build_gui_test_prompt + URL."""
+
+    def setup_method(self) -> None:
+        self.mock_llm = MagicMock()
+        self.prompt_builder = PromptBuilder()
+        self.session = ConversationSession(
+            session_id="gui1",
+            llm_client=self.mock_llm,
+            prompt_builder=self.prompt_builder,
+            max_iterations=3,
+        )
+
+    def test_gui_script_prompt_includes_target_url(self) -> None:
+        """gui_script generation routes through build_gui_test_prompt (Playwright)."""
+        self.mock_llm.chat.return_value = _VALID_GUI_SCRIPT
+        self.session.send("generate gui script")
+        call_args = self.mock_llm.chat.call_args
+        system_arg = call_args.args[0]
+        user_arg = call_args.args[1]
+        assert "Playwright" in system_arg
+        # Default target URL should be embedded in the generated (user) prompt.
+        assert "example.com" in user_arg
+
+    def test_gui_script_respects_gui_url_context(self) -> None:
+        """A caller-supplied gui_url is honored by the GUI prompt."""
+        self.mock_llm.chat.return_value = _VALID_GUI_SCRIPT
+        self.session.send(
+            "generate gui script", context={"gui_url": "https://app.example.com"}
+        )
+        user_arg = self.mock_llm.chat.call_args.args[1]
+        assert "app.example.com" in user_arg
+
+    def test_gui_script_validation_flags_syntax_error(self) -> None:
+        """gui_script artifacts get a real Python syntax check (new behavior)."""
+        self.mock_llm.chat.return_value = "def broken(:\n    pass\n"  # invalid Python
+        self.session.send("generate gui script")
+        state = self.session.get_state()
+        assert "syntax error" in state.feedback.lower()
+

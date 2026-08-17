@@ -440,13 +440,7 @@ def generate_gui(
         console.print(f"  [dim]Using default base URL: {url}[/]")
 
     console.print("[bold blue]Generating Playwright GUI test script via LLM...[/]")
-    from testagent.generators.gui_test_generator import GUITestGenerator
-
-    generator = GUITestGenerator(
-        llm_client=container.llm_client,
-        prompt_builder=container.prompt_builder,
-        output_language=settings.output_language,
-    )
+    generator = container.gui_generator
     script = generator.generate(
         GUITestGenInput(
             requirements=req_items,
@@ -474,9 +468,13 @@ EXAMPLES:
   # Chat with a specific session ID (resume previous session)
   testagent chat -r requirements.md --session my-session-1
 
+  # Chat with a target URL so in-chat GUI test generation has a real app to test
+  testagent chat -r requirements.md --url https://app.example.com
+
   # In the chat, type natural language:
   #   > Generate test cases for the user registration module
   #   > Add more boundary test cases for the password field
+  #   > Generate a GUI test script for the login page
   #   > Validate the current test cases
   #   > Refine the test cases to be more concise
   #   > exit
@@ -507,6 +505,11 @@ EXAMPLES:
     default=None,
     help="Max refine iterations per message (default: from config)",
 )
+@click.option(
+    "--url",
+    default=None,
+    help="Target web application URL for GUI test generation during chat",
+)
 @click.pass_context
 def chat(
     ctx: click.Context,
@@ -514,6 +517,7 @@ def chat(
     swagger: str | None,
     session: str | None,
     max_iterations: int | None,
+    url: str | None,
 ) -> None:
     """Interactive conversational refinement of generated artifacts.
 
@@ -544,6 +548,13 @@ def chat(
 
         context["endpoints"] = SwaggerParser.endpoints_to_text(endpoints)
         console.print(f"  Found [green]{len(endpoints)}[/] endpoints")
+
+    # Provide a target URL for in-chat GUI script generation. The conversation
+    # engine routes "gui_script" artifacts through build_gui_test_prompt, which
+    # requires a URL; it falls back to the generator default when absent.
+    if url:
+        context["gui_url"] = url
+        console.print(f"  [dim]GUI target URL: {url}[/]")
 
     # Get or create conversation session
     manager = container.conversation_manager

@@ -12,7 +12,7 @@ Focus on cases that require API-level details (parameters, request body, status 
 ---
 
 ## Output Format
-Return a JSON array with the same schema:
+{% if json_mode %}Return a JSON OBJECT {"test_cases": [...]} with the same schema (do NOT return a bare array):{% else %}Return a JSON array with the same schema:{% endif %}
 ```json
 {
   "id": "TC-001",
@@ -41,4 +41,8 @@ Each expected_result must be machine-checkable (explicit status code + field ass
 Write ALL text fields in Simplified Chinese. Keep field names, HTTP methods, and status codes in English.
 {% endif %}
 
+{% if json_mode %}
+Wrap the final list in a single JSON object: {"test_cases": [ ... ]}. Output ONLY that JSON object. Do not return a bare array.
+{% else %}
 Output ONLY the JSON array. No markdown fences, no explanation.
+{% endif %}

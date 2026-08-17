@@ -222,3 +222,4 @@ output/
 *.jtl
 
 task.md
+uv.lock

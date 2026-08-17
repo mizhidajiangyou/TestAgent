@@ -17,7 +17,7 @@ covered (even with slightly different wording or status codes), do NOT regenerat
 {% endif %}
 ---
 ## Output
-Return a JSON array of test cases. Each element:
+{% if json_mode %}Return a JSON OBJECT with exactly one top-level key "test_cases", whose value is the JSON array described below (do NOT return a bare array). Each element:{% else %}Return a JSON array of test cases. Each element:{% endif %}
 ```json
 {
   "id": "TC-XXX",
@@ -55,4 +55,13 @@ Return a JSON array of test cases. Each element:
 ## Language
 Write ALL text fields (title, description, preconditions, steps, expected_results, tags) in Simplified Chinese. Keep field names, HTTP methods, path templates, status codes, error codes, and JSON field paths in English.
 {% endif %}
+{% if json_mode %}
+## Output format (JSON mode)
+Wrap the array in a single JSON object:
+```json
+{ "test_cases": [ { ...case object with the fields above... } ] }
+```
+Output ONLY that JSON object. Do not return a bare array.
+{% else %}
 Output ONLY the JSON array. No markdown fences, no explanation before or after.
+{% endif %}

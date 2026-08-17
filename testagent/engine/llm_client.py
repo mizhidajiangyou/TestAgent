@@ -12,9 +12,10 @@ Features:
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from openai import OpenAI
+from openai.types import ResponseFormatJSONObject
 from openai.types.chat import ChatCompletion
 
 from testagent.config.settings import Settings
@@ -30,6 +31,12 @@ DEFAULT_MAX_OUTPUT_TOKENS = 16000
 #: Number of retry attempts for LLM calls.
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 2.0
+
+#: OpenAI ``response_format`` value that forces a valid JSON object. Used by
+#: the optional JSON mode (see ``OPENAI_JSON_MODE`` in settings). A bare JSON
+#: array is NOT accepted by this mode, which is why test-case generation wraps
+#: its payload in ``{"test_cases": [...]}`` when JSON mode is enabled.
+JSON_OBJECT_FORMAT: dict[str, object] = {"type": "json_object"}
 
 
 @dataclass
@@ -59,12 +66,19 @@ class TokenUsage:
 class LLMClient(Protocol):
     """LLM client interface."""
 
-    def chat(self, system_prompt: str, user_prompt: str) -> str:
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+    ) -> str:
         """Send a chat completion request.
 
         Args:
             system_prompt: System message.
             user_prompt: User message.
+            response_format: Optional ``response_format`` payload forwarded to
+                the underlying SDK (e.g. ``{"type": "json_object"}``).
 
         Returns:
             Model response text.
@@ -98,13 +112,26 @@ class OpenAIClient:
         """Return configured max output tokens."""
         return self._max_output_tokens
 
-    def chat(self, system_prompt: str, user_prompt: str) -> str:
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+    ) -> str:
         """Send a chat completion request with retry and backoff.
 
         If the response is truncated (``finish_reason == "length"``), the
         truncated content is still returned (the caller can attempt to
         salvage it). A warning is logged so the caller knows the output
         may be incomplete.
+
+        Args:
+            system_prompt: System message.
+            user_prompt: User message.
+            response_format: Optional ``response_format`` payload forwarded to
+                the OpenAI SDK (e.g. ``{"type": "json_object"}``). When the
+                backend does not support it, callers should pass ``None``
+                (the default) to avoid errors on non-OpenAI providers.
         """
         last_error = ""
         truncated_hint = (
@@ -119,16 +146,30 @@ class OpenAIClient:
                 if attempt > 1:
                     effective_user_prompt = user_prompt + truncated_hint
 
-                response = self._client.chat.completions.create(
-                    model=self._model,
-                    temperature=0,
-                    max_tokens=self._max_output_tokens,
-                    timeout=self._timeout,
-                    messages=[
+                # ``create_kwargs`` is a passthrough to the OpenAI SDK, whose
+                # ``response_format`` (and other params) are typed with strict
+                # TypedDicts; a heterogeneous ``dict[str, object]`` cannot
+                # satisfy those overloads when unpacked, so we use ``Any`` here.
+                create_kwargs: dict[str, Any] = {
+                    "model": self._model,
+                    "temperature": 0,
+                    "max_tokens": self._max_output_tokens,
+                    "timeout": self._timeout,
+                    "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": effective_user_prompt},
                     ],
-                )
+                }
+                if response_format is not None:
+                    # The OpenAI SDK types ``response_format`` as a strict
+                    # TypedDict (ResponseFormatJSONObject), so we cast the
+                    # portable ``dict`` form at this boundary. ``cast`` is a
+                    # no-op at runtime; it only satisfies the static checker.
+                    create_kwargs["response_format"] = cast(
+                        ResponseFormatJSONObject, response_format
+                    )
+
+                response = self._client.chat.completions.create(**create_kwargs)
                 self._update_usage(response)
 
                 choice = response.choices[0]
@@ -248,19 +289,28 @@ class MultiModelLLMClient:
     # Chat with fallback
     # ------------------------------------------------------------------
 
-    def chat(self, system_prompt: str, user_prompt: str) -> str:
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+    ) -> str:
         """Call the primary model; on failure, fall back to subsequent models.
 
         Each sub-client already performs internal retries with backoff. We
         only escalate to the next model once a sub-client exhausts its
         retries and raises ``RuntimeError``.
+
+        Args:
+            response_format: Optional ``response_format`` payload forwarded to
+                every sub-client (see :meth:`OpenAIClient.chat`).
         """
         last_error: Exception | None = None
         for idx, client in enumerate(self._clients):
             label = "primary" if idx == 0 else f"fallback #{idx}"
             try:
                 logger.debug("Trying %s model: %s", label, client.model_name)
-                return client.chat(system_prompt, user_prompt)
+                return client.chat(system_prompt, user_prompt, response_format)
             except Exception as exc:
                 last_error = exc
                 if idx < len(self._clients) - 1:

@@ -38,6 +38,14 @@ class LLMSettings(BaseSettings):
     model: str = "gpt-4o-mini"
     timeout: int = 300
     max_output_tokens: int = 16000
+    # Opt-in JSON mode (OpenAI ``response_format={"type":"json_object"}``).
+    # When true, test-case generation wraps its output in
+    # ``{"test_cases": [...]}`` so the model is forced to emit valid JSON.
+    # Leave disabled (default) when the backend is a non-OpenAI compatible
+    # provider that does not support ``response_format`` (e.g. some
+    # OpenAI-compatible gateways). The default-off posture keeps the
+    # existing bare-array contract and never breaks those endpoints.
+    json_mode: bool = Field(default=False, alias="OPENAI_JSON_MODE")
 
     @property
     def models(self) -> list[str]:
