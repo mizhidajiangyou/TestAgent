@@ -14,12 +14,14 @@ Generate a complete, production-ready JMeter JMX test plan.
 
 ## Requirements
 1. Complete XML from <?xml ...?> to </jmeterTestPlan>
-2. ThreadGroup with configured users/ramp-up/duration
-3. HTTP Request Defaults, Cookie Manager, Cache Manager
-4. HTTP Header Manager with Content-Type: application/json
-5. HTTP Samplers for each endpoint with realistic bodies
-6. Response Assertions for success status codes
-7. Summary Report and Simple Data Writer listeners
+2. ThreadGroup with configured users/ramp-up/duration (ramp-up then steady state)
+3. HTTP Request Defaults (server + port from Base URL), Cookie Manager, Cache Manager
+4. HTTP Header Manager with Content-Type: application/json (and Authorization when Auth != none)
+5. HTTP Samplers for EACH listed endpoint with realistic request bodies (from schema) for POST/PUT
+6. Response Assertions for success status codes AND at least one key field
+7. If Auth != none: a login sampler that extracts a token (JSON Extractor / Regular Expression Extractor) and reuses it via a Header Manager for subsequent samplers
+8. Summary Report and Simple Data Writer listeners
+9. (Cleanup) if any sampler creates data, add a teardown step that deletes it
 
 Output ONLY raw JMX XML. Start with: <?xml version="1.0" encoding="UTF-8"?>
 {% else %}
@@ -36,15 +38,16 @@ Generate a complete, production-ready k6 JavaScript test script.
 - Base URL: {{ config.base_url | default('https://api.example.com') }}
 - Auth: {{ config.auth_type | default('none') }}
 
-## Requirements
-1. Export default function and options object
-2. Configure stages for ramp-up then steady state
-3. HTTP requests for each endpoint with proper headers
-4. sleep() between requests matching think time
-5. check() assertions for HTTP status codes
-6. Realistic JSON bodies for POST/PUT requests
-7. __ENV variables for BASE_URL and AUTH_TOKEN
-8. Thresholds for p(95) < 500ms and error rate < 1%
+## Requirements (all mandatory for a runnable, meaningful script)
+1. `import http from 'k6/http'; import { check, sleep, group } from 'k6';` and `export const options` with `stages` implementing ramp-up then steady state (use Duration/Ramp-Up from Configuration; e.g. ramp {{ config.ramp_up_seconds | default(60) }}s to {{ config.virtual_users | default(100) }} VUs, hold for the remainder).
+2. NEVER hardcode the host. Build URLs from `const BASE_URL = __ENV.BASE_URL || '{{ config.base_url | default('https://api.example.com') }}';`. Document: run with `k6 run -e BASE_URL=https://api.example.com/v1 script.js`.
+3. If Auth != none: obtain a token in `setup()` (login call) and pass it to the default function; send it as `headers: { Authorization: 'Bearer ' + token }` on protected endpoints. Document obtaining `AUTH_TOKEN` via `-e AUTH_TOKEN=...` when the token cannot be fetched inside the script.
+4. Cover EVERY listed endpoint. For POST/PUT include a realistic request `body` taken from the endpoint schema (e.g. `{"name":"...","email":"...","age":30}`). Use `group('endpoint name', () => { ... })` per endpoint.
+5. `check()` assertions: ALWAYS assert `res.status` against the expected code, AND assert at least one key response field (e.g. `res.json('email') !== null`). For error paths assert the error code field.
+6. `thresholds`: set `http_req_duration: ['p(95)<500']` and `http_req_failed: ['rate<0.01']` (tune the 500ms to the agreed SLO if known).
+7. Pacing: use `sleep({{ (config.think_time_ms | default(500)) // 1000 }} )` between requests to match Think Time; do not use long fixed sleeps as the only control.
+8. `setup()` / `teardown()`: create any needed test data in `setup()` and DELETE it in `teardown()` so the environment is not polluted across runs.
+9. No secrets hardcoded; never commit real tokens.
 
 Output ONLY raw JavaScript. No markdown.
 {% endif %}

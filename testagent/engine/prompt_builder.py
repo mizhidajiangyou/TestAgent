@@ -348,9 +348,11 @@ class PromptBuilder:
 - "tags": ["labels"]
 
 ## Rules (must follow)
-1. Assertable: every expected_results entry must be verifiable by a machine — explicit HTTP status code + concrete field-level check.
-2. Endpoint consistency: when endpoints are given, the endpoint field must match one of them and steps must call it.
-3. Tags required: fill tags with relevant labels.
+1. Assertable: every expected_results entry MUST contain an explicit HTTP status code + a concrete field-level check (e.g. "Status 201; response.body.email == 'a@x.com'"). Forbidden vague terms: 成功/失败/works/as expected/properly.
+2. Endpoint verbatim: when endpoints are given, the endpoint field MUST match one of them exactly (method+path) and steps must call it. Do NOT invent endpoints not in the list.
+3. Executable steps: for API cases include the real request (method, path, headers incl. Authorization for protected endpoints, realistic JSON body for POST/PUT). Protected endpoints need a token in preconditions.
+4. Cleanup: for create/modify cases, state cleanup (delete created resource) in the last step or description so tests stay re-runnable.
+5. Tags required: fill tags with relevant labels from scope (smoke/regression), domain (auth/crud/pagination), type (boundary/security/negative).
 
 ## Guidance (use judgment)
 - Prefer fewer, high-value cases over many shallow ones.
@@ -381,7 +383,8 @@ class PromptBuilder:
 {requirements}
 
 Focus on: boundary values, security (SQLi/XSS/IDOR/auth), integration (CRUD flow), negative cases.
-Each expected_result must be machine-checkable.
+Each expected_result must be machine-checkable (explicit status code + field assertion; no vague terms like 成功/失败/works).
+Endpoint field must match one of the listed endpoints exactly (method+path); do not invent endpoints. Include realistic request bodies and Authorization for protected endpoints; state cleanup for create/modify cases.
 {lang_section}
 
 {output_footer}"""
@@ -417,11 +420,14 @@ Each expected_result must be machine-checkable.
 {test_cases_json}
 
 ## Review Checklist
-1. Fix endpoint mismatches.
+1. Fix endpoint mismatches (endpoint must match one listed endpoint exactly; do NOT invent endpoints).
 2. Ensure CRUD coverage per resource.
-3. Rewrite vague expected_results into machine-checkable assertions.
+3. Rewrite vague expected_results into machine-checkable assertions (explicit status code + field check; reject 成功/失败/works/as expected).
 4. Add boundary, security, performance, idempotency, i18n cases.
 5. Fill tags.
+6. Preserve existing IDs (do not renumber). State a one-line reason for each change in description.
+
+Return the COMPLETE final list. After the JSON, on a new line output: SUMMARY: added=<N> fixed=<N> removed=<N>
 {lang_section}
 
 {output_footer}"""
@@ -442,7 +448,9 @@ Each expected_result must be machine-checkable.
 - Ramp-Up: {config.get("ramp_up_seconds", 60)}s
 - Think Time: {config.get("think_time_ms", 500)}ms
 - Base URL: {config.get("base_url", "https://api.example.com")}
+- Auth: {config.get("auth_type", "none")}
 
+Requirements: complete XML; ThreadGroup with ramp-up then steady state; HTTP Request Defaults + Cookie/Cache managers; Header Manager with Content-Type; samplers for EACH endpoint with realistic POST/PUT bodies; Response Assertions for status + a key field; if Auth != none add a login sampler that extracts and reuses a token; Summary Report + Simple Data Writer listeners; teardown that deletes created data.
 Output ONLY raw JMX XML starting with <?xml version="1.0"?>"""
         else:
             return f"""Generate a complete k6 JavaScript test script.
@@ -456,7 +464,9 @@ Output ONLY raw JMX XML starting with <?xml version="1.0"?>"""
 - Ramp-Up: {config.get("ramp_up_seconds", 60)}s
 - Think Time: {config.get("think_time_ms", 500)}ms
 - Base URL: {config.get("base_url", "https://api.example.com")}
+- Auth: {config.get("auth_type", "none")}
 
+Requirements: export options with stages (ramp-up then steady); build URLs from `const BASE_URL = __ENV.BASE_URL || '{config.get("base_url", "https://api.example.com")}'` (never hardcode host); if Auth != none obtain token in setup() and send Authorization header; cover EVERY endpoint with realistic POST/PUT bodies; check() status + a key field per request; thresholds p(95)<500 and error rate<1%; sleep() for pacing matching think time; setup()/teardown() create+cleanup data; no hardcoded secrets.
 Output ONLY raw JavaScript. No markdown."""
 
     def _build_inline_gui_test_prompt(
@@ -480,21 +490,21 @@ Output ONLY raw JavaScript. No markdown."""
 {requirements}
 {ep_section}
 ## Script Requirements
-1. Use Playwright's Python sync API (from playwright.sync_api import Page, expect)
-2. Use pytest as the test framework
-3. Use ROBUST locators (in priority order):
-   - page.get_by_role() - FIRST CHOICE for all interactive elements
-   - page.get_by_label() - for form inputs with associated labels
-   - page.get_by_placeholder() - for inputs without labels
-   - page.get_by_text() - for non-interactive text elements
-   - page.locator() - LAST RESORT only, with specific CSS selectors
-4. Use expect() for ALL assertions (not raw assert)
-5. Include proper waits: page.wait_for_load_state("networkidle") after navigation
-6. Generate multiple test methods covering: happy path, form validation,
-   error handling, navigation/routing, UI state changes
-7. Include a setup fixture that navigates to the target URL
-8. Add descriptive docstrings to each test method
-9. Use pytest markers: @pytest.mark.smoke, @pytest.mark.regression
+1. Use Playwright's Python sync API; start with: import pytest; from playwright.sync_api import Page, expect, BrowserContext
+2. Use pytest as the test framework; type-annotate the page: Page argument
+3. Use a fixture that navigates to the Target URL (use page.goto("{url}")), waits with wait_for_load_state("networkidle"), performs login if needed, and yields page
+4. Use ROBUST locators (priority order) — NEVER use CSS/XPath as primary:
+   - page.get_by_role() - FIRST CHOICE for interactive elements
+   - page.get_by_label() - form inputs with associated labels
+   - page.get_by_placeholder() - inputs without labels
+   - page.get_by_text() - non-interactive text
+   - page.locator() - LAST RESORT, specific selector + comment why
+5. Use expect() for ALL assertions (never raw assert); assert concrete values
+6. Use explicit waits (wait_for_load_state / wait_for_selector / expect(...).to_be_visible()); do NOT use time.sleep or long wait_for_timeout
+7. Cover happy path, form validation (assert visible error text), error handling, navigation/routing, UI state changes
+8. Each test method needs a docstring + pytest marker (@pytest.mark.smoke, @pytest.mark.regression)
+9. Add cleanup (logout / delete created data) so the script is re-runnable
+10. Target the Target URL above (do NOT navigate to example.com or any other host)
 {lang_section}
 ## Output
 Output ONLY the Python script code. No markdown fences, no explanations.

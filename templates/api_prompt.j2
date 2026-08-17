@@ -15,30 +15,40 @@ Focus on cases that require API-level details (parameters, request body, status 
 {% if json_mode %}Return a JSON OBJECT {"test_cases": [...]} with the same schema (do NOT return a bare array):{% else %}Return a JSON array with the same schema:{% endif %}
 ```json
 {
-  "id": "TC-001",
+  "id": "TC-XXX",
   "title": "METHOD /path — what is tested",
   "description": "what this verifies",
   "endpoint": "METHOD /path",
   "test_type": "boundary|security|integration|negative|performance",
   "priority": "high|medium|low",
-  "preconditions": ["setup"],
-  "steps": ["exact request details: method, URL, headers, body"],
-  "expected_results": ["status code + field-level assertions"],
+  "preconditions": ["setup including token acquisition if protected"],
+  "steps": ["exact request: method, URL, headers (incl. Authorization if needed), body"],
+  "expected_results": ["explicit status code + field-level assertions"],
   "tags": ["boundary", "security", etc.]
 }
 ```
 
-## Focus Areas
-1. **Boundary**: min/max param values, empty strings, long strings, special chars, integer overflow.
-2. **Security**: SQL injection, XSS, missing/expired token (401), wrong role (403), IDOR, rate limiting, sensitive data leakage.
-3. **Integration**: Create→Read, Update→Read, Delete→Read(404), cross-endpoint data flow.
-4. **Negative**: missing required fields, malformed JSON, wrong Content-Type, nonexistent IDs.
+## Rules (must follow strictly)
+1. **Endpoint verbatim & no invention**: `endpoint` MUST be copied EXACTLY (method+path) from the API Endpoints list. Do NOT invent endpoints not in the list.
+2. **Assertable (HARD)**: Every `expected_results` entry MUST contain an explicit status code AND a concrete field check. Forbidden vague terms: "成功/失败/works/responds properly/as expected".
+   - Boundary example: `"Status 400; response.body.error.code == 'INVALID_EMAIL'"`.
+   - Security example: `"Status 401; response.body.error.code == 'UNAUTHORIZED'"`, `"Status 403; response.body.error.code == 'FORBIDDEN'"`.
+3. **Executable steps with bodies**: include the real HTTP request — method, path, headers, and a realistic JSON `body` for POST/PUT derived from the endpoint schema. For protected endpoints, first step MUST acquire and send `Authorization: Bearer <TOKEN>`.
+4. **Auth & cleanup**: if the endpoint requires auth, get a token in `preconditions`. For create/modify cases, state cleanup (DELETE the created resource) in the last step or `description`.
+5. **Tags required**: at least one tag from each category — scope (smoke, regression), domain (auth, crud, pagination), type (boundary, security, negative, integration).
+6. **Brevity (HARD)**: keep output compact to avoid the token limit. Write each `step` as ONE line (method + path + essential headers + JSON body). Write each `expected_results` entry as `Status <code>; <field> <op> <value>` with NO prose. Keep `description` to one sentence. Generate the MINIMUM cases that cover the focus areas (one per equivalence class).
+
+## Focus Areas (cover with concrete payloads)
+1. **Boundary**: min/max param values, empty strings, over-long strings, special chars, integer overflow, `page=0`/`limit=0`/`limit` huge, negative IDs.
+2. **Security**: SQL injection (`' OR '1'='1`) and XSS (`<script>`) in string params; missing/expired/wrong token ⇒ 401; wrong role ⇒ 403; IDOR (`/users/{otherUserid}` as another user); rate limiting / account lockout (e.g. 5 failures ⇒ lock 10 min); sensitive data leakage (password must NOT appear in responses).
+3. **Integration**: Create→Read, Update→Read, Delete→Read(404), cross-endpoint data consistency.
+4. **Negative**: missing required fields, malformed JSON, wrong Content-Type, nonexistent IDs ⇒ 404, duplicate unique field ⇒ 409.
 
 Each expected_result must be machine-checkable (explicit status code + field assertions).
 
 {% if output_language == 'chinese' %}
 ## Language
-Write ALL text fields in Simplified Chinese. Keep field names, HTTP methods, and status codes in English.
+Write ALL text fields in Simplified Chinese. Keep field names, HTTP methods, path templates, status codes, and error codes in English.
 {% endif %}
 
 {% if json_mode %}

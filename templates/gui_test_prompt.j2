@@ -11,26 +11,31 @@ Generate a complete Playwright Python test script for web/GUI testing.
 {{ endpoints }}
 
 {% endif %}
-## Script Requirements
-1. Use Playwright's Python sync API (from playwright.sync_api import Page, expect)
-2. Use pytest as the test framework
-3. Use ROBUST locators (in priority order):
-   - page.get_by_role() - FIRST CHOICE for all interactive elements
-   - page.get_by_label() - for form inputs with associated labels
-   - page.get_by_placeholder() - for inputs without labels
-   - page.get_by_text() - for non-interactive text elements
-   - page.locator() - LAST RESORT only, with specific CSS selectors
-4. Use expect() for ALL assertions (not raw assert)
-5. Include proper waits: page.wait_for_load_state("networkidle") after navigation
-6. Generate multiple test methods covering:
-   - Happy path scenarios
-   - Form validation (required fields, format validation)
-   - Error handling (invalid input, network errors)
-   - Navigation and routing
-   - UI state changes
-7. Include a setup fixture that navigates to the target URL
-8. Add descriptive docstrings to each test method
-9. Use pytest markers: @pytest.mark.smoke, @pytest.mark.regression
+## Script Requirements (all mandatory)
+1. Use Playwright's Python **sync** API. Start with:
+   ```python
+   import pytest
+   from playwright.sync_api import Page, expect, BrowserContext
+   ```
+2. Use **pytest** as the test framework; type-annotate the `page: Page` argument.
+3. Provide a **fixture** (module- or function-scoped) that:
+   - navigates to the Target URL (use `page.goto("{{ url }}")`),
+   - waits with `page.wait_for_load_state("networkidle")`,
+   - if the page requires login, performs the login steps in the fixture and stores auth via `context` (e.g. `storage_state`),
+   - yields `page`.
+4. Use **ROBUST locators** (priority order) — NEVER use CSS/XPath as the primary choice:
+   - `page.get_by_role()` — FIRST CHOICE for buttons/inputs/links (e.g. `page.get_by_role("button", name="登录")`).
+   - `page.get_by_label()` — form inputs with associated `<label>`.
+   - `page.get_by_placeholder()` — inputs without labels.
+   - `page.get_by_text()` — non-interactive text.
+   - `page.locator()` — LAST RESORT, only with a stable, specific selector and a comment explaining why.
+5. Use **`expect()`** for ALL assertions (never raw `assert`). Assert concrete values, e.g. `expect(page.get_by_text("欢迎")).to_be_visible()` or `expect(field).to_have_value("...")`. Avoid weak checks like `assert "welcome" in page.content()`.
+6. Use **explicit waits**, not fixed sleeps: prefer `page.wait_for_load_state`, `page.wait_for_selector`, or `expect(...).to_be_visible()`. Do NOT use `time.sleep` or long `page.wait_for_timeout`.
+7. Cover at least: happy path, **form validation** (required/format errors — assert the visible error message via `expect(error).to_have_text(...)`), **error handling** (invalid input ⇒ error state), **navigation/routing**, and **UI state changes**.
+8. Each test method needs a descriptive **docstring** and a pytest marker (`@pytest.mark.smoke`, `@pytest.mark.regression`).
+9. **Cleanup**: if the flow creates data or a session, add teardown (logout / delete created data) so the script is re-runnable.
+10. The script MUST target the **Target URL above** (do not navigate to example.com or any other host). It must be syntactically valid Python runnable with:
+   `pytest test_script.py --browser chromium`
 
 {% if output_language == 'chinese' %}
 ## Language
@@ -40,5 +45,3 @@ Simplified Chinese. Keep code keywords, identifiers and Playwright API calls in 
 
 ## Output
 Output ONLY the Python script code. No markdown fences, no explanations.
-The script must be syntactically valid Python that can be run with:
-  pytest test_script.py --browser chromium
