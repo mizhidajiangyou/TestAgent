@@ -136,11 +136,14 @@ def generate_tests(
 
     if not test_cases:
         console.print(
-            "[red]Generation produced 0 test cases.[/] The LLM calls failed or "
-            "returned no usable content — most often because responses were "
-            "truncated beyond the model's output limit. Try lowering "
-            "OPENAI_MAX_OUTPUT_TOKENS to the model's real output cap, or reduce "
-            "the requested scope (fewer / more compact test cases)."
+            "[red]Generation produced 0 test cases.[/] The LLM returned empty "
+            "responses (no usable content) for every requirement. This is "
+            "usually an empty/aborted response from the provider — NOT a token "
+            "overflow. Recovery steps: set [cyan]OPENAI_STREAM=false[/] to use the "
+            "blocking endpoint, configure a secondary model via "
+            "[cyan]OPENAI_MODEL[/] (comma-separated), or verify OPENAI_BASE_URL "
+            "actually serves the configured model. (Lowering "
+            "OPENAI_MAX_OUTPUT_TOKENS will NOT fix an empty response.)"
         )
         ctx.exit(1)
     if historical:

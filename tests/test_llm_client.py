@@ -134,30 +134,84 @@ class TestOpenAIClientTruncation:
     """Truncation handling: empty truncated output fails fast and clearly."""
 
     @staticmethod
-    def _client_with_finish(finish_reason: str, content: str) -> OpenAIClient:
+    def _client(
+        stream_content: str,
+        stream_finish: str,
+        block_content: str,
+        block_finish: str,
+    ) -> OpenAIClient:
+        """Client whose mocked ``create`` returns streaming vs blocking payloads.
+
+        ``stream=True`` yields a token stream (one chunk); ``stream=False``
+        yields a blocking ``ChatCompletion``-like response. This lets tests
+        exercise the streaming→blocking fallback independently.
+        """
         inner = MagicMock()
-        # Streaming response: one chunk carrying the (possibly empty) content.
-        inner.chat.completions.create.return_value = [
-            _chunk(content=content, finish_reason=finish_reason)
-        ]
+
+        def _create(**kwargs: object) -> object:
+            if kwargs.get("stream"):
+                return [_chunk(content=stream_content, finish_reason=stream_finish)]
+            resp = MagicMock()
+            resp.choices = [
+                MagicMock(
+                    message=MagicMock(content=block_content),
+                    finish_reason=block_finish,
+                )
+            ]
+            resp.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+            return resp
+
+        inner.chat.completions.create.side_effect = _create
         return OpenAIClient(client=inner, model="m", timeout=1.0, max_output_tokens=100)
 
-    def test_empty_truncation_raises_llm_output_too_long(self) -> None:
-        """A length-truncated EMPTY response raises ``LLMOutputTooLongError``.
+    def test_empty_stream_recovers_via_blocking(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An empty streaming response is retried on the blocking channel and recovers.
 
-        This is the exact symptom of a request exceeding the model's real
-        output cap: the provider returns ``finish_reason='length'`` with no
-        content. Retrying identically cannot help, so we fail fast with a
-        specific, actionable error instead of spinning 3 identical attempts.
+        This reproduces the field bug: the streaming endpoint returned 0 chars
+        + finish_reason=length, failing 2/3 requirements. The fix retries on the
+        blocking channel, which succeeds.
         """
-        client = self._client_with_finish("length", "")
+        monkeypatch.setattr("testagent.engine.llm_client.RETRY_BACKOFF_SECONDS", 0)
+        client = self._client(
+            stream_content="",
+            stream_finish="length",
+            block_content="RECOVERED",
+            block_finish="stop",
+        )
+        assert client.chat("sys", "usr") == "RECOVERED"
+
+    def test_empty_both_channels_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When streaming AND blocking both return empty, raise after retries."""
+        monkeypatch.setattr("testagent.engine.llm_client.RETRY_BACKOFF_SECONDS", 0)
+        client = self._client(
+            stream_content="",
+            stream_finish="length",
+            block_content="",
+            block_finish="length",
+        )
         with pytest.raises(LLMOutputTooLongError):
             client.chat("sys", "usr")
 
     def test_nonempty_truncation_returns_partial(self) -> None:
         """A length-truncated NON-empty response returns partial content."""
-        client = self._client_with_finish("length", '[{"id":"TC-1"}')
+        client = self._client(
+            stream_content='[{"id":"TC-1"}',
+            stream_finish="length",
+            block_content='[{"id":"TC-1"}',
+            block_finish="length",
+        )
         assert client.chat("sys", "usr") == '[{"id":"TC-1"}'
+
+    def test_normal_stream_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A normal streaming success is returned unchanged."""
+        monkeypatch.setattr("testagent.engine.llm_client.RETRY_BACKOFF_SECONDS", 0)
+        client = self._client(
+            stream_content="hello",
+            stream_finish="stop",
+            block_content="hello",
+            block_finish="stop",
+        )
+        assert client.chat("sys", "usr") == "hello"
 
     def test_usage_sums_multiple_successful_calls(self) -> None:
         """Multiple successful primary calls accumulate in the aggregate."""

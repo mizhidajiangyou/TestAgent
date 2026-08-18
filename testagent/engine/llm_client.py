@@ -265,6 +265,11 @@ class OpenAIClient:
                         ResponseFormatJSONObject, response_format
                     )
 
+                # First attempt streams for live progress; retries drop to the
+                # robust blocking channel so a flaky/empty streaming endpoint
+                # cannot keep dropping the same request (see the root-cause
+                # analysis for the empty finish_reason=length failure mode).
+                force_blocking = attempt > 1
                 logger.info(
                     "[%s] → model '%s' (attempt %d/%d, max_tokens=%d, stream=%s)",
                     sid,
@@ -272,10 +277,12 @@ class OpenAIClient:
                     attempt,
                     MAX_RETRIES,
                     effective_max,
-                    self._stream_enabled,
+                    (self._stream_enabled and not force_blocking),
                 )
 
-                content, finish_reason, usage = self._complete(create_kwargs)
+                content, finish_reason, usage = self._complete(
+                    create_kwargs, force_blocking=force_blocking
+                )
                 if usage is not None:
                     self._record_usage(usage)
                 content_str = content or ""
@@ -288,48 +295,57 @@ class OpenAIClient:
                     finish_reason,
                 )
 
-                if finish_reason == "length":
-                    if content_str.strip():
-                        logger.warning(
-                            "[%s] Response truncated at max_tokens=%d (attempt %d/%d). "
-                            "Returning partial content for salvage.",
-                            sid,
-                            effective_max,
-                            attempt,
-                            MAX_RETRIES,
-                        )
-                        # Return the partial content - the caller's _extract_json
-                        # / _salvage_truncated_json will attempt to recover it.
-                        return content_str.strip()
-                    # Empty truncated content cannot be salvaged, and retrying
-                    # with the *identical* request will hit the same failure.
-                    # Raise a specific error so the generator re-asks with a
-                    # compressed / fewer-cases scope instead of spinning
-                    # identically. Note: the budget is NOT too low — do not tell
-                    # users to lower OPENAI_MAX_OUTPUT_TOKENS (that makes
-                    # truncation *more* likely; see experience.md #10). The
-                    # usual cause is the provider dropping the stream under
-                    # parallel load, addressed by lowering OPENAI_MAX_CONCURRENCY.
-                    raise LLMOutputTooLongError(
-                        f"Model '{self._model}' returned an EMPTY response "
-                        f"(finish_reason=length) for session {sid}. This usually "
-                        f"means the provider dropped the stream under parallel "
-                        f"load (sibling requests at the same token cap often "
-                        f"succeed), or the model declined to emit any token for "
-                        f"this specific request — NOT that the token budget is "
-                        f"too low. Do NOT lower OPENAI_MAX_OUTPUT_TOKENS. To "
-                        f"recover: lower OPENAI_MAX_CONCURRENCY to reduce "
-                        f"parallel pressure, or reduce the per-request scope "
-                        f"(fewer / more compact cases)."
+                if finish_reason == "length" and content_str.strip():
+                    # Genuine truncation WITH partial content: return it so the
+                    # caller's _extract_json / _salvage_truncated_json can
+                    # recover what is there.
+                    logger.warning(
+                        "[%s] Response truncated at max_tokens=%d (attempt %d/%d). "
+                        "Returning partial content for salvage.",
+                        sid,
+                        effective_max,
+                        attempt,
+                        MAX_RETRIES,
                     )
-                elif not content_str.strip():
-                    last_error = "Empty response from model"
+                    return content_str.strip()
+
+                if not content_str.strip():
+                    # Empty response (any finish_reason, including 'length').
+                    # This is NOT "output too long" — it means nothing came back
+                    # at all, which is a retryable transport/provider failure,
+                    # NOT a request that exceeded the token budget (a real
+                    # overflow carries partial content and is salvaged above).
+                    # Retries drop to the blocking channel (see _complete
+                    # force_blocking) so a flaky/empty streaming endpoint cannot
+                    # keep dropping the same request.
+                    last_error = "Empty response from model" + (
+                        " (finish_reason=length)" if finish_reason == "length" else ""
+                    )
                     logger.warning("[%s] Attempt %d/%d: %s", sid, attempt, MAX_RETRIES, last_error)
                     if attempt < MAX_RETRIES:
                         time.sleep(RETRY_BACKOFF_SECONDS * attempt)
-                    continue
-                else:
-                    return content_str.strip()
+                        continue
+                    # Exhausted every transport: surface a clear, actionable
+                    # error instead of the old misleading "too long / do not
+                    # lower max_tokens" message.
+                    raise LLMOutputTooLongError(
+                        f"Model '{self._model}' returned an EMPTY response "
+                        f"(finish_reason={finish_reason}) for session {sid} after "
+                        f"{MAX_RETRIES} attempts (both streaming and blocking "
+                        f"channels). This is an empty/aborted response from the "
+                        f"provider — NOT a token-budget overflow (a real overflow "
+                        f"would carry partial content, which is salvaged "
+                        f"separately). Common causes: the streaming endpoint drops "
+                        f"empty streams for this model, the model declined/refused "
+                        f"to answer, or the provider does not actually serve this "
+                        f"model id. Recovery steps: set OPENAI_STREAM=false to use "
+                        f"the blocking endpoint, configure a secondary model "
+                        f"(OPENAI_MODEL=a,b), or verify OPENAI_BASE_URL serves "
+                        f"'{self._model}'. Lowering OPENAI_MAX_OUTPUT_TOKENS will "
+                        f"NOT fix an empty response (it would only make a genuine "
+                        f"overflow more likely)."
+                    )
+                return content_str.strip()
             except LLMOutputTooLongError:
                 # Specific, fast-fail: let the generator re-ask with a smaller
                 # scope instead of retrying the identical (too-large) request.
@@ -451,16 +467,20 @@ class OpenAIClient:
             self.usage.completion_tokens += usage.completion_tokens or 0
             self.usage.total_tokens += usage.total_tokens or 0
 
-    def _complete(self, create_kwargs: dict[str, Any]) -> tuple[str, str | None, Any]:
+    def _complete(
+        self, create_kwargs: dict[str, Any], force_blocking: bool = False
+    ) -> tuple[str, str | None, Any]:
         """Run a chat completion and normalize the result.
 
         Streams tokens when ``self._stream_enabled`` (real-time progress), and
         transparently falls back to a blocking call if streaming fails (e.g. the
-        provider rejects ``stream_options``). Returns ``(content, finish_reason,
-        usage)`` where ``usage`` may be ``None`` if the provider did not report
-        it.
+        provider rejects ``stream_options``) or when ``force_blocking`` is set.
+        ``force_blocking`` is used by :meth:`chat` on retry attempts to dodge a
+        flaky/empty streaming channel (see the empty ``finish_reason=length``
+        failure mode). Returns ``(content, finish_reason, usage)`` where
+        ``usage`` may be ``None`` if the provider did not report it.
         """
-        if self._stream_enabled:
+        if self._stream_enabled and not force_blocking:
             try:
                 return self._stream_completion(create_kwargs)
             except Exception as exc:  # streaming unsupported → blocking fallback
@@ -526,9 +546,23 @@ class OpenAIClient:
                     continue
                 choice = chunk.choices[0]
                 delta = choice.delta
-                if delta is not None and delta.content:
-                    content_parts.append(delta.content)
-                    streamed_chars += len(delta.content)
+                if delta is not None:
+                    if delta.content:
+                        content_parts.append(delta.content)
+                        streamed_chars += len(delta.content)
+                    # DeepSeek-style "thinking" tokens ride a separate field and
+                    # do NOT count as visible output. Log their presence as a
+                    # diagnostic (it explains 0 visible content + length) but
+                    # never append them to the returned content.
+                    reasoning = getattr(delta, "reasoning_content", None)
+                    if reasoning:
+                        logger.debug(
+                            "[%s] model '%s' emitted %d reasoning_content chars "
+                            "(not counted as output).",
+                            self._session_id or "-",
+                            self._model,
+                            len(reasoning),
+                        )
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
                 if getattr(chunk, "usage", None) is not None:
