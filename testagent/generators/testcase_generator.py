@@ -2,7 +2,7 @@
 Test case generator using LLM.
 
 Two-phase strategy:
-  Phase 1: Generate from requirements, batched by functional module.
+  Phase 1: Generate from requirements, one concurrent call per requirement.
   Phase 2 (optional): If API endpoints exist, generate API-specific cases
                        (boundary, security, integration) per endpoint batch.
 Merge and re-number all cases.
@@ -22,6 +22,8 @@ import csv
 import json
 import logging
 import re
+import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,7 @@ from testagent.config.models import (
     TestPriority,
     TestType,
 )
+from testagent.engine.concurrency import gather_with_concurrency
 from testagent.engine.llm_client import JSON_OBJECT_FORMAT, LLMClient
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.base import BaseGenerator
@@ -47,14 +50,20 @@ _TEST_CASES_WRAPPER_KEYS = ("test_cases", "cases", "data")
 #: Max parse retries per batch (guardrails-style targeted re-ask).
 MAX_PARSE_RETRIES = 3
 
-#: Max requirements per module batch (keeps each LLM response small).
-MAX_REQUIREMENTS_PER_BATCH = 3
+#: Requirements are fanned out one concurrent call per requirement (keeps each
+#: LLM response small and enables real concurrency even when requirements are
+#: not grouped by module). Endpoints still batch in phase 2.
 
 #: Max endpoints per batch in phase 2.
 MAX_ENDPOINTS_PER_BATCH = 2
 
 #: Default cross-validation rounds when review is enabled.
 DEFAULT_REVIEW_MAX_ROUNDS = 2
+
+#: Default max number of batches generated concurrently in the async path
+#: (``agenerate``). The semaphore cap prevents a flood of simultaneous LLM
+#: calls (which would trigger 429s). Overridable via ``OPENAI_MAX_CONCURRENCY``.
+DEFAULT_MAX_CONCURRENCY = 5
 
 #: CSV column order.
 CSV_COLUMNS = [
@@ -85,6 +94,8 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         review_max_rounds: int = DEFAULT_REVIEW_MAX_ROUNDS,
         output_language: str = "english",
         json_mode: bool = False,
+        max_concurrency: int | None = None,
+        verify_model: bool = True,
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
@@ -102,6 +113,21 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         # settings.OPENAI_JSON_MODE; disabled backends (non-OpenAI compatible)
         # must keep this False.
         self._json_mode = json_mode
+        # Bounded concurrency for the async batch fan-out (``agenerate``).
+        # None / <=0 falls back to the module default so the generator is safe
+        # to construct without explicit settings.
+        self._max_concurrency = (
+            max_concurrency if max_concurrency and max_concurrency > 0 else DEFAULT_MAX_CONCURRENCY
+        )
+        # When true, run a zero-token model-availability pre-flight
+        # (``self._llm.verify`` / ``averify``) before generation so a bad
+        # API key / base_url / model name fails fast instead of hanging for
+        # minutes on a generation that can never succeed. Default on.
+        self._verify_model = verify_model
+        # Correlation id for this run. Set at generate/agenerate start (or
+        # passed in for resume) and pushed to the LLM client so every log line
+        # and the saved session record share it. Enables resume-by-id.
+        self._session_id: str | None = None
         # JSON mode sends response_format={"type":"json_object"} to the LLM.
         # Endpoints that silently ignore this param (some "OpenAI-compatible"
         # proxies, qwen/glm, etc.) will NOT be forced into JSON and may return
@@ -131,7 +157,12 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
     # Public API
     # ------------------------------------------------------------------
 
-    def generate(self, data: TestCaseGenInput) -> list[TestCase]:
+    @property
+    def session_id(self) -> str | None:
+        """Return the session id for the most recent (or current) generation."""
+        return self._session_id
+
+    def generate(self, data: TestCaseGenInput, session_id: str | None = None) -> list[TestCase]:
         """Generate test cases using two-phase batch strategy.
 
         Phase 1: Requirements → module-batched generation.
@@ -147,8 +178,19 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         endpoints = data.endpoints
         historical_cases = data.historical_cases
 
+        # Session correlation: set (or accept an externally provided) id and
+        # push it to the LLM client so every log line for this run shares it.
+        self._session_id = session_id or uuid.uuid4().hex[:12]
+        self._llm.set_session_id(self._session_id)
+        logger.info("Session %s started", self._session_id)
+
         all_cases: list[TestCase] = []
         phase1_cases: list[TestCase] = []
+
+        # Zero-token pre-flight: fail fast on a bad key / endpoint / model name
+        # before spending minutes on a generation that can never succeed.
+        if self._verify_model:
+            self._llm.verify()
 
         # --- Phase 1: Requirements-driven generation ---
         if requirements:
@@ -191,6 +233,373 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         return all_cases
 
     # ------------------------------------------------------------------
+    # Async mirror (P1): concurrent batch fan-out via asyncio
+    # ------------------------------------------------------------------
+
+    async def agenerate(self, data: TestCaseGenInput, session_id: str | None = None) -> list[TestCase]:
+        """Async variant of :meth:`generate`.
+
+        Identical two-phase strategy and output, but Phase 1 / Phase 2 batches
+        are generated concurrently (bounded by ``self._max_concurrency``) using
+        :func:`gather_with_concurrency`. Per-batch re-ask retries stay serial
+        within a batch, and review rounds stay serial (data dependency), exactly
+        as in the sync path. Call from an async context (the web API) or via
+        ``asyncio.run`` (the CLI) to get a real wall-clock speedup whenever
+        there is more than one batch.
+        """
+        requirements = data.requirements
+        endpoints = data.endpoints
+        historical_cases = data.historical_cases
+
+        # Session correlation: set (or accept an externally provided) id and
+        # push it to the LLM client so every log line for this run shares it.
+        self._session_id = session_id or uuid.uuid4().hex[:12]
+        self._llm.set_session_id(self._session_id)
+        logger.info("Session %s started", self._session_id)
+
+        all_cases: list[TestCase] = []
+        phase1_cases: list[TestCase] = []
+
+        # Zero-token pre-flight (async): same contract as the sync path.
+        if self._verify_model:
+            await self._llm.averify()
+
+        if requirements:
+            phase1_cases = await self._agenerate_from_requirements(
+                requirements, endpoints, historical_cases
+            )
+            all_cases.extend(phase1_cases)
+        elif endpoints:
+            phase1_cases = await self._agenerate_from_endpoints(endpoints, "")
+            all_cases.extend(phase1_cases)
+        else:
+            logger.warning("No requirements or endpoints provided; nothing to generate.")
+            return []
+
+        if requirements and endpoints:
+            covered_text = self._historical_cases_to_text(phase1_cases)
+            api_cases = await self._agenerate_api_specific(
+                endpoints, requirements, already_covered=covered_text
+            )
+            all_cases.extend(api_cases)
+
+        if historical_cases:
+            merged = self._merge_historical_cases(historical_cases, all_cases)
+            all_cases = merged
+
+        for idx, tc in enumerate(all_cases, 1):
+            tc.id = f"TC-{idx:03d}"
+
+        logger.info("Total: %d test cases", len(all_cases))
+
+        if self._review_enabled and all_cases:
+            all_cases = await self._areview_and_refine(all_cases, endpoints, requirements)
+
+        return all_cases
+
+    async def _fan_out_recover(
+        self,
+        items: list[Any],
+        make_coro: Callable[..., Awaitable[list[TestCase]]],
+    ) -> list[TestCase]:
+        """Fan out ``make_coro`` coroutines concurrently, then retry any unit
+        that returned an empty list *sequentially* (concurrency=1).
+
+        Intermittent empty truncation under a single shared model is almost
+        always the provider dropping one of several concurrent streams, not a
+        request that is too large (see task.md §13 / experience.md #10+).
+        Re-running the failed units one-at-a-time removes that parallel
+        pressure and usually recovers them — this is the concrete realization
+        of the "lower OPENAI_MAX_CONCURRENCY to recover" guidance.
+
+        Recovery only fires when at least one sibling succeeded (the model is
+        reachable); if *every* unit failed the model is genuinely down and a
+        retry would just fail identically.
+        """
+        coros = [make_coro(i, item) for i, item in enumerate(items, 1)]
+        results = await gather_with_concurrency(self._max_concurrency, *coros)
+        failed = [i for i, cases in enumerate(results) if not cases]
+        if not failed or not any(results):
+            return [c for cases in results for c in cases]
+        logger.warning(
+            "Generation fan-out: %d/%d units returned empty (concurrent stream "
+            "drop suspected). Retrying those %d sequentially (concurrency=1) to "
+            "relieve parallel pressure on the single model.",
+            len(failed), len(items), len(failed),
+        )
+        recovered = await gather_with_concurrency(
+            1, *[make_coro(i + 1, items[i]) for i in failed]
+        )
+        for idx, new_cases in zip(failed, recovered, strict=True):
+            results[idx] = new_cases
+        recovered_units = sum(1 for c in recovered if c)
+        logger.info(
+            "Sequential recovery: %d/%d failed units recovered (%d cases).",
+            recovered_units, len(failed), sum(len(c) for c in recovered),
+        )
+        return [c for cases in results for c in cases]
+
+    async def _agenerate_from_requirements(
+        self,
+        requirements: list[RequirementItem],
+        endpoints: list[APIEndpoint],
+        historical_cases: list[TestCase] | None = None,
+    ) -> list[TestCase]:
+        """Async mirror of :meth:`_generate_from_requirements` (concurrent).
+
+        Each requirement becomes its own coroutine, so N requirements run in
+        parallel (bounded by ``self._max_concurrency``) — this is where the
+        async path actually saves wall-clock time. Units that come back empty
+        (intermittent concurrent-stream drop) are retried sequentially by
+        :meth:`_fan_out_recover`.
+        """
+        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        historical_text = (
+            self._historical_cases_to_text(historical_cases) if historical_cases else ""
+        )
+
+        def make_coro(i: int, req: RequirementItem) -> Awaitable[list[TestCase]]:
+            async def _one() -> list[TestCase]:
+                req_text = RequirementParser.requirements_to_text([req])
+                system_prompt, user_prompt = self._prompt_builder.build_testcase_prompt(
+                    endpoints_text=endpoints_text,
+                    requirements_text=req_text,
+                    output_language=self._output_language,
+                    extra_context={"historical_cases": historical_text} if historical_text else None,
+                    json_mode=self._json_mode,
+                )
+                logger.info(
+                    "Phase 1 - Requirement %d/%d (module=%s) ...",
+                    i,
+                    len(requirements),
+                    req.module or "default",
+                )
+                return await self._agenerate_with_retry(
+                    system_prompt, user_prompt, endpoints, f"Req {req.id or i}/{len(requirements)}"
+                )
+
+            return _one()
+
+        return await self._fan_out_recover(requirements, make_coro)
+
+    async def _agenerate_api_specific(
+        self,
+        endpoints: list[APIEndpoint],
+        requirements: list[RequirementItem],
+        already_covered: str = "",
+    ) -> list[TestCase]:
+        """Async mirror of :meth:`_generate_api_specific` (concurrent)."""
+        batches = self._split_endpoint_batches(endpoints)
+        req_text = RequirementParser.requirements_to_text(requirements)
+
+        def make_coro(i: int, batch: list[APIEndpoint]) -> Awaitable[list[TestCase]]:
+            async def _one() -> list[TestCase]:
+                ep_text = SwaggerParser.endpoints_to_text(batch)
+                system_prompt, user_prompt = self._prompt_builder.build_api_prompt(
+                    endpoints_text=ep_text,
+                    requirements_text=req_text,
+                    output_language=self._output_language,
+                    json_mode=self._json_mode,
+                    already_covered=already_covered,
+                )
+                logger.info(
+                    "Phase 2 - Batch %d/%d (%d endpoints, API-specific)...",
+                    i,
+                    len(batches),
+                    len(batch),
+                )
+                return await self._agenerate_with_retry(
+                    system_prompt, user_prompt, batch, f"API batch {i}/{len(batches)}"
+                )
+
+            return _one()
+
+        return await self._fan_out_recover(batches, make_coro)
+
+    async def _agenerate_from_endpoints(
+        self, endpoints: list[APIEndpoint], requirements_text: str
+    ) -> list[TestCase]:
+        """Async mirror of :meth:`_generate_from_endpoints` (concurrent)."""
+        batches = self._split_endpoint_batches(endpoints)
+
+        def make_coro(i: int, batch: list[APIEndpoint]) -> Awaitable[list[TestCase]]:
+            async def _one() -> list[TestCase]:
+                ep_text = SwaggerParser.endpoints_to_text(batch)
+                system_prompt, user_prompt = self._prompt_builder.build_testcase_prompt(
+                    endpoints_text=ep_text,
+                    requirements_text=requirements_text or "No specific requirements.",
+                    output_language=self._output_language,
+                    json_mode=self._json_mode,
+                )
+                logger.info(
+                    "Endpoint batch %d/%d (%d endpoints)...",
+                    i,
+                    len(batches),
+                    len(batch),
+                )
+                return await self._agenerate_with_retry(
+                    system_prompt, user_prompt, batch, f"EP batch {i}/{len(batches)}"
+                )
+
+            return _one()
+
+        return await self._fan_out_recover(batches, make_coro)
+
+    async def _agenerate_with_retry(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        endpoints: list[APIEndpoint],
+        step_label: str,
+        client: LLMClient | None = None,
+    ) -> list[TestCase]:
+        """Async mirror of :meth:`_generate_with_retry`.
+
+        Uses ``await client.achat(...)`` instead of the blocking ``chat``;
+        re-ask retries remain serial within this batch.
+        """
+        llm = client or self._llm
+        last_raw = ""
+        # See sync mirror: force the "fewer/compact cases" re-ask hint when an
+        # LLM call fails (e.g. output truncated to empty beyond the model limit).
+        forced_error_type: str | None = None
+
+        for attempt in range(1, MAX_PARSE_RETRIES + 1):
+            if attempt == 1:
+                effective_prompt = user_prompt
+            else:
+                error_type = forced_error_type or self._classify_failure(last_raw)
+                effective_prompt = self._build_reask_prompt(
+                    user_prompt, last_raw, step_label, error_type
+                )
+
+            # Retry keeps the SAME token budget. Shrinking max_tokens would make
+            # truncation *more* likely (see experience.md #10); the real cause of
+            # an empty response is a dropped stream under parallel load, handled
+            # by lowering OPENAI_MAX_CONCURRENCY — not by a smaller cap. The
+            # compressed-scope re-ask below is what actually reduces per-request
+            # size without lowering the budget.
+            try:
+                raw_response = await llm.achat(
+                    system_prompt,
+                    effective_prompt,
+                    response_format=JSON_OBJECT_FORMAT if self._json_mode else None,
+                    max_tokens=None,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "%s attempt %d/%d: LLM call failed (%s). Re-asking with a "
+                    "compressed/full-regeneration request.",
+                    step_label,
+                    attempt,
+                    MAX_PARSE_RETRIES,
+                    exc,
+                )
+                last_raw = f"<llm error: {exc}>"
+                reason = str(exc).lower()
+                if "empty" in reason:
+                    forced_error_type = "empty"
+                elif "truncated" in reason or "too large" in reason or "max_tokens" in reason:
+                    forced_error_type = "truncated"
+                if attempt < MAX_PARSE_RETRIES:
+                    continue
+                logger.error(
+                    "%s gave up after %d attempts (LLM call errors).",
+                    step_label,
+                    MAX_PARSE_RETRIES,
+                )
+                return []
+
+            last_raw = raw_response
+
+            items = self._extract_json(raw_response)
+            if items is None:
+                items = self._salvage_truncated_json(raw_response)
+
+            if items is not None:
+                test_cases = self._to_test_cases(items, endpoints)
+                logger.info("%s: %d cases (attempt %d)", step_label, len(test_cases), attempt)
+                return test_cases
+
+            logger.warning(
+                "%s attempt %d/%d: cannot parse JSON. Preview: %.200s",
+                step_label,
+                attempt,
+                MAX_PARSE_RETRIES,
+                raw_response,
+            )
+            self._dump_debug_response(raw_response)
+
+        logger.error("%s gave up after %d attempts", step_label, MAX_PARSE_RETRIES)
+        return []
+
+    async def _areview_and_refine(
+        self,
+        test_cases: list[TestCase],
+        endpoints: list[APIEndpoint],
+        requirements: list[RequirementItem],
+    ) -> list[TestCase]:
+        """Async mirror of :meth:`_review_and_refine`.
+
+        Review rounds stay serial (each round consumes the previous round's
+        output), but each round's ``_agenerate_with_retry`` may itself run
+        concurrently with other batches elsewhere — here only one round is in
+        flight at a time by design.
+        """
+        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        requirements_text = RequirementParser.requirements_to_text(requirements)
+
+        current_cases = test_cases
+        for round_idx in range(1, self._review_max_rounds + 1):
+            use_secondary = round_idx % 2 == 1
+            if use_secondary:
+                client = self._review_llm
+                client_label = "secondary" if self._review_is_cross_model else "primary(same)"
+            else:
+                client = self._llm
+                client_label = "primary"
+
+            current_json = json.dumps(
+                [self._testcase_to_dict(tc) for tc in current_cases],
+                ensure_ascii=False,
+            )
+            system_prompt, user_prompt = self._prompt_builder.build_review_prompt(
+                endpoints_text=endpoints_text,
+                requirements_text=requirements_text,
+                test_cases_json=current_json,
+                output_language=self._output_language,
+                json_mode=self._json_mode,
+            )
+
+            logger.info(
+                "Review round %d/%d using %s model (%d cases in)...",
+                round_idx,
+                self._review_max_rounds,
+                client_label,
+                len(current_cases),
+            )
+            refined = await self._agenerate_with_retry(
+                system_prompt,
+                user_prompt,
+                endpoints,
+                f"Review round {round_idx}",
+                client=client,
+            )
+
+            if not refined:
+                logger.warning(
+                    "Review round %d returned nothing; keeping previous %d cases.",
+                    round_idx,
+                    len(current_cases),
+                )
+                continue
+
+            logger.info("Review round %d: %d -> %d", round_idx, len(current_cases), len(refined))
+            current_cases = refined
+
+        return current_cases
+
+    # ------------------------------------------------------------------
     # Phase 1: Requirements-driven (module-batched)
     # ------------------------------------------------------------------
 
@@ -200,13 +609,17 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         endpoints: list[APIEndpoint],
         historical_cases: list[TestCase] | None = None,
     ) -> list[TestCase]:
-        """Generate test cases from requirements, batched by module.
+        """Generate test cases from requirements, one call per requirement.
+
+        Each requirement is its own generation unit. This keeps every LLM
+        prompt small (avoiding max-token truncation on large specs) and lets
+        the async path (``_agenerate_from_requirements``) fan them out
+        concurrently — even when requirements are not grouped by module.
 
         When ``historical_cases`` is provided, a summary of the historical
         coverage is injected into the prompt so the LLM generates only
         net-new or updated cases (avoiding duplicates).
         """
-        batches = self._split_requirement_batches(requirements)
         endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
         historical_text = (
             self._historical_cases_to_text(historical_cases) if historical_cases else ""
@@ -214,8 +627,8 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         all_cases: list[TestCase] = []
 
-        for i, batch in enumerate(batches, 1):
-            req_text = RequirementParser.requirements_to_text(batch)
+        for i, req in enumerate(requirements, 1):
+            req_text = RequirementParser.requirements_to_text([req])
             system_prompt, user_prompt = self._prompt_builder.build_testcase_prompt(
                 endpoints_text=endpoints_text,
                 requirements_text=req_text,
@@ -224,13 +637,13 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 json_mode=self._json_mode,
             )
             logger.info(
-                "Phase 1 - Batch %d/%d (%d requirements)...",
+                "Phase 1 - Requirement %d/%d (module=%s) ...",
                 i,
-                len(batches),
-                len(batch),
+                len(requirements),
+                req.module or "default",
             )
             cases = self._generate_with_retry(
-                system_prompt, user_prompt, endpoints, f"Req batch {i}/{len(batches)}"
+                system_prompt, user_prompt, endpoints, f"Req {req.id or i}/{len(requirements)}"
             )
             all_cases.extend(cases)
 
@@ -306,27 +719,8 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         return all_cases
 
     # ------------------------------------------------------------------
-    # Batch splitting
+    # Endpoint batch splitting (requirements fan out per requirement instead)
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _split_requirement_batches(
-        requirements: list[RequirementItem],
-    ) -> list[list[RequirementItem]]:
-        """Split requirements into module-aware batches."""
-        if not requirements:
-            return []
-        # Group by module, then split large modules
-        modules: dict[str, list[RequirementItem]] = {}
-        for req in requirements:
-            key = req.module or "default"
-            modules.setdefault(key, []).append(req)
-
-        batches: list[list[RequirementItem]] = []
-        for module_reqs in modules.values():
-            for i in range(0, len(module_reqs), MAX_REQUIREMENTS_PER_BATCH):
-                batches.append(module_reqs[i : i + MAX_REQUIREMENTS_PER_BATCH])
-        return batches
 
     @staticmethod
     def _split_endpoint_batches(
@@ -368,22 +762,59 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         """
         llm = client or self._llm
         last_raw = ""
+        # When an LLM call itself fails (e.g. output truncated to empty because
+        # the request exceeds the model's token limit), force the re-ask to use
+        # the "generate fewer / more compact cases" hint rather than the generic
+        # "return valid JSON" one.
+        forced_error_type: str | None = None
 
         for attempt in range(1, MAX_PARSE_RETRIES + 1):
             if attempt == 1:
                 effective_prompt = user_prompt
             else:
                 # Targeted re-ask: classify the failure and tell the LLM
-                error_type = self._classify_failure(last_raw)
+                error_type = forced_error_type or self._classify_failure(last_raw)
                 effective_prompt = self._build_reask_prompt(
                     user_prompt, last_raw, step_label, error_type
                 )
 
-            raw_response = llm.chat(
-                system_prompt,
-                effective_prompt,
-                response_format=JSON_OBJECT_FORMAT if self._json_mode else None,
-            )
+            # Retry keeps the SAME token budget. Shrinking max_tokens would make
+            # truncation *more* likely (see experience.md #10); the real cause of
+            # an empty response is a dropped stream under parallel load, handled
+            # by lowering OPENAI_MAX_CONCURRENCY — not by a smaller cap. The
+            # compressed-scope re-ask below is what actually reduces per-request
+            # size without lowering the budget.
+            try:
+                raw_response = llm.chat(
+                    system_prompt,
+                    effective_prompt,
+                    response_format=JSON_OBJECT_FORMAT if self._json_mode else None,
+                    max_tokens=None,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "%s attempt %d/%d: LLM call failed (%s). Re-asking with a "
+                    "compressed/full-regeneration request.",
+                    step_label,
+                    attempt,
+                    MAX_PARSE_RETRIES,
+                    exc,
+                )
+                last_raw = f"<llm error: {exc}>"
+                reason = str(exc).lower()
+                if "empty" in reason:
+                    forced_error_type = "empty"
+                elif "truncated" in reason or "too large" in reason or "max_tokens" in reason:
+                    forced_error_type = "truncated"
+                if attempt < MAX_PARSE_RETRIES:
+                    continue
+                logger.error(
+                    "%s gave up after %d attempts (LLM call errors).",
+                    step_label,
+                    MAX_PARSE_RETRIES,
+                )
+                return []
+
             last_raw = raw_response
 
             items = self._extract_json(raw_response)
@@ -448,7 +879,18 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         if len(failed_output) > 2000:
             truncated += "\n... [truncated]"
 
-        if error_type == "truncated":
+        if error_type == "empty":
+            diagnosis = (
+                f"Your previous response for '{label}' was COMPLETELY EMPTY "
+                "(no content was returned at all)."
+            )
+            fixes = (
+                "Regenerate the COMPLETE valid JSON array from scratch in a single "
+                "block. Do not stop early or split the output. Keep each case compact "
+                "and produce only the high-value cases so the response stays complete "
+                "and within limits."
+            )
+        elif error_type == "truncated":
             diagnosis = (
                 f"Your previous response for '{label}' was TRUNCATED: the JSON "
                 "array/object was started but never closed, so it could not be parsed."

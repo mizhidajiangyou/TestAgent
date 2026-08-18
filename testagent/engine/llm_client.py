@@ -9,7 +9,9 @@ Features:
   to the primary with a warning when only one model is configured.
 """
 
+import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -37,6 +39,31 @@ RETRY_BACKOFF_SECONDS = 2.0
 #: array is NOT accepted by this mode, which is why test-case generation wraps
 #: its payload in ``{"test_cases": [...]}`` when JSON mode is enabled.
 JSON_OBJECT_FORMAT: dict[str, object] = {"type": "json_object"}
+
+#: Interval (seconds) between "still waiting" progress logs during a single
+#: blocking LLM call. A slow response (large ``max_tokens``) otherwise looks
+#: like a hang; this makes the wait observable. Set to 0/negative to disable.
+WAITING_LOG_INTERVAL = 30.0
+
+
+class ModelUnavailableError(RuntimeError):
+    """Raised when a configured model cannot be reached or is not served.
+
+    Used by the zero-token pre-flight :meth:`OpenAIClient.verify` so a
+    misconfigured model / endpoint / API key fails fast (with a clear
+    message) before the slow, token-consuming generation phase begins.
+    """
+
+
+class LLMOutputTooLongError(RuntimeError):
+    """Raised when the model response is truncated at ``max_tokens`` and the
+    partial content is unusable (empty).
+
+    This signals the request is larger than the model's real output limit.
+    Retrying the *identical* request cannot help, so it surfaces a specific
+    error that the generator turns into a "generate fewer / more compact
+    cases" re-ask rather than burning more identical attempts.
+    """
 
 
 @dataclass
@@ -71,6 +98,7 @@ class LLMClient(Protocol):
         system_prompt: str,
         user_prompt: str,
         response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Send a chat completion request.
 
@@ -79,10 +107,46 @@ class LLMClient(Protocol):
             user_prompt: User message.
             response_format: Optional ``response_format`` payload forwarded to
                 the underlying SDK (e.g. ``{"type": "json_object"}``).
+            max_tokens: Optional per-call cap overriding the client default.
+                The generator's retry loop passes a *smaller* value on later
+                attempts after a truncated/empty response, so the model is
+                asked for a more compact answer instead of re-failing.
 
         Returns:
             Model response text.
         """
+        ...
+
+    async def achat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Async variant of :meth:`chat` (see implementations)."""
+        ...
+
+    def set_session_id(self, session_id: str) -> None:
+        """Attach a session id so every log line for a run can be correlated.
+
+        Enables "resume by id": the same id is printed at run start and saved
+        with the run's inputs, so a failed/interrupted run can be re-triggered
+        with the exact same configuration.
+        """
+        ...
+
+    def verify(self) -> None:
+        """Check the model is reachable without consuming tokens.
+
+        Zero-token metadata call (see :meth:`OpenAIClient.verify`); raises
+        :class:`ModelUnavailableError` when the model/endpoint/key is bad so
+        the caller can fail fast before the slow generation phase.
+        """
+        ...
+
+    async def averify(self) -> None:
+        """Async variant of :meth:`verify`."""
         ...
 
 
@@ -101,6 +165,16 @@ class OpenAIClient:
         self._timeout = timeout
         self._max_output_tokens = max_output_tokens
         self.usage = TokenUsage()
+        # Guards ``usage`` which may be mutated from multiple worker threads
+        # when batches run concurrently via the async shim.
+        self._usage_lock = threading.Lock()
+        # Correlation id for this run, set by the generator so all log lines
+        # (and the saved session record) share it. Enables resume-by-id.
+        self._session_id: str | None = None
+        # Whether to stream tokens (real-time progress logs). If the provider
+        # rejects streaming (or ``stream_options``), we transparently fall
+        # back to blocking mode for subsequent attempts.
+        self._stream_enabled: bool = True
 
     @property
     def model_name(self) -> str:
@@ -112,18 +186,36 @@ class OpenAIClient:
         """Return configured max output tokens."""
         return self._max_output_tokens
 
+    def set_session_id(self, session_id: str) -> None:
+        """Attach a session id used to tag every log line for this run."""
+        self._session_id = session_id
+
+    def set_stream_enabled(self, enabled: bool) -> None:
+        """Enable or disable token streaming for this client."""
+        self._stream_enabled = enabled
+
     def chat(
         self,
         system_prompt: str,
         user_prompt: str,
         response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
     ) -> str:
-        """Send a chat completion request with retry and backoff.
+        """Send a chat completion request with retry, backoff and streaming.
 
-        If the response is truncated (``finish_reason == "length"``), the
-        truncated content is still returned (the caller can attempt to
-        salvage it). A warning is logged so the caller knows the output
-        may be incomplete.
+        By default the request is streamed token-by-token so the caller sees
+        live progress (and a ``still waiting`` watchdog fires if the stream
+        stalls). The accumulated text is returned as a single ``str`` (the
+        sync core contract is unchanged). If streaming is unsupported by the
+        provider, we transparently fall back to a blocking call.
+
+        If the response is truncated (``finish_reason == "length"``) but has
+        partial content, that partial is returned so the caller can salvage
+        it.         If it is truncated with *empty* content, a specific
+        :class:`LLMOutputTooLongError` is raised so the generator re-asks with
+        a compressed / fewer-cases scope (retrying the identical request cannot
+        help). The token budget is intentionally kept high on retry — shrinking
+        ``max_tokens`` makes truncation *more* likely, not less.
 
         Args:
             system_prompt: System message.
@@ -132,7 +224,10 @@ class OpenAIClient:
                 the OpenAI SDK (e.g. ``{"type": "json_object"}``). When the
                 backend does not support it, callers should pass ``None``
                 (the default) to avoid errors on non-OpenAI providers.
+            max_tokens: Optional per-call cap overriding ``self._max_output_tokens``.
         """
+        sid = self._session_id or "-"
+        effective_max = max_tokens if (max_tokens and max_tokens > 0) else self._max_output_tokens
         last_error = ""
         truncated_hint = (
             " [IMPORTANT: Your previous response was truncated. "
@@ -153,12 +248,13 @@ class OpenAIClient:
                 create_kwargs: dict[str, Any] = {
                     "model": self._model,
                     "temperature": 0,
-                    "max_tokens": self._max_output_tokens,
+                    "max_tokens": effective_max,
                     "timeout": self._timeout,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": effective_user_prompt},
                     ],
+                    "stream": True,
                 }
                 if response_format is not None:
                     # The OpenAI SDK types ``response_format`` as a strict
@@ -169,37 +265,78 @@ class OpenAIClient:
                         ResponseFormatJSONObject, response_format
                     )
 
-                response = self._client.chat.completions.create(**create_kwargs)
-                self._update_usage(response)
+                logger.info(
+                    "[%s] → model '%s' (attempt %d/%d, max_tokens=%d, stream=%s)",
+                    sid,
+                    self._model,
+                    attempt,
+                    MAX_RETRIES,
+                    effective_max,
+                    self._stream_enabled,
+                )
 
-                choice = response.choices[0]
-                content = choice.message.content or ""
+                content, finish_reason, usage = self._complete(create_kwargs)
+                if usage is not None:
+                    self._record_usage(usage)
+                content_str = content or ""
 
-                if choice.finish_reason == "length":
-                    logger.warning(
-                        "Response truncated at max_tokens=%d (attempt %d/%d). "
-                        "Returning partial content for salvage.",
-                        self._max_output_tokens,
-                        attempt,
-                        MAX_RETRIES,
+                logger.info(
+                    "[%s] ← model '%s' returned %d chars (finish_reason=%s)",
+                    sid,
+                    self._model,
+                    len(content_str),
+                    finish_reason,
+                )
+
+                if finish_reason == "length":
+                    if content_str.strip():
+                        logger.warning(
+                            "[%s] Response truncated at max_tokens=%d (attempt %d/%d). "
+                            "Returning partial content for salvage.",
+                            sid,
+                            effective_max,
+                            attempt,
+                            MAX_RETRIES,
+                        )
+                        # Return the partial content - the caller's _extract_json
+                        # / _salvage_truncated_json will attempt to recover it.
+                        return content_str.strip()
+                    # Empty truncated content cannot be salvaged, and retrying
+                    # with the *identical* request will hit the same failure.
+                    # Raise a specific error so the generator re-asks with a
+                    # compressed / fewer-cases scope instead of spinning
+                    # identically. Note: the budget is NOT too low — do not tell
+                    # users to lower OPENAI_MAX_OUTPUT_TOKENS (that makes
+                    # truncation *more* likely; see experience.md #10). The
+                    # usual cause is the provider dropping the stream under
+                    # parallel load, addressed by lowering OPENAI_MAX_CONCURRENCY.
+                    raise LLMOutputTooLongError(
+                        f"Model '{self._model}' returned an EMPTY response "
+                        f"(finish_reason=length) for session {sid}. This usually "
+                        f"means the provider dropped the stream under parallel "
+                        f"load (sibling requests at the same token cap often "
+                        f"succeed), or the model declined to emit any token for "
+                        f"this specific request — NOT that the token budget is "
+                        f"too low. Do NOT lower OPENAI_MAX_OUTPUT_TOKENS. To "
+                        f"recover: lower OPENAI_MAX_CONCURRENCY to reduce "
+                        f"parallel pressure, or reduce the per-request scope "
+                        f"(fewer / more compact cases)."
                     )
-                    # Return the partial content - the caller's _extract_json
-                    # will attempt to salvage it by closing brackets.
-                    if content.strip():
-                        return content.strip()
-                    last_error = "Empty response after truncation"
-                elif not content.strip():
+                elif not content_str.strip():
                     last_error = "Empty response from model"
-                    logger.warning("Attempt %d/%d: %s", attempt, MAX_RETRIES, last_error)
+                    logger.warning("[%s] Attempt %d/%d: %s", sid, attempt, MAX_RETRIES, last_error)
                     if attempt < MAX_RETRIES:
                         time.sleep(RETRY_BACKOFF_SECONDS * attempt)
                     continue
                 else:
-                    logger.debug("LLM raw response (%d chars): %.500s", len(content), content)
-                    return content.strip()
+                    return content_str.strip()
+            except LLMOutputTooLongError:
+                # Specific, fast-fail: let the generator re-ask with a smaller
+                # scope instead of retrying the identical (too-large) request.
+                raise
             except Exception as exc:
                 last_error = str(exc)
-                logger.warning("Attempt %d/%d failed: %s", attempt, MAX_RETRIES, last_error)
+                logger.warning("[%s] Attempt %d/%d failed: %s", sid, attempt, MAX_RETRIES, last_error)
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_BACKOFF_SECONDS * attempt)
 
@@ -207,15 +344,210 @@ class OpenAIClient:
             f"Failed to get LLM response after {MAX_RETRIES} attempts. Last error: {last_error}"
         )
 
-    def _update_usage(self, response: ChatCompletion) -> None:
-        """Accumulate token usage from response."""
-        self.usage.request_count += 1
-        usage = response.usage
+    async def achat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Async variant of :meth:`chat`.
+
+        Runs the (sync, blocking) :meth:`chat` in the default executor so the
+        caller's event loop stays responsive. Used by the async generation
+        path (``TestCaseGenerator.agenerate``), which fans out many batches
+        concurrently via ``asyncio.to_thread``.
+        """
+        return await asyncio.to_thread(
+            self.chat, system_prompt, user_prompt, response_format, max_tokens
+        )
+
+    def verify(self) -> None:
+        """Verify the model is reachable WITHOUT consuming tokens.
+
+        Issues a ``GET /v1/models/{model}`` metadata request (zero token
+        cost). Raises :class:`ModelUnavailableError` if the model cannot be
+        retrieved — e.g. bad API key, wrong ``base_url``, or the model id is
+        unknown to the endpoint — so callers can fail fast instead of hanging
+        for minutes on a generation that can never succeed.
+
+        Azure OpenAI clients are skipped: Azure does not reliably expose the
+        ``/models`` API, so a zero-token preflight is not available there and
+        we avoid a false negative.
+        """
+        if getattr(self._client, "azure_endpoint", None) is not None:
+            logger.info(
+                "Skipping zero-token model verification for Azure endpoint "
+                "(model=%s); Azure does not expose a reliable /models API.",
+                self._model,
+            )
+            return
+        try:
+            model = self._client.models.retrieve(self._model)
+            model_id = getattr(model, "id", self._model)
+            logger.info(
+                "[%s] Model '%s' is available (id=%s).",
+                self._session_id or "-",
+                self._model,
+                model_id,
+            )
+        except Exception as exc:
+            logger.error("Model '%s' verification failed: %s", self._model, exc)
+            raise ModelUnavailableError(
+                f"Model '{self._model}' is not available: {exc}. "
+                "Check OPENAI_API_KEY, OPENAI_BASE_URL and the model name."
+            ) from exc
+
+    async def averify(self) -> None:
+        """Async variant of :meth:`verify` (runs the sync call in a thread)."""
+        await asyncio.to_thread(self.verify)
+
+    def _blocking_create(self, create_kwargs: dict[str, Any]) -> ChatCompletion:
+        """Run the (blocking) chat completion while emitting progress logs.
+
+        The OpenAI SDK call blocks until the full response is streamed back.
+        We run it in a daemon worker thread and poll from the calling thread
+        so we can emit a periodic ``still waiting (Xs, model=...)`` log when a
+        single call is slow. This makes long generations observable instead of
+        a silent black screen. It works identically whether ``chat`` is invoked
+        synchronously or from inside ``asyncio.to_thread`` (the async shim),
+        because the polling happens on whatever thread called ``chat``.
+        """
+        holder: dict[str, ChatCompletion] = {}
+        error: dict[str, BaseException] = {}
+
+        def _run() -> None:
+            try:
+                holder["resp"] = self._client.chat.completions.create(**create_kwargs)
+            except Exception as exc:  # re-raised in the caller thread
+                error["exc"] = exc
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+
+        interval = WAITING_LOG_INTERVAL
+        elapsed = 0.0
+        while worker.is_alive():
+            worker.join(timeout=interval)
+            if worker.is_alive():
+                elapsed += interval
+                logger.info("still waiting (%ds, model=%s) ...", int(elapsed), self._model)
+
+        if "exc" in error:
+            raise error["exc"]
+        if "resp" not in holder:
+            raise RuntimeError("LLM call worker thread terminated without a response")
+        return holder["resp"]
+
+    def _record_usage(self, usage: Any) -> None:
+        """Accumulate token usage from a usage object (thread-safe)."""
         if usage is None:
             return
-        self.usage.prompt_tokens += usage.prompt_tokens or 0
-        self.usage.completion_tokens += usage.completion_tokens or 0
-        self.usage.total_tokens += usage.total_tokens or 0
+        with self._usage_lock:
+            self.usage.request_count += 1
+            self.usage.prompt_tokens += usage.prompt_tokens or 0
+            self.usage.completion_tokens += usage.completion_tokens or 0
+            self.usage.total_tokens += usage.total_tokens or 0
+
+    def _complete(
+        self, create_kwargs: dict[str, Any]
+    ) -> tuple[str, str | None, Any]:
+        """Run a chat completion and normalize the result.
+
+        Streams tokens when ``self._stream_enabled`` (real-time progress), and
+        transparently falls back to a blocking call if streaming fails (e.g. the
+        provider rejects ``stream_options``). Returns ``(content, finish_reason,
+        usage)`` where ``usage`` may be ``None`` if the provider did not report
+        it.
+        """
+        if self._stream_enabled:
+            try:
+                return self._stream_completion(create_kwargs)
+            except Exception as exc:  # streaming unsupported → blocking fallback
+                logger.warning(
+                    "[%s] streaming unavailable for model '%s' (%s); using blocking mode.",
+                    self._session_id or "-",
+                    self._model,
+                    exc,
+                )
+                self._stream_enabled = False
+
+        # Blocking fallback path.
+        blocking_kwargs = {k: v for k, v in create_kwargs.items() if k != "stream"}
+        blocking_kwargs["stream"] = False
+        resp = self._blocking_create(blocking_kwargs)
+        choice = resp.choices[0]
+        content = choice.message.content or ""
+        finish_reason = choice.finish_reason
+        usage = resp.usage
+        return content, finish_reason, usage
+
+    def _stream_completion(
+        self, create_kwargs: dict[str, Any]
+    ) -> tuple[str, str | None, Any]:
+        """Stream a chat completion and return ``(content, finish_reason, usage)``.
+
+        Emits throttled live progress (so the operator sees tokens arrive in
+        real time instead of a black screen) and runs a ``still waiting``
+        watchdog if the stream stalls. Usage is read from the final chunk when
+        the provider supports ``stream_options``; otherwise it is ``None``.
+        """
+        kwargs: dict[str, Any] = dict(create_kwargs)
+        kwargs["stream"] = True
+        # Ask for cumulative usage in the last chunk. Some OpenAI-compatible
+        # gateways ignore this; we tolerate a missing usage.
+        kwargs["stream_options"] = {"include_usage": True}
+
+        state: dict[str, Any] = {"stop": False, "last_chunk": time.time()}
+        content_parts: list[str] = []
+        usage: Any = None
+        finish_reason: str | None = None
+        streamed_chars = 0
+        last_log = time.time()
+
+        def _watchdog() -> None:
+            while not state["stop"]:
+                time.sleep(WAITING_LOG_INTERVAL)
+                if time.time() - state["last_chunk"] >= WAITING_LOG_INTERVAL:
+                    logger.info(
+                        "[%s] still waiting (model=%s, streamed=%d chars) ...",
+                        self._session_id or "-",
+                        self._model,
+                        streamed_chars,
+                    )
+
+        watcher = threading.Thread(target=_watchdog, daemon=True)
+        watcher.start()
+        try:
+            stream = self._client.chat.completions.create(**kwargs)
+            for chunk in stream:
+                state["last_chunk"] = time.time()
+                if not chunk.choices:
+                    if getattr(chunk, "usage", None) is not None:
+                        usage = chunk.usage
+                    continue
+                choice = chunk.choices[0]
+                delta = choice.delta
+                if delta is not None and delta.content:
+                    content_parts.append(delta.content)
+                    streamed_chars += len(delta.content)
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                if getattr(chunk, "usage", None) is not None:
+                    usage = chunk.usage
+                now = time.time()
+                if now - last_log >= 3.0 and streamed_chars:
+                    last_log = now
+                    logger.info(
+                        "[%s] %s streaming: %d chars so far...",
+                        self._session_id or "-",
+                        self._model,
+                        streamed_chars,
+                    )
+            return "".join(content_parts), finish_reason, usage
+        finally:
+            state["stop"] = True
+            watcher.join(timeout=1.0)
 
 
 class MultiModelLLMClient:
@@ -262,6 +594,21 @@ class MultiModelLLMClient:
         """Return the underlying per-model clients (read-only view)."""
         return list(self._clients)
 
+    @property
+    def max_output_tokens(self) -> int:
+        """Return the primary client's configured max output tokens."""
+        return self._clients[0].max_output_tokens
+
+    def set_session_id(self, session_id: str) -> None:
+        """Propagate the session id to every sub-client for log correlation."""
+        for client in self._clients:
+            client.set_session_id(session_id)
+
+    def set_stream_enabled(self, enabled: bool) -> None:
+        """Enable or disable streaming on every sub-client."""
+        for client in self._clients:
+            client.set_stream_enabled(enabled)
+
     # ------------------------------------------------------------------
     # Aggregated usage
     # ------------------------------------------------------------------
@@ -294,6 +641,7 @@ class MultiModelLLMClient:
         system_prompt: str,
         user_prompt: str,
         response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Call the primary model; on failure, fall back to subsequent models.
 
@@ -304,13 +652,14 @@ class MultiModelLLMClient:
         Args:
             response_format: Optional ``response_format`` payload forwarded to
                 every sub-client (see :meth:`OpenAIClient.chat`).
+            max_tokens: Optional per-call cap forwarded to every sub-client.
         """
         last_error: Exception | None = None
         for idx, client in enumerate(self._clients):
             label = "primary" if idx == 0 else f"fallback #{idx}"
             try:
                 logger.debug("Trying %s model: %s", label, client.model_name)
-                return client.chat(system_prompt, user_prompt, response_format)
+                return client.chat(system_prompt, user_prompt, response_format, max_tokens)
             except Exception as exc:
                 last_error = exc
                 if idx < len(self._clients) - 1:
@@ -329,6 +678,76 @@ class MultiModelLLMClient:
                     )
 
         raise RuntimeError(f"All {len(self._clients)} model(s) failed. Last error: {last_error}")
+
+    async def achat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Async variant of :meth:`chat` with identical fallback semantics.
+
+        Each sub-client's ``achat`` is awaited in order; on failure the next
+        model is tried, mirroring :meth:`chat`. Designed to be driven by
+        ``asyncio.to_thread`` from ``TestCaseGenerator.agenerate`` so many
+        batches run concurrently without blocking the event loop.
+        """
+        last_error: Exception | None = None
+        for idx, client in enumerate(self._clients):
+            label = "primary" if idx == 0 else f"fallback #{idx}"
+            try:
+                logger.debug("Trying %s model (async): %s", label, client.model_name)
+                return await client.achat(system_prompt, user_prompt, response_format, max_tokens)
+            except Exception as exc:
+                last_error = exc
+                if idx < len(self._clients) - 1:
+                    logger.warning(
+                        "%s model '%s' failed (async); falling back to next model.",
+                        label,
+                        client.model_name,
+                    )
+                else:
+                    logger.error(
+                        "%s model '%s' failed (async); no more fallback candidates.",
+                        label,
+                        client.model_name,
+                    )
+
+        raise RuntimeError(
+            f"All {len(self._clients)} model(s) failed (async). Last error: {last_error}"
+        )
+
+    # ------------------------------------------------------------------
+    # Zero-token pre-flight verification
+    # ------------------------------------------------------------------
+
+    def verify(self) -> None:
+        """Verify every configured model is reachable (zero token).
+
+        Verifies each sub-client in order. A failure of the **primary** (or
+        any model when there is only one) raises :class:`ModelUnavailableError`
+        so the caller fails fast. A failure of a **fallback** model only logs
+        a warning — that model is only consulted when the primary fails, so a
+        misconfigured fallback should not abort otherwise-valid generation.
+        """
+        for idx, client in enumerate(self._clients):
+            label = "primary" if idx == 0 else f"fallback #{idx}"
+            try:
+                client.verify()
+            except ModelUnavailableError:
+                if idx == 0 or len(self._clients) == 1:
+                    raise
+                logger.warning(
+                    "%s model '%s' failed verification; it will be skipped until "
+                    "the primary model fails. Fix its config to enable fallback.",
+                    label,
+                    client.model_name,
+                )
+
+    async def averify(self) -> None:
+        """Async variant of :meth:`verify`."""
+        await asyncio.to_thread(self.verify)
 
     # ------------------------------------------------------------------
     # Secondary client for review
@@ -413,4 +832,8 @@ def create_llm_client(settings: Settings) -> MultiModelLLMClient:
         logger.info("Using OpenAI models (in fallback order): %s", settings.llm.models)
 
     logger.info("Max output tokens: %d", max_tokens)
-    return MultiModelLLMClient(clients=clients)
+    mm_client = MultiModelLLMClient(clients=clients)
+    # Stream tokens for real-time progress logs when the provider supports it;
+    # clients transparently fall back to blocking if streaming is unavailable.
+    mm_client.set_stream_enabled(bool(getattr(settings.llm, "stream", True)))
+    return mm_client

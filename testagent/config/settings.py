@@ -46,6 +46,20 @@ class LLMSettings(BaseSettings):
     # OpenAI-compatible gateways). The default-off posture keeps the
     # existing bare-array contract and never breaks those endpoints.
     json_mode: bool = Field(default=False, alias="OPENAI_JSON_MODE")
+    # Max number of LLM batches generated concurrently in the async path
+    # (``TestCaseGenerator.agenerate``). Bounds the asyncio semaphore so we
+    # never flood the provider with simultaneous requests (which would trip
+    # 429 rate limits). Default 5.
+    max_concurrency: int = Field(default=5, alias="OPENAI_MAX_CONCURRENCY")
+    # Run a zero-token model availability check (GET /v1/models/{model}) before
+    # generation starts, so a misconfigured key / endpoint / model name fails
+    # fast (with a clear error) instead of hanging for minutes. Set to False
+    # only if your provider does not implement the OpenAI /models API. Default True.
+    verify_model: bool = Field(default=True, alias="OPENAI_VERIFY_MODEL")
+    # Stream tokens for real-time progress logs during generation. When the
+    # provider does not support streaming (or ``stream_options``), the client
+    # transparently falls back to a blocking call. Default True.
+    stream: bool = Field(default=True, alias="OPENAI_STREAM")
 
     @property
     def models(self) -> list[str]:

@@ -1,15 +1,22 @@
-"""
-Dependency injection container.
+"""Dependency injection container (dependency-injector).
 
-Provides a lightweight DI container for wiring up components.
+Services are declared as :class:`providers.Singleton` so each is created lazily
+on first ``container.<name>()`` call and reused thereafter. The wiring graph is
+expressed declaratively via provider dependencies and resolved automatically by
+the framework (replacing the previous hand-written lazy-property container).
+
+Access pattern: call the provider to obtain the instance, e.g.
+``container.llm_client()`` returns the shared :class:`MultiModelLLMClient`.
 """
+
+from dependency_injector import containers, providers
 
 from testagent.config.settings import Settings, get_settings
 from testagent.engine.conversation import ConversationManager
 from testagent.engine.llm_client import MultiModelLLMClient, create_llm_client
 from testagent.engine.prompt_builder import PromptBuilder
-from testagent.generators.performance_generator import PerformanceGenerator
 from testagent.generators.gui_test_generator import GUITestGenerator
+from testagent.generators.performance_generator import PerformanceGenerator
 from testagent.generators.testcase_generator import TestCaseGenerator
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
@@ -17,123 +24,80 @@ from testagent.reports.performance_report import PerformanceReport
 from testagent.reports.testcase_report import TestCaseReport
 
 
-class Container:
-    """Simple dependency injection container."""
+class Container(containers.DeclarativeContainer):
+    """Declarative DI container.
+
+    All services are singletons. ``container.<name>()`` resolves and caches the
+    instance on first call. The optional ``settings`` constructor argument lets
+    tests inject a custom :class:`Settings` (otherwise the cached global one is
+    used), preserving the previous ``Container(settings=...)`` contract.
+    """
+
+    # ---- configuration -------------------------------------------------
+    # ``get_settings`` is @lru_cache'd, so this singleton is the global one.
+    settings = providers.Singleton(get_settings)
+
+    # ---- core services -------------------------------------------------
+    llm_client = providers.Singleton(
+        create_llm_client,
+        settings=settings,
+    )
+    prompt_builder = providers.Singleton(PromptBuilder)
+    swagger_parser = providers.Singleton(SwaggerParser)
+    requirement_parser = providers.Singleton(RequirementParser)
+    testcase_report = providers.Singleton(TestCaseReport)
+    performance_report = providers.Singleton(PerformanceReport)
+
+    # The review client is the multi-model client's non-primary sub-client
+    # (falls back to primary with a warning when only one model is configured).
+    # ``secondary_client()`` returns an already-constructed internal instance,
+    # so caching it as a singleton is correct.
+    review_client = providers.Singleton(llm_client.provided.secondary_client.call())
+
+    testcase_generator = providers.Singleton(
+        TestCaseGenerator,
+        llm_client=llm_client,
+        prompt_builder=prompt_builder,
+        review_enabled=settings.provided.review_enabled,
+        review_llm_client=review_client,
+        review_max_rounds=settings.provided.review_max_rounds,
+        output_language=settings.provided.output_language,
+        json_mode=settings.provided.llm.json_mode,
+        max_concurrency=settings.provided.llm.max_concurrency,
+        verify_model=settings.provided.llm.verify_model,
+    )
+
+    gui_generator = providers.Singleton(
+        GUITestGenerator,
+        llm_client=llm_client,
+        prompt_builder=prompt_builder,
+        output_language=settings.provided.output_language,
+    )
+
+    performance_generator = providers.Singleton(
+        PerformanceGenerator,
+        llm_client=llm_client,
+        prompt_builder=prompt_builder,
+        script_format=settings.provided.script_format,
+        output_language=settings.provided.output_language,
+    )
+
+    conversation_manager = providers.Singleton(
+        ConversationManager,
+        llm_client=llm_client,
+        prompt_builder=prompt_builder,
+        max_iterations=settings.provided.review_max_rounds,
+        output_language=settings.provided.output_language,
+    )
 
     def __init__(self, settings: Settings | None = None) -> None:
-        self._settings = settings or get_settings()
-        self._llm_client: MultiModelLLMClient | None = None
-        self._prompt_builder: PromptBuilder | None = None
-        self._swagger_parser: SwaggerParser | None = None
-        self._requirement_parser: RequirementParser | None = None
-        self._testcase_generator: TestCaseGenerator | None = None
-        self._gui_generator: GUITestGenerator | None = None
-        self._performance_generator: PerformanceGenerator | None = None
-        self._testcase_report: TestCaseReport | None = None
-        self._performance_report: PerformanceReport | None = None
-        self._conversation_manager: ConversationManager | None = None
+        """Initialize the container, optionally overriding the settings source.
 
-    @property
-    def settings(self) -> Settings:
-        """Return application settings."""
-        return self._settings
-
-    @property
-    def llm_client(self) -> MultiModelLLMClient:
-        """Return multi-model LLM client (lazy init)."""
-        if self._llm_client is None:
-            self._llm_client = create_llm_client(self._settings)
-        return self._llm_client
-
-    @property
-    def prompt_builder(self) -> PromptBuilder:
-        """Return prompt builder (lazy init)."""
-        if self._prompt_builder is None:
-            self._prompt_builder = PromptBuilder()
-        return self._prompt_builder
-
-    @property
-    def swagger_parser(self) -> SwaggerParser:
-        """Return Swagger parser (lazy init)."""
-        if self._swagger_parser is None:
-            self._swagger_parser = SwaggerParser()
-        return self._swagger_parser
-
-    @property
-    def requirement_parser(self) -> RequirementParser:
-        """Return requirement parser (lazy init)."""
-        if self._requirement_parser is None:
-            self._requirement_parser = RequirementParser()
-        return self._requirement_parser
-
-    @property
-    def testcase_generator(self) -> TestCaseGenerator:
-        """Return test case generator (lazy init)."""
-        if self._testcase_generator is None:
-            # Review uses a non-primary model when available, so cross-validation
-            # happens between two different models. The MultiModelLLMClient
-            # logs a warning and falls back to the primary when only one model
-            # is configured.
-            review_client = self.llm_client.secondary_client()
-            self._testcase_generator = TestCaseGenerator(
-                llm_client=self.llm_client,
-                prompt_builder=self.prompt_builder,
-                review_enabled=self._settings.review_enabled,
-                review_llm_client=review_client,
-                review_max_rounds=self._settings.review_max_rounds,
-                output_language=self._settings.output_language,
-                json_mode=self._settings.llm.json_mode,
-            )
-        return self._testcase_generator
-
-    @property
-    def gui_generator(self) -> GUITestGenerator:
-        """Return GUI (Playwright) test generator (lazy init)."""
-        if self._gui_generator is None:
-            self._gui_generator = GUITestGenerator(
-                llm_client=self.llm_client,
-                prompt_builder=self.prompt_builder,
-                output_language=self._settings.output_language,
-            )
-        return self._gui_generator
-
-    @property
-    def performance_generator(self) -> PerformanceGenerator:
-        """Return performance generator (lazy init)."""
-        if self._performance_generator is None:
-            self._performance_generator = PerformanceGenerator(
-                llm_client=self.llm_client,
-                prompt_builder=self.prompt_builder,
-                script_format=self._settings.script_format,
-                output_language=self._settings.output_language,
-            )
-        return self._performance_generator
-
-    @property
-    def testcase_report(self) -> TestCaseReport:
-        """Return test case report generator (lazy init)."""
-        if self._testcase_report is None:
-            self._testcase_report = TestCaseReport()
-        return self._testcase_report
-
-    @property
-    def performance_report(self) -> PerformanceReport:
-        """Return performance report generator (lazy init)."""
-        if self._performance_report is None:
-            self._performance_report = PerformanceReport()
-        return self._performance_report
-
-    @property
-    def conversation_manager(self) -> ConversationManager:
-        """Return conversation manager (lazy init).
-
-        Reuses ``review_max_rounds`` as the max refine iterations per turn.
+        Args:
+            settings: Optional explicit :class:`Settings` instance. When
+                provided, it replaces the default global settings singleton so
+                all dependent providers resolve against it.
         """
-        if self._conversation_manager is None:
-            self._conversation_manager = ConversationManager(
-                llm_client=self.llm_client,
-                prompt_builder=self.prompt_builder,
-                max_iterations=self._settings.review_max_rounds,
-                output_language=self._settings.output_language,
-            )
-        return self._conversation_manager
+        super().__init__()
+        if settings is not None:
+            self.settings.override(settings)

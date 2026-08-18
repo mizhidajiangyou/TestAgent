@@ -5,7 +5,11 @@ Provides commands for generating test cases, performance scripts, GUI test
 scripts, and interactive conversational refinement.
 """
 
+import asyncio
+import json
 import os
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +28,46 @@ from testagent.config.models import (
     TestCaseReportInput,
 )
 from testagent.container import Container
+from testagent.engine.llm_client import ModelUnavailableError
 from testagent.generators.testcase_generator import TestCaseGenerator
 
 console = Console()
+
+
+def _save_session_record(
+    session_id: str,
+    swagger: str | None,
+    requirements: str | None,
+    output: str,
+    settings: Any,
+    resumed_from: str | None,
+) -> None:
+    """Persist a run's inputs + config so it can be resumed by ``--resume <id>``.
+
+    Stored at ``output/sessions/<session_id>.json``. The record captures enough
+    to re-run the exact same generation (input paths + model/Token config) after
+    an interruption or a partial failure.
+    """
+    out_dir = Path("output/sessions")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "session_id": session_id,
+        "created_at": datetime.now(UTC).isoformat(),
+        "resumed_from": resumed_from,
+        "swagger": swagger,
+        "requirements": requirements,
+        "output": output,
+        "model": settings.llm.models,
+        "max_output_tokens": settings.llm.max_output_tokens,
+        "max_concurrency": settings.llm.max_concurrency,
+        "verify_model": settings.llm.verify_model,
+        "stream": settings.llm.stream,
+        "json_mode": settings.llm.json_mode,
+        "review_enabled": settings.review_enabled,
+    }
+    (out_dir / f"{session_id}.json").write_text(
+        json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 EXAMPLES_TEXT = """
@@ -211,6 +252,11 @@ def main(ctx: click.Context, verbose: bool) -> None:
     default=None,
     help="Path to historical test cases JSON file (baseline for incremental generation)",
 )
+@click.option(
+    "--resume",
+    default=None,
+    help="Resume a previous run by its session id (re-runs with the same inputs/config).",
+)
 @click.pass_context
 def generate_tests(
     ctx: click.Context,
@@ -219,9 +265,26 @@ def generate_tests(
     output: str,
     output_format: str,
     historical_cases: str | None,
+    resume: str | None,
 ) -> None:
     """Generate test cases from requirements and/or API spec."""
     container: Container = ctx.obj["container"]
+
+    # --- Session id + optional resume ---------------------------------
+    session_id = uuid.uuid4().hex[:12]
+    resumed_from: str | None = None
+    if resume:
+        record_path = Path("output/sessions") / f"{resume}.json"
+        if not record_path.exists():
+            console.print(f"[red]Resume session not found:[/] {record_path}")
+            ctx.exit(1)
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        resumed_from = record.get("session_id")
+        session_id = resumed_from or session_id
+        # Re-run with the exact same inputs that produced the original record.
+        swagger = record.get("swagger") or swagger
+        requirements = record.get("requirements") or requirements
+        console.print(f"[cyan]Resuming session {session_id}[/] from record {record_path}")
 
     if not swagger and not requirements:
         console.print("[red]Error: at least one of --swagger or --requirements is required.[/]")
@@ -247,14 +310,43 @@ def generate_tests(
             f"from [cyan]{historical_cases}[/]"
         )
 
+    console.print(f"[bold]Session:[/] [cyan]{session_id}[/]")
     console.print("[bold blue]Generating test cases via LLM...[/]")
-    test_cases = container.testcase_generator.generate(
-        TestCaseGenInput(
-            endpoints=endpoints,
-            requirements=req_items,
-            historical_cases=historical,
+    try:
+        test_cases = asyncio.run(
+            container.testcase_generator.agenerate(
+                TestCaseGenInput(
+                    endpoints=endpoints,
+                    requirements=req_items,
+                    historical_cases=historical,
+                ),
+                session_id=session_id,
+            )
         )
+    except ModelUnavailableError as exc:
+        # Zero-token pre-flight failed: bad key / base_url / model name.
+        console.print(f"[red]Model unavailable:[/] {exc}")
+        console.print(
+            "[dim]Check OPENAI_API_KEY, OPENAI_BASE_URL and OPENAI_MODEL "
+            "(or set OPENAI_VERIFY_MODEL=false if your provider lacks the "
+            "/models API).[/]"
+        )
+        ctx.exit(1)
+
+    # Persist a session record so this exact run can be resumed by id later.
+    _save_session_record(
+        session_id, swagger, requirements, output, container.settings, resumed_from
     )
+
+    if not test_cases:
+        console.print(
+            "[red]Generation produced 0 test cases.[/] The LLM calls failed or "
+            "returned no usable content — most often because responses were "
+            "truncated beyond the model's output limit. Try lowering "
+            "OPENAI_MAX_OUTPUT_TOKENS to the model's real output cap, or reduce "
+            "the requested scope (fewer / more compact test cases)."
+        )
+        ctx.exit(1)
     if historical:
         console.print(
             f"  Merged: [green]{len(historical)}[/] historical + net-new = "
@@ -586,7 +678,7 @@ def chat(
     while True:
         try:
             user_input = Prompt.ask("[bold cyan]You[/]")
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             console.print("\n[dim]Goodbye![/]")
             break
 

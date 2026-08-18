@@ -6,8 +6,9 @@ Exposes:
   - ``GET  /api/config``: current configuration summary.
   - ``POST /api/generate``: generate test cases from requirement text.
 
-The blocking LLM generation runs in a worker thread (via
-``run_in_threadpool``) so the async event loop is not blocked.
+The LLM generation uses the async ``TestCaseGenerator.agenerate`` path, which
+fans batches out concurrently via ``asyncio.to_thread`` so the event loop stays
+responsive while generation is in flight.
 
 iframe embedding is enabled by default: ``Content-Security-Policy:
 frame-ancestors *`` is sent on every response. Override the allowed
@@ -19,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -26,11 +28,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from testagent.config.models import TestCaseGenInput
 from testagent.container import Container
+from testagent.engine.llm_client import ModelUnavailableError
 from testagent.generators.testcase_generator import TestCaseGenerator
 
 logger = logging.getLogger(__name__)
@@ -95,6 +97,7 @@ class GenerateResponse(BaseModel):
     download_content: str | None = None
     download_filename: str | None = None
     token_usage: str
+    session_id: str = ""
     historical_count: int = 0
 
 
@@ -179,8 +182,9 @@ def create_app(container: Container | None = None) -> FastAPI:
     async def generate(req: GenerateRequest) -> GenerateResponse:
         """Generate test cases from requirement text.
 
-        The (blocking) LLM generation is dispatched to a threadpool so the
-        event loop stays responsive.
+        Parsing runs synchronously (fast), then the async
+        ``TestCaseGenerator.agenerate`` path fans batches out concurrently so
+        the event loop stays responsive during LLM generation.
         """
         if not req.requirements.strip():
             raise HTTPException(status_code=400, detail="requirements must not be empty")
@@ -204,18 +208,47 @@ def create_app(container: Container | None = None) -> FastAPI:
         )
 
         try:
-            test_cases = await run_in_threadpool(
-                _generate_sync,
-                container,
-                req.requirements,
-                req.swagger_url,
-                historical,
-            )
+            gen_input = _build_gen_input(container, req.requirements, req.swagger_url, historical)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:  # surface LLM/config errors to the UI
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            session_id = uuid.uuid4().hex[:12]
+            test_cases = await container.testcase_generator.agenerate(
+                gen_input, session_id=session_id
+            )
+        except ModelUnavailableError as exc:
+            # Zero-token pre-flight failed: bad key / base_url / model name.
+            logger.warning("Model pre-flight verification failed: %s", exc)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model unavailable: {exc}. Check OPENAI_API_KEY, "
+                    "OPENAI_BASE_URL and OPENAI_MODEL (or set "
+                    "OPENAI_VERIFY_MODEL=false if the provider lacks the "
+                    "/models API)."
+                ),
+            ) from exc
+        except Exception as exc:  # surface other LLM/config errors to the UI
             logger.exception("Generation failed")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        if not test_cases:
+            # The generator degrades gracefully (never crashes) and returns []
+            # when every LLM call failed. Surface that as a clear 500 with the
+            # usual root-cause hint instead of a silent empty result.
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Generation produced 0 test cases. The LLM calls failed or "
+                    "returned no usable content — most often because responses "
+                    "were truncated beyond the model's output limit. Lower "
+                    "OPENAI_MAX_OUTPUT_TOKENS to the model's real output cap, or "
+                    "reduce the requested scope (fewer / more compact cases)."
+                ),
+            )
 
         cases_dicts = [TestCaseGenerator._testcase_to_dict(tc) for tc in test_cases]
         download_content, download_filename = _render_output(
@@ -229,6 +262,7 @@ def create_app(container: Container | None = None) -> FastAPI:
             download_content=download_content,
             download_filename=download_filename,
             token_usage=container.llm_client.usage.summary(),
+            session_id=session_id,
             historical_count=len(historical),
         )
 
@@ -251,17 +285,20 @@ def create_app(container: Container | None = None) -> FastAPI:
 # ---------------------------------------------------------------------------
 
 
-def _generate_sync(
+def _build_gen_input(
     container: Container,
     requirements_text: str,
     swagger_url: str | None,
     historical: list[Any],
-) -> list[Any]:
-    """Run the generation pipeline synchronously.
+) -> TestCaseGenInput:
+    """Parse request inputs into a ``TestCaseGenInput`` for async generation.
 
     The requirement text is written to a temp ``.md`` file so the existing
     :class:`RequirementParser` (which handles Markdown/JSON/text/binary) can
-    be reused without duplicating parsing logic.
+    be reused without duplicating parsing logic. Raises ``ValueError`` when
+    neither requirements nor endpoints can be parsed (mapped to HTTP 400 by
+    the caller), and ``FileNotFoundError`` when a Swagger URL/path cannot be
+    fetched (mapped to HTTP 404).
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         req_path = Path(tmpdir) / "requirements.md"
@@ -276,12 +313,10 @@ def _generate_sync(
         if not req_items and not endpoints:
             raise ValueError("No requirements could be parsed from the provided document.")
 
-        return container.testcase_generator.generate(
-            TestCaseGenInput(
-                endpoints=endpoints,
-                requirements=req_items,
-                historical_cases=historical,
-            )
+        return TestCaseGenInput(
+            endpoints=endpoints,
+            requirements=req_items,
+            historical_cases=historical,
         )
 
 

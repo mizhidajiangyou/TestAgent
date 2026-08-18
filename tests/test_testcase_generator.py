@@ -1,8 +1,10 @@
 """Tests for TestCaseGenerator."""
 
+import asyncio
 import csv
 import json
 import logging
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,8 +17,70 @@ from testagent.config.models import (
     TestPriority,
     TestType,
 )
+from testagent.engine.llm_client import LLMOutputTooLongError
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.testcase_generator import MAX_PARSE_RETRIES, TestCaseGenerator
+
+
+class FakeAsyncLLM:
+    """Minimal ``LLMClient`` returning a fixed response for both chat and achat.
+
+    ``achat_impl`` (optional) overrides async behavior — e.g. to measure
+    concurrency or to alternate responses across calls. A list of responses is
+    consumed in order (wrapped to the last value when exhausted).
+    """
+
+    def __init__(self, response: str | list[str], achat_impl=None) -> None:
+        self._response = response
+        self._achat_impl = achat_impl
+        self.chat_calls = 0
+        self.achat_calls = 0
+        self._pos = 0
+        self.session_id: str | None = None
+
+    def _next(self) -> str:
+        if isinstance(self._response, list):
+            val = (
+                self._response[self._pos] if self._pos < len(self._response) else self._response[-1]
+            )
+            self._pos += 1
+            return val
+        return self._response
+
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format=None,
+        max_tokens: int | None = None,
+    ) -> str:
+        self.chat_calls += 1
+        return self._next()
+
+    async def achat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format=None,
+        max_tokens: int | None = None,
+    ) -> str:
+        self.achat_calls += 1
+        if self._achat_impl is not None:
+            return await self._achat_impl(system_prompt, user_prompt, response_format, max_tokens)
+        return self._next()
+
+    def set_session_id(self, session_id: str) -> None:
+        """Record the session id for assertions in tests."""
+        self.session_id = session_id
+
+    def verify(self) -> None:
+        """No-op: the real client's verify is exercised in llm_client tests."""
+        pass
+
+    async def averify(self) -> None:
+        """No-op async verify (see :meth:`verify`)."""
+        pass
+
 
 MOCK_LLM_RESPONSE = json.dumps(
     [
@@ -404,8 +468,14 @@ class TestTestCaseGenerator:
         assert len(test_cases) == 4
         assert self.mock_llm.chat.call_count == 2
 
-    def test_module_based_batching(self) -> None:
-        """Test that requirements are batched by module."""
+    def test_requirement_per_call_fanout(self) -> None:
+        """Each requirement becomes its own generation call (true concurrency).
+
+        With 5 requirements (regardless of module grouping), the generator
+        issues 5 LLM calls — one per requirement — so N requirements run
+        concurrently (bounded by ``max_concurrency``) instead of collapsing
+        into a single oversized batch that would exceed the token limit.
+        """
         reqs = [
             RequirementItem(id="R1", title="A", description="d", module="auth"),
             RequirementItem(id="R2", title="B", description="d", module="auth"),
@@ -419,9 +489,9 @@ class TestTestCaseGenerator:
             prompt_builder=self.prompt_builder,
         )
         test_cases = generator.generate(TestCaseGenInput(requirements=reqs, endpoints=[]))
-        # 3 modules = 3 batches * 2 cases = 6
-        assert len(test_cases) == 6
-        assert self.mock_llm.chat.call_count == 3
+        # 5 requirements = 5 calls * 2 cases = 10
+        assert len(test_cases) == 10
+        assert self.mock_llm.chat.call_count == 5
 
     def test_targeted_reask(self) -> None:
         """Test that targeted re-ask includes failed output."""
@@ -744,3 +814,454 @@ class TestTestCaseGeneratorJsonMode:
             )
         assert not any("OPENAI_JSON_MODE is enabled" in r.message for r in caplog.records)
 
+
+_REFINED_ASYNC = json.dumps(
+    [
+        {
+            "id": "TC-001",
+            "title": "Get users",
+            "endpoint": "GET /users",
+            "test_type": "functional",
+            "priority": "high",
+            "steps": ["Send GET"],
+            "expected_results": ["Status 200"],
+        },
+        {
+            "id": "TC-002",
+            "title": "Create user",
+            "endpoint": "POST /users",
+            "test_type": "functional",
+            "priority": "high",
+            "steps": ["Send POST"],
+            "expected_results": ["Status 201"],
+        },
+        {
+            "id": "TC-003",
+            "title": "Update user",
+            "endpoint": "POST /users",
+            "test_type": "boundary",
+            "priority": "medium",
+            "steps": ["Send request"],
+            "expected_results": ["Status 400"],
+        },
+    ]
+)
+
+
+class TestAsyncGeneration:
+    """Async generation path (``agenerate``): parity, concurrency, review."""
+
+    def setup_method(self) -> None:
+        self.prompt_builder = PromptBuilder()
+
+    def _input_endpoints_only(self) -> TestCaseGenInput:
+        return TestCaseGenInput(requirements=[], endpoints=_ENDPOINTS)
+
+    def _input_requirements_only(self) -> TestCaseGenInput:
+        return TestCaseGenInput(requirements=_REQUIREMENTS, endpoints=[])
+
+    def _input_both(self) -> TestCaseGenInput:
+        return TestCaseGenInput(requirements=_REQUIREMENTS, endpoints=_ENDPOINTS)
+
+    def _fake(self, response: str | list[str] = MOCK_LLM_RESPONSE) -> FakeAsyncLLM:
+        return FakeAsyncLLM(response)
+
+    async def test_agenerate_parity_requirements_only(self) -> None:
+        """agenerate produces the same cases as generate (requirements only)."""
+        fake = self._fake()
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=self.prompt_builder)
+        sync_cases = gen.generate(self._input_requirements_only())
+        async_cases = await gen.agenerate(self._input_requirements_only())
+        assert [c.id for c in sync_cases] == [c.id for c in async_cases]
+        assert len(async_cases) == 2
+        assert fake.chat_calls >= 1
+        assert fake.achat_calls >= 1
+
+    async def test_agenerate_parity_endpoints_only(self) -> None:
+        """agenerate produces the same cases as generate (endpoints only)."""
+        fake = self._fake()
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=self.prompt_builder)
+        sync_cases = gen.generate(self._input_endpoints_only())
+        async_cases = await gen.agenerate(self._input_endpoints_only())
+        assert [c.id for c in sync_cases] == [c.id for c in async_cases]
+        assert len(async_cases) == 2
+
+    async def test_agenerate_parity_both_phases(self) -> None:
+        """agenerate mirrors the two-phase result for requirements+endpoints."""
+        fake = self._fake()
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=self.prompt_builder)
+        sync_cases = gen.generate(self._input_both())
+        async_cases = await gen.agenerate(self._input_both())
+        # Phase 1 (1 batch) + Phase 2 (1 batch) = 2 calls, 2 cases each.
+        assert [c.id for c in sync_cases] == [c.id for c in async_cases]
+        assert len(async_cases) == 4
+        assert fake.achat_calls == 2
+
+    async def test_agenerate_empty_input(self) -> None:
+        """No requirements and no endpoints returns an empty list."""
+        gen = TestCaseGenerator(llm_client=self._fake(), prompt_builder=self.prompt_builder)
+        result = await gen.agenerate(TestCaseGenInput(requirements=[], endpoints=[]))
+        assert result == []
+
+    async def test_agenerate_concurrency_bounded(self) -> None:
+        """max_concurrency=2 caps concurrency at 2 (4 requirement coroutines)."""
+        events = {"current": 0, "max": 0}
+        lock = threading.Lock()
+
+        async def achat(sp: str, up: str, rf=None, max_tokens: int | None = None) -> str:
+            with lock:
+                events["current"] += 1
+                events["max"] = max(events["max"], events["current"])
+            await asyncio.sleep(0.05)
+            with lock:
+                events["current"] -= 1
+            return MOCK_LLM_RESPONSE
+
+        fake = FakeAsyncLLM(MOCK_LLM_RESPONSE, achat_impl=achat)
+        gen = TestCaseGenerator(
+            llm_client=fake,
+            prompt_builder=self.prompt_builder,
+            max_concurrency=2,
+        )
+        # 4 requirements -> 4 coroutines (per-requirement fan-out), each yields 2 cases.
+        reqs = [
+            RequirementItem(id=f"R{i}", title=f"T{i}", description="d", module=f"m{i}")
+            for i in range(4)
+        ]
+        cases = await gen.agenerate(TestCaseGenInput(requirements=reqs, endpoints=[]))
+        assert len(cases) == 8
+        assert events["max"] == 2
+
+    async def test_agenerate_unbounded_within_batch_count(self) -> None:
+        """max_concurrency=None falls back to default(5); 4 req coroutines run free."""
+        events = {"current": 0, "max": 0}
+        lock = threading.Lock()
+
+        async def achat(sp: str, up: str, rf=None, max_tokens: int | None = None) -> str:
+            with lock:
+                events["current"] += 1
+                events["max"] = max(events["max"], events["current"])
+            await asyncio.sleep(0.03)
+            with lock:
+                events["current"] -= 1
+            return MOCK_LLM_RESPONSE
+
+        fake = FakeAsyncLLM(MOCK_LLM_RESPONSE, achat_impl=achat)
+        gen = TestCaseGenerator(
+            llm_client=fake,
+            prompt_builder=self.prompt_builder,
+            max_concurrency=None,
+        )
+        reqs = [
+            RequirementItem(id=f"R{i}", title=f"T{i}", description="d", module=f"m{i}")
+            for i in range(4)
+        ]
+        await gen.agenerate(TestCaseGenInput(requirements=reqs, endpoints=[]))
+        # Only 4 requirement coroutines exist, so all 4 run concurrently (<= default 5).
+        assert events["max"] == 4
+
+    async def test_agenerate_with_review(self) -> None:
+        """Async review path alternates primary/secondary via achat."""
+        primary = FakeAsyncLLM([MOCK_LLM_RESPONSE, _REFINED_ASYNC])
+        secondary = FakeAsyncLLM([_REFINED_ASYNC])
+        gen = TestCaseGenerator(
+            llm_client=primary,
+            prompt_builder=self.prompt_builder,
+            review_enabled=True,
+            review_llm_client=secondary,
+            review_max_rounds=1,
+        )
+        cases = await gen.agenerate(self._input_endpoints_only())
+        # Generation uses primary (1 achat); review round 1 uses secondary (1 achat).
+        assert primary.achat_calls == 1
+        assert secondary.achat_calls == 1
+        assert len(cases) == 3
+
+
+class TestGenerationResilience:
+    """Resilience: a failing unit degrades instead of aborting the whole run."""
+
+    def test_one_failing_requirement_still_yields_others(self) -> None:
+        """When one requirement's LLM call fails, the others still produce cases.
+
+        Before the fix, any per-requirement LLM error propagated and aborted the
+        entire run. Now it degrades: the failing unit returns no cases while the
+        rest complete, and the run returns partial results instead of raising.
+        """
+        reqs = [
+            RequirementItem(
+                id="R1", title="Alpha", description="a", module="m1", acceptance_criteria=[]
+            ),
+            RequirementItem(
+                id="R2", title="Beta", description="b", module="m2", acceptance_criteria=[]
+            ),
+            RequirementItem(
+                id="R3", title="Gamma", description="c", module="m3", acceptance_criteria=[]
+            ),
+        ]
+
+        async def achat(sp: str, up: str, rf=None, max_tokens: int | None = None) -> str:
+            if "Gamma" in up:
+                raise RuntimeError("simulated model failure")
+            return MOCK_LLM_RESPONSE
+
+        fake = FakeAsyncLLM(MOCK_LLM_RESPONSE, achat_impl=achat)
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=PromptBuilder())
+
+        cases = asyncio.run(gen.agenerate(TestCaseGenInput(requirements=reqs, endpoints=[])))
+        # 2 of 3 requirements succeed -> 2 * 2 cases = 4. The run did NOT crash,
+        # and the single failing requirement degraded to [] instead of aborting.
+        assert len(cases) == 4
+        # Each produced case is a valid, re-numbered TestCase.
+        assert all(c.id for c in cases)
+        assert {c.id for c in cases} == {f"TC-{i:03d}" for i in range(1, 5)}
+
+    def test_total_failure_degrades_to_empty(self) -> None:
+        """When every call fails, agenerate degrades to an empty list (no crash).
+
+        The generator never aborts the run on a per-unit LLM error; it returns
+        as many valid cases as it can. Empty output is surfaced as a clear
+        error by the entry points (CLI/web), not by the generator itself.
+        """
+        reqs = [
+            RequirementItem(
+                id="R1", title="Alpha", description="a", module="m1", acceptance_criteria=[]
+            ),
+        ]
+
+        async def achat(sp: str, up: str, rf=None, max_tokens: int | None = None) -> str:
+            raise RuntimeError("simulated model failure")
+
+        fake = FakeAsyncLLM(MOCK_LLM_RESPONSE, achat_impl=achat)
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=PromptBuilder())
+
+        cases = asyncio.run(gen.agenerate(TestCaseGenInput(requirements=reqs, endpoints=[])))
+        assert cases == []
+
+
+class TestSessionAndEmptyRecovery:
+    """Session id correlation and empty-truncation recovery."""
+
+    def test_session_id_is_set_and_propagated(self) -> None:
+        """agenerate assigns a session id and pushes it to the LLM client."""
+        fake = FakeAsyncLLM(MOCK_LLM_RESPONSE)
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=PromptBuilder())
+        reqs = [
+            RequirementItem(
+                id="R1", title="A", description="d", module="m1", acceptance_criteria=[]
+            )
+        ]
+        asyncio.run(gen.agenerate(TestCaseGenInput(requirements=reqs, endpoints=[])))
+        assert gen.session_id is not None
+        assert len(gen.session_id) == 12  # uuid hex[:12]
+        assert fake.session_id == gen.session_id
+
+    def test_explicit_session_id_is_respected(self) -> None:
+        """An externally provided session id is used (for resume)."""
+        fake = FakeAsyncLLM(MOCK_LLM_RESPONSE)
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=PromptBuilder())
+        reqs = [
+            RequirementItem(
+                id="R1", title="A", description="d", module="m1", acceptance_criteria=[]
+            )
+        ]
+        asyncio.run(
+            gen.agenerate(
+                TestCaseGenInput(requirements=reqs, endpoints=[]), session_id="abc123def456"
+            )
+        )
+        assert gen.session_id == "abc123def456"
+        assert fake.session_id == "abc123def456"
+
+    def test_empty_truncation_retry_recovers(self) -> None:
+        """A requirement whose first call returns an EMPTY truncation recovers.
+
+        The generator catches ``LLMOutputTooLongError`` (empty response under
+        parallel load), re-asks with a compressed / full-regeneration scope at
+        the SAME token budget — we deliberately do NOT shrink ``max_tokens``
+        (that makes truncation *more* likely; see experience.md #10) — and the
+        retry succeeds instead of crashing or yielding 0 for that requirement.
+        """
+        calls: list[int] = []
+        seen_max_tokens: list[int | None] = []
+        seen_prompts: list[str] = []
+
+        async def achat(sp: str, up: str, rf=None, max_tokens: int | None = None) -> str:
+            seen_max_tokens.append(max_tokens)
+            seen_prompts.append(up)
+            calls.append(1)
+            if len(calls) == 1:
+                # First attempt: simulate an empty truncated response.
+                raise LLMOutputTooLongError(
+                    "Model returned an EMPTY response (finish_reason=length)."
+                )
+            return MOCK_LLM_RESPONSE
+
+        fake = FakeAsyncLLM(MOCK_LLM_RESPONSE, achat_impl=achat)
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=PromptBuilder())
+        reqs = [
+            RequirementItem(
+                id="R1", title="A", description="d", module="m1", acceptance_criteria=[]
+            )
+        ]
+        cases = asyncio.run(gen.agenerate(TestCaseGenInput(requirements=reqs, endpoints=[])))
+        # Recovered on retry -> produced cases, not [].
+        assert len(cases) == 2
+        # Retry keeps the SAME token budget (no shrink) on every attempt.
+        assert seen_max_tokens == [None, None]
+        # The re-ask tells the model its previous output was empty / to
+        # regenerate, not the misleading "remove code fences" hint.
+        assert "empty" in seen_prompts[1].lower() or "regenerate" in seen_prompts[1].lower()
+
+
+class TestFanOutRecovery:
+    """``_fan_out_recover``: concurrent stream-drop -> sequential recovery.
+
+    Reproduces the real failure from the user's run (2026-08-17): 3 requirements
+    are fanned out concurrently; REQ-001 succeeds while REQ-002/REQ-003 come
+    back EMPTY at the same moment (provider dropped their streams under parallel
+    load). The generator must retry ONLY the empty units, ONE AT A TIME
+    (concurrency=1), so the parallel pressure that caused the drops is relieved
+    and they recover -- instead of re-fanning them concurrently (the old
+    behavior that kept failing and forced the user to Ctrl-C).
+    """
+
+    @staticmethod
+    def _mk_case(title: str) -> TestCase:
+        return TestCase(
+            id="TC-X",
+            title=title,
+            description="d",
+            endpoint=APIEndpoint(method="GET", path="/x"),
+            test_type=TestType.FUNCTIONAL,
+            priority=TestPriority.HIGH,
+        )
+
+    async def test_fan_out_recovers_dropped_units_sequentially(self) -> None:
+        """Dropped units (2/3) are retried sequentially and recover.
+
+        Proves two things at once: (a) the empty units are retried and recover,
+        and (b) that retry is SERIAL -- at the moment a recovery unit starts, no
+        other recovery unit is in flight (concurrency=1). A concurrent re-fan
+        would let two recovery units overlap.
+        """
+        gen = TestCaseGenerator(
+            llm_client=FakeAsyncLLM(MOCK_LLM_RESPONSE),
+            prompt_builder=PromptBuilder(),
+        )
+        items = ["req1", "req2", "req3"]
+        invocations: dict[int, int] = {}
+        active = 0
+        lock = threading.Lock()
+
+        def make_coro(i: int, item: str):
+            async def _one() -> list[TestCase]:
+                nonlocal active
+                inv = invocations[i] = invocations.get(i, 0) + 1
+                # Recovery-phase entry (2nd invocation of a dropped unit):
+                # must be the only active recovery unit -> proves concurrency=1.
+                if i in (2, 3) and inv == 2:
+                    with lock:
+                        assert active == 0, f"recovery unit {i} overlapped another"
+                with lock:
+                    active += 1
+                await asyncio.sleep(0.005)
+                with lock:
+                    active -= 1
+                if i == 1:
+                    return [self._mk_case("good")]
+                if inv == 1:
+                    return []  # concurrent stream drop -> empty during fan-out
+                return [self._mk_case(f"recovered-{i}")]
+
+            return _one()
+
+        result = await gen._fan_out_recover(items, make_coro)
+
+        # All three units present: the good one + the two recovered ones.
+        assert len(result) == 3
+        # Good unit ran exactly once; each dropped unit ran twice (once in the
+        # fan-out, once in the sequential recovery). This is the smoking gun
+        # that recovery fires and is scoped to the failed units only.
+        assert invocations == {1: 1, 2: 2, 3: 2}
+
+    async def test_fan_out_skips_recovery_when_all_failed(self) -> None:
+        """If EVERY unit is empty, the model is genuinely down -> no recovery.
+
+        The guard ``if not failed or not any(results)`` must short-circuit so we
+        don't waste N serial retries on a model that is truly unreachable.
+        """
+        gen = TestCaseGenerator(
+            llm_client=FakeAsyncLLM(MOCK_LLM_RESPONSE),
+            prompt_builder=PromptBuilder(),
+        )
+        items = ["a", "b", "c"]
+        invocations: dict[int, int] = {}
+
+        def make_coro(i: int, item: str):
+            async def _one() -> list[TestCase]:
+                invocations[i] = invocations.get(i, 0) + 1
+                return []
+
+            return _one()
+
+        result = await gen._fan_out_recover(items, make_coro)
+        assert result == []
+        # No recovery pass: each unit invoked exactly once (fan-out only).
+        assert invocations == {1: 1, 2: 1, 3: 1}
+
+    async def test_concurrent_stream_drop_recovers_via_agenerate(self) -> None:
+        """End-to-end: a real ``agenerate`` run where 2/3 requirements are
+        dropped by the provider under concurrent load, then recover.
+
+        Mirrors the user's failing run exactly: REQ-001 OK, REQ-002 & REQ-003
+        empty at the same moment. Previously the retries also ran concurrently
+        and kept failing (user aborted). Now the generator retries only the
+        empty units, one at a time, and they recover.
+        """
+        per_req: dict[str, int] = {"REQ-002": 0, "REQ-003": 0}
+        active_rec = 0
+        lock = threading.Lock()
+
+        async def achat(sp: str, up: str, rf=None, max_tokens: int | None = None) -> str:
+            nonlocal active_rec
+            for rid in ("REQ-002", "REQ-003"):
+                if rid in up:
+                    per_req[rid] += 1
+                    if per_req[rid] > MAX_PARSE_RETRIES:
+                        # This is the recovery attempt -> must be serialized.
+                        with lock:
+                            assert active_rec == 0, "recovery calls overlapped"
+                        with lock:
+                            active_rec += 1
+                        await asyncio.sleep(0.01)
+                        with lock:
+                            active_rec -= 1
+                        return MOCK_LLM_RESPONSE
+                    raise LLMOutputTooLongError(
+                        "Model returned an EMPTY response (finish_reason=length)."
+                    )
+            return MOCK_LLM_RESPONSE  # REQ-001 always good
+
+        fake = FakeAsyncLLM(MOCK_LLM_RESPONSE, achat_impl=achat)
+        gen = TestCaseGenerator(llm_client=fake, prompt_builder=PromptBuilder())
+        reqs = [
+            RequirementItem(
+                id="REQ-001", title="Good", description="d", module="m1", acceptance_criteria=[]
+            ),
+            RequirementItem(
+                id="REQ-002", title="DroppedA", description="d", module="m2", acceptance_criteria=[]
+            ),
+            RequirementItem(
+                id="REQ-003", title="DroppedB", description="d", module="m3", acceptance_criteria=[]
+            ),
+        ]
+        cases = await gen.agenerate(TestCaseGenInput(requirements=reqs, endpoints=[]))
+
+        # All three requirements recovered -> 3 * 2 cases (MOCK_LLM_RESPONSE = 2).
+        assert len(cases) == 6
+        # Call accounting: REQ-001 = 1; REQ-002/003 each = MAX_PARSE_RETRIES
+        # failing fan-out attempts + 1 successful recovery = 4.
+        assert fake.achat_calls == 1 + 2 * (MAX_PARSE_RETRIES + 1)
+        # Recovery was serial: at no point did two recovery calls overlap.
+        assert active_rec <= 1

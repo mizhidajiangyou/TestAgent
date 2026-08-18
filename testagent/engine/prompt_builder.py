@@ -103,7 +103,10 @@ class PromptBuilder:
 
         system_prompt = (
             "You are a senior QA engineer. Generate comprehensive, well-structured "
-            "test cases from requirements and API specifications. Output only valid JSON."
+            "test cases from requirements and API specifications. Output only valid JSON. "
+            "Keep the total output within the model's token limit: prefer a focused set "
+            "of high-value cases with concise descriptions and steps over exhaustive "
+            "coverage, so the response is never cut off mid-JSON."
         )
         if historical_cases:
             system_prompt += (
@@ -404,9 +407,7 @@ class PromptBuilder:
         lang_section = f"\n{lang_hint}" if lang_hint else ""
         covered_section = ""
         if already_covered:
-            covered_section = (
-                f"\n## Already covered by Phase 1 (do NOT regenerate these scenarios)\n{already_covered}\n"
-            )
+            covered_section = f"\n## Already covered by Phase 1 (do NOT regenerate these scenarios)\n{already_covered}\n"
         if json_mode:
             output_footer = (
                 'Output ONLY the JSON object {"test_cases": [...]}. No markdown, no explanation.'

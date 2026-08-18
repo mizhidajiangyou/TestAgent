@@ -629,9 +629,7 @@ class TestConversationGuiRouting:
     def test_gui_script_respects_gui_url_context(self) -> None:
         """A caller-supplied gui_url is honored by the GUI prompt."""
         self.mock_llm.chat.return_value = _VALID_GUI_SCRIPT
-        self.session.send(
-            "generate gui script", context={"gui_url": "https://app.example.com"}
-        )
+        self.session.send("generate gui script", context={"gui_url": "https://app.example.com"})
         user_arg = self.mock_llm.chat.call_args.args[1]
         assert "app.example.com" in user_arg
 
@@ -641,4 +639,3 @@ class TestConversationGuiRouting:
         self.session.send("generate gui script")
         state = self.session.get_state()
         assert "syntax error" in state.feedback.lower()
-

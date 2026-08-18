@@ -76,15 +76,17 @@ class TestE2EPipeline:
 
     def test_full_pipeline(self, tmp_path: Path) -> None:
         """Run the minimal chain end-to-end."""
-        # Arrange: mock LLM returns testcase JSON for each batch, then k6 script.
-        # Two-phase generation:
-        #   Phase 1 (requirements): 3 reqs in 1 module batch -> 1 call
+        # Arrange: mock LLM returns testcase JSON for each call, then k6 script.
+        # Two-phase generation (requirements fan out ONE call per requirement):
+        #   Phase 1 (requirements): 3 reqs -> 3 calls (one per requirement)
         #   Phase 2 (API-specific): 4 endpoints / 2 per batch -> 2 calls
         #   Perf script: 1 call
-        #   Total: 4 calls, 6 test cases (3 batches * 2 cases)
+        #   Total: 6 calls, 10 test cases (5 batches * 2 cases)
         mock_llm = MagicMock()
         mock_llm.chat.side_effect = [
-            MOCK_TESTCASE_RESPONSE,  # Phase 1: requirements batch
+            MOCK_TESTCASE_RESPONSE,  # Phase 1: requirement 1
+            MOCK_TESTCASE_RESPONSE,  # Phase 1: requirement 2
+            MOCK_TESTCASE_RESPONSE,  # Phase 1: requirement 3
             MOCK_TESTCASE_RESPONSE,  # Phase 2: API batch 1/2
             MOCK_TESTCASE_RESPONSE,  # Phase 2: API batch 2/2
             MOCK_K6_RESPONSE,  # Performance script
@@ -101,17 +103,17 @@ class TestE2EPipeline:
         )
         assert len(requirements) == 3
 
-        # Step 2: generate test cases (two-phase: req batch + 2 api batches)
+        # Step 2: generate test cases (two-phase: 3 req calls + 2 api batches)
         tc_generator = TestCaseGenerator(
             llm_client=mock_llm, prompt_builder=container.prompt_builder
         )
         test_cases = tc_generator.generate(
             TestCaseGenInput(endpoints=endpoints, requirements=requirements)
         )
-        # 3 batches * 2 cases = 6 cases (re-numbered TC-001..TC-006)
-        assert len(test_cases) == 6
+        # 5 batches * 2 cases = 10 cases (re-numbered TC-001..TC-010)
+        assert len(test_cases) == 10
         assert test_cases[0].id == "TC-001"
-        assert test_cases[-1].id == "TC-006"
+        assert test_cases[-1].id == "TC-010"
 
         tc_path = tmp_path / "testcases.json"
         tc_generator.save(test_cases, tc_path)
@@ -152,5 +154,5 @@ class TestE2EPipeline:
         assert "Test Configuration" in content
         assert "k6 run" in content
 
-        # Verify LLM was called 4 times (1 req batch + 2 api batches + 1 perf script)
-        assert mock_llm.chat.call_count == 4
+        # Verify LLM was called 6 times (3 req calls + 2 api batches + 1 perf script)
+        assert mock_llm.chat.call_count == 6
