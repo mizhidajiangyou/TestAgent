@@ -13,8 +13,9 @@ from dependency_injector import containers, providers
 
 from testagent.config.settings import Settings, get_settings
 from testagent.engine.conversation import ConversationManager
-from testagent.engine.llm_client import MultiModelLLMClient, create_llm_client
+from testagent.engine.llm_client import create_llm_client
 from testagent.engine.prompt_builder import PromptBuilder
+from testagent.engine.session_store import create_session_store
 from testagent.generators.gui_test_generator import GUITestGenerator
 from testagent.generators.performance_generator import PerformanceGenerator
 from testagent.generators.testcase_generator import TestCaseGenerator
@@ -82,12 +83,22 @@ class Container(containers.DeclarativeContainer):
         output_language=settings.provided.output_language,
     )
 
+    # Conversation session persistence backend, selected by SESSION_STORE.
+    # Sessions are stored under <output_dir>/conversations/<id>.json when
+    # "file" (default), or kept in-memory only when "memory".
+    session_store = providers.Singleton(
+        create_session_store,
+        backend=settings.provided.session_store,
+        output_dir=settings.provided.output_dir,
+    )
+
     conversation_manager = providers.Singleton(
         ConversationManager,
         llm_client=llm_client,
         prompt_builder=prompt_builder,
         max_iterations=settings.provided.review_max_rounds,
         output_language=settings.provided.output_language,
+        store=session_store,
     )
 
     def __init__(self, settings: Settings | None = None) -> None:

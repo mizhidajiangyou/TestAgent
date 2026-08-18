@@ -236,7 +236,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
     # Async mirror (P1): concurrent batch fan-out via asyncio
     # ------------------------------------------------------------------
 
-    async def agenerate(self, data: TestCaseGenInput, session_id: str | None = None) -> list[TestCase]:
+    async def agenerate(
+        self, data: TestCaseGenInput, session_id: str | None = None
+    ) -> list[TestCase]:
         """Async variant of :meth:`generate`.
 
         Identical two-phase strategy and output, but Phase 1 / Phase 2 batches
@@ -325,17 +327,19 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             "Generation fan-out: %d/%d units returned empty (concurrent stream "
             "drop suspected). Retrying those %d sequentially (concurrency=1) to "
             "relieve parallel pressure on the single model.",
-            len(failed), len(items), len(failed),
+            len(failed),
+            len(items),
+            len(failed),
         )
-        recovered = await gather_with_concurrency(
-            1, *[make_coro(i + 1, items[i]) for i in failed]
-        )
+        recovered = await gather_with_concurrency(1, *[make_coro(i + 1, items[i]) for i in failed])
         for idx, new_cases in zip(failed, recovered, strict=True):
             results[idx] = new_cases
         recovered_units = sum(1 for c in recovered if c)
         logger.info(
             "Sequential recovery: %d/%d failed units recovered (%d cases).",
-            recovered_units, len(failed), sum(len(c) for c in recovered),
+            recovered_units,
+            len(failed),
+            sum(len(c) for c in recovered),
         )
         return [c for cases in results for c in cases]
 
@@ -365,7 +369,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     endpoints_text=endpoints_text,
                     requirements_text=req_text,
                     output_language=self._output_language,
-                    extra_context={"historical_cases": historical_text} if historical_text else None,
+                    extra_context={"historical_cases": historical_text}
+                    if historical_text
+                    else None,
                     json_mode=self._json_mode,
                 )
                 logger.info(

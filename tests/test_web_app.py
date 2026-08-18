@@ -70,22 +70,29 @@ def _make_container() -> SimpleNamespace:
         review_enabled=False,
         review_max_rounds=2,
     )
+    # Instances are built once and wrapped in lambdas so each provider-style
+    # ``container.<name>()`` call returns the same shared instance (the spy
+    # test mutates ``gen.agenerate`` and expects later calls to see it).
+    gen = TestCaseGenerator(llm_client=mock_llm, prompt_builder=PromptBuilder())
+    req_parser = RequirementParser()
+    # Swagger parser returns real endpoints so generated cases get real
+    # endpoint paths (matches the historical baseline for dedup tests).
+    swagger_parser = MagicMock(
+        parse=MagicMock(
+            return_value=[
+                APIEndpoint(method="GET", path="/users", summary="List users"),
+                APIEndpoint(method="POST", path="/users", summary="Create user"),
+            ]
+        )
+    )
+    tc_report = TestCaseReport()
     return SimpleNamespace(
-        testcase_generator=TestCaseGenerator(llm_client=mock_llm, prompt_builder=PromptBuilder()),
-        requirement_parser=RequirementParser(),
-        # Swagger parser returns real endpoints so generated cases get real
-        # endpoint paths (matches the historical baseline for dedup tests).
-        swagger_parser=MagicMock(
-            parse=MagicMock(
-                return_value=[
-                    APIEndpoint(method="GET", path="/users", summary="List users"),
-                    APIEndpoint(method="POST", path="/users", summary="Create user"),
-                ]
-            )
-        ),
-        testcase_report=TestCaseReport(),
-        llm_client=mock_llm,
-        settings=settings,
+        testcase_generator=lambda: gen,
+        requirement_parser=lambda: req_parser,
+        swagger_parser=lambda: swagger_parser,
+        testcase_report=lambda: tc_report,
+        llm_client=lambda: mock_llm,
+        settings=lambda: settings,
     )
 
 
@@ -225,7 +232,7 @@ class TestGenerate:
         container = _make_container()
         # Make the generator raise by giving it an LLM that always errors.
         # The async path uses achat, so the failure must be injected there.
-        container.testcase_generator._llm.achat.side_effect = RuntimeError("boom")
+        container.testcase_generator()._llm.achat.side_effect = RuntimeError("boom")
         c = TestClient(create_app(container=container))
         r = c.post(
             "/api/generate",
@@ -239,7 +246,7 @@ class TestGenerate:
         container = _make_container()
         from testagent.engine.llm_client import ModelUnavailableError
 
-        container.testcase_generator._llm.averify.side_effect = ModelUnavailableError(
+        container.testcase_generator()._llm.averify.side_effect = ModelUnavailableError(
             "Model 'gpt-4o-mini' is not available: 401"
         )
         c = TestClient(create_app(container=container))
@@ -260,13 +267,13 @@ class TestGenerateIntegration:
         """The web layer parses markdown into RequirementItems before agenerate."""
         container = _make_container()
         captured: list[TestCaseGenInput] = []
-        original_agenerate = container.testcase_generator.agenerate
+        original_agenerate = container.testcase_generator().agenerate
 
         async def spy(data: TestCaseGenInput, session_id: str | None = None) -> list[TestCase]:
             captured.append(data)
             return await original_agenerate(data, session_id=session_id)
 
-        container.testcase_generator.agenerate = spy  # type: ignore[method-assign]
+        container.testcase_generator().agenerate = spy  # type: ignore[method-assign]
 
         c = TestClient(create_app(container=container))
         r = c.post(

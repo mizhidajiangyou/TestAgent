@@ -137,7 +137,9 @@ class TestOpenAIClientTruncation:
     def _client_with_finish(finish_reason: str, content: str) -> OpenAIClient:
         inner = MagicMock()
         # Streaming response: one chunk carrying the (possibly empty) content.
-        inner.chat.completions.create.return_value = [_chunk(content=content, finish_reason=finish_reason)]
+        inner.chat.completions.create.return_value = [
+            _chunk(content=content, finish_reason=finish_reason)
+        ]
         return OpenAIClient(client=inner, model="m", timeout=1.0, max_output_tokens=100)
 
     def test_empty_truncation_raises_llm_output_too_long(self) -> None:

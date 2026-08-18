@@ -159,7 +159,7 @@ def create_app(container: Container | None = None) -> FastAPI:
     @app.get("/api/config", response_model=ConfigResponse, tags=["meta"])
     def get_config() -> ConfigResponse:
         """Return a sanitized configuration summary for the UI."""
-        settings = _get_container().settings
+        settings = _get_container().settings()
         if settings.azure_llm.enabled:
             provider = "azure"
             primary = settings.azure_llm.deployment
@@ -216,7 +216,7 @@ def create_app(container: Container | None = None) -> FastAPI:
 
         try:
             session_id = uuid.uuid4().hex[:12]
-            test_cases = await container.testcase_generator.agenerate(
+            test_cases = await container.testcase_generator().agenerate(
                 gen_input, session_id=session_id
             )
         except ModelUnavailableError as exc:
@@ -261,7 +261,7 @@ def create_app(container: Container | None = None) -> FastAPI:
             output_format=req.output_format,
             download_content=download_content,
             download_filename=download_filename,
-            token_usage=container.llm_client.usage.summary(),
+            token_usage=container.llm_client().usage.summary(),
             session_id=session_id,
             historical_count=len(historical),
         )
@@ -304,11 +304,11 @@ def _build_gen_input(
         req_path = Path(tmpdir) / "requirements.md"
         req_path.write_text(requirements_text, encoding="utf-8")
 
-        req_items = container.requirement_parser.parse(str(req_path))
+        req_items = container.requirement_parser().parse(str(req_path))
 
         endpoints: list[Any] = []
         if swagger_url:
-            endpoints = container.swagger_parser.parse(swagger_url)
+            endpoints = container.swagger_parser().parse(swagger_url)
 
         if not req_items and not endpoints:
             raise ValueError("No requirements could be parsed from the provided document.")
@@ -337,16 +337,16 @@ def _render_output(
     if output_format == "csv":
         with tempfile.TemporaryDirectory() as tmpdir:
             out = Path(tmpdir) / "testcases.csv"
-            container.testcase_generator.save_csv(test_cases, out)
+            container.testcase_generator().save_csv(test_cases, out)
             return out.read_text(encoding="utf-8-sig"), "testcases.csv"
     # markdown
     from testagent.config.models import TestCaseReportInput
 
-    report = container.testcase_report.generate(
+    report = container.testcase_report().generate(
         TestCaseReportInput(
             test_cases=test_cases,
             output_format="markdown",
-            output_language=container.settings.output_language,
+            output_language=container.settings().output_language,
         )
     )
     return report, "testcases.md"

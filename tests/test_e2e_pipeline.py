@@ -95,17 +95,17 @@ class TestE2EPipeline:
         container = Container()
 
         # Step 1: parse inputs
-        endpoints = container.swagger_parser.parse(str(EXAMPLES_DIR / "sample_swagger.json"))
+        endpoints = container.swagger_parser().parse(str(EXAMPLES_DIR / "sample_swagger.json"))
         assert len(endpoints) == 4
 
-        requirements = container.requirement_parser.parse(
+        requirements = container.requirement_parser().parse(
             str(EXAMPLES_DIR / "sample_requirements.md")
         )
         assert len(requirements) == 3
 
         # Step 2: generate test cases (two-phase: 3 req calls + 2 api batches)
         tc_generator = TestCaseGenerator(
-            llm_client=mock_llm, prompt_builder=container.prompt_builder
+            llm_client=mock_llm, prompt_builder=container.prompt_builder()
         )
         test_cases = tc_generator.generate(
             TestCaseGenInput(endpoints=endpoints, requirements=requirements)
@@ -121,19 +121,19 @@ class TestE2EPipeline:
 
         # Step 3: generate testcase report (markdown)
         report_meta = ReportMetadata(title="用户管理系统测试用例报告")
-        container.testcase_report._metadata = report_meta
-        tc_report = container.testcase_report.generate(
+        container.testcase_report()._metadata = report_meta
+        tc_report = container.testcase_report().generate(
             TestCaseReportInput(test_cases=test_cases, output_format="markdown")
         )
         tc_report_path = tmp_path / "testcase_report.md"
-        container.testcase_report.save(tc_report, tc_report_path)
+        container.testcase_report().save(tc_report, tc_report_path)
         assert tc_report_path.exists()
         assert "用户管理系统测试用例报告" in tc_report_path.read_text()
 
         # Step 4: generate performance script
         perf_generator = PerformanceGenerator(
             llm_client=mock_llm,
-            prompt_builder=container.prompt_builder,
+            prompt_builder=container.prompt_builder(),
             script_format="k6",
         )
         perf_config = PerformanceConfig(base_url="https://api.example.com", virtual_users=100)
@@ -144,11 +144,11 @@ class TestE2EPipeline:
         assert "import http" in script_path.read_text()
 
         # Step 5: generate performance report template
-        perf_report = container.performance_report.generate(
+        perf_report = container.performance_report().generate(
             PerfReportInput(script_path=str(script_path), config=perf_config)
         )
         perf_report_path = tmp_path / "perf_report.md"
-        container.performance_report.save(perf_report, perf_report_path)
+        container.performance_report().save(perf_report, perf_report_path)
         assert perf_report_path.exists()
         content = perf_report_path.read_text()
         assert "Test Configuration" in content

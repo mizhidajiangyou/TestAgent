@@ -82,7 +82,7 @@ class TokenUsage:
             f"completion_tokens={self.completion_tokens}, total_tokens={self.total_tokens}"
         )
 
-    def add(self, other: "TokenUsage") -> None:
+    def add(self, other: TokenUsage) -> None:
         """Accumulate another usage record into this one."""
         self.prompt_tokens += other.prompt_tokens
         self.completion_tokens += other.completion_tokens
@@ -155,7 +155,7 @@ class OpenAIClient:
 
     def __init__(
         self,
-        client: "OpenAI | AzureOpenAI",
+        client: OpenAI | AzureOpenAI,
         model: str,
         timeout: float = 300.0,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
@@ -336,7 +336,9 @@ class OpenAIClient:
                 raise
             except Exception as exc:
                 last_error = str(exc)
-                logger.warning("[%s] Attempt %d/%d failed: %s", sid, attempt, MAX_RETRIES, last_error)
+                logger.warning(
+                    "[%s] Attempt %d/%d failed: %s", sid, attempt, MAX_RETRIES, last_error
+                )
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_BACKOFF_SECONDS * attempt)
 
@@ -449,9 +451,7 @@ class OpenAIClient:
             self.usage.completion_tokens += usage.completion_tokens or 0
             self.usage.total_tokens += usage.total_tokens or 0
 
-    def _complete(
-        self, create_kwargs: dict[str, Any]
-    ) -> tuple[str, str | None, Any]:
+    def _complete(self, create_kwargs: dict[str, Any]) -> tuple[str, str | None, Any]:
         """Run a chat completion and normalize the result.
 
         Streams tokens when ``self._stream_enabled`` (real-time progress), and
@@ -482,9 +482,7 @@ class OpenAIClient:
         usage = resp.usage
         return content, finish_reason, usage
 
-    def _stream_completion(
-        self, create_kwargs: dict[str, Any]
-    ) -> tuple[str, str | None, Any]:
+    def _stream_completion(self, create_kwargs: dict[str, Any]) -> tuple[str, str | None, Any]:
         """Stream a chat completion and return ``(content, finish_reason, usage)``.
 
         Emits throttled live progress (so the operator sees tokens arrive in

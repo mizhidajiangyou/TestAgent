@@ -141,6 +141,11 @@ class Settings(BaseSettings):
     output_language: Literal["english", "chinese"] = Field(
         default="chinese", alias="OUTPUT_LANGUAGE"
     )
+    #: Conversation session persistence backend. ``"file"`` persists each
+    #: session as ``<output_dir>/conversations/<id>.json`` so it survives
+    #: process restarts and can be resumed; ``"memory"`` keeps sessions
+    #: in-process only (lost on restart). Default ``"file"``.
+    session_store: Literal["file", "memory"] = Field(default="file", alias="SESSION_STORE")
 
 
 @lru_cache(maxsize=1)
