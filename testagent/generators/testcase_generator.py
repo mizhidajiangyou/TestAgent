@@ -39,6 +39,11 @@ from testagent.engine.concurrency import gather_with_concurrency
 from testagent.engine.llm_client import JSON_OBJECT_FORMAT, LLMClient
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.base import BaseGenerator
+from testagent.generators.truncation import (
+    TruncationEngine,
+    TruncationPolicy,
+    _EngineHooks,
+)
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
 
@@ -96,6 +101,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         json_mode: bool = False,
         max_concurrency: int | None = None,
         verify_model: bool = True,
+        truncation_policy: TruncationPolicy | None = None,
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
@@ -152,6 +158,22 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 "Configure multiple models in OPENAI_MODEL to enable true "
                 "multi-model cross-validation."
             )
+
+        # Truncation-aware generation loop (plan v6). The engine owns the loop
+        # mechanics; JSON extraction / salvage / conversion / re-ask prompt
+        # building stay here and are injected as hooks.
+        self._truncation_policy = truncation_policy or TruncationPolicy()
+        self._engine = TruncationEngine(
+            self._truncation_policy,
+            self._json_mode,
+            _EngineHooks(
+                extract_json=self._extract_json,
+                salvage_truncated=self._salvage_truncated_json,
+                to_test_cases=self._to_test_cases,
+                build_reask=self._build_reask_prompt,
+                case_dedup_key=self._case_dedup_key,
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -459,12 +481,34 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         step_label: str,
         client: LLMClient | None = None,
     ) -> list[TestCase]:
-        """Async mirror of :meth:`_generate_with_retry`.
+        """Async truncation-aware generation (plan v6) with legacy fallback.
 
-        Uses ``await client.achat(...)`` instead of the blocking ``chat``;
-        re-ask retries remain serial within this batch.
+        Delegates to :class:`TruncationEngine.arun`, which drives the
+        pending/expected state machine over the rich ``achat_with_meta``
+        result (degrading to ``achat`` on legacy clients/mocks). When the
+        policy's ``enable_v4_resume`` flag is off, falls back to the fixed
+        v2 retry loop (:meth:`_agenerate_v2_legacy`).
         """
         llm = client or self._llm
+        if not self._truncation_policy.enable_v4_resume:
+            return await self._agenerate_v2_legacy(
+                system_prompt, user_prompt, endpoints, step_label, llm
+            )
+        return await self._engine.arun(llm, system_prompt, user_prompt, endpoints, step_label)
+
+    async def _agenerate_v2_legacy(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        endpoints: list[APIEndpoint],
+        step_label: str,
+        llm: LLMClient,
+    ) -> list[TestCase]:
+        """Legacy v2 fixed-retry loop (kept for rollback / A-B comparison).
+
+        Uses ``await client.achat(...)``; re-ask retries remain serial within
+        this batch.
+        """
         last_raw = ""
         # See sync mirror: force the "fewer/compact cases" re-ask hint when an
         # LLM call fails (e.g. output truncated to empty beyond the model limit).
@@ -752,14 +796,12 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         step_label: str,
         client: LLMClient | None = None,
     ) -> list[TestCase]:
-        """Call LLM with targeted re-ask on parse failure.
+        """Sync truncation-aware generation (plan v6) with legacy fallback.
 
-        Instead of blindly retrying with the same prompt, the re-ask tells
-        the LLM exactly what went wrong (parse error / truncation) and
-        includes the failed output so it can fix it.
-
-        Inspired by guardrails' NonParseableReAsk / SkeletonReAsk split:
-        we classify the failure and give the LLM a targeted fix hint.
+        Delegates to :class:`TruncationEngine.run` (``asyncio.run`` around the
+        async-native loop; the sync ``generate`` path never runs inside an
+        event loop). Falls back to :meth:`_generate_v2_legacy` when the
+        policy's ``enable_v4_resume`` flag is off.
 
         Args:
             client: Optional LLM client override (used by review rounds to
@@ -767,6 +809,24 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 the primary client.
         """
         llm = client or self._llm
+        if not self._truncation_policy.enable_v4_resume:
+            return self._generate_v2_legacy(system_prompt, user_prompt, endpoints, step_label, llm)
+        return self._engine.run(llm, system_prompt, user_prompt, endpoints, step_label)
+
+    def _generate_v2_legacy(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        endpoints: list[APIEndpoint],
+        step_label: str,
+        llm: LLMClient,
+    ) -> list[TestCase]:
+        """Legacy v2 targeted re-ask loop (guardrails-inspired, kept for rollback).
+
+        Instead of blindly retrying with the same prompt, the re-ask tells
+        the LLM exactly what went wrong (parse error / truncation) and
+        includes the failed output so it can fix it.
+        """
         last_raw = ""
         # When an LLM call itself fails (e.g. output truncated to empty because
         # the request exceeds the model's token limit), force the re-ask to use

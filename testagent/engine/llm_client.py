@@ -90,6 +90,20 @@ class TokenUsage:
         self.request_count += other.request_count
 
 
+@dataclass
+class LLMResponse:
+    """Rich result returned by ``chat_with_meta`` / ``achat_with_meta``.
+
+    ``chat()`` / ``achat()`` keep returning ``str`` for backward compatibility;
+    the truncation-aware generator path uses this variant to obtain
+    ``finish_reason`` / ``completion_tokens`` without breaking existing callers.
+    """
+
+    text: str
+    finish_reason: str | None = None
+    completion_tokens: int | None = None
+
+
 class LLMClient(Protocol):
     """LLM client interface."""
 
@@ -125,6 +139,32 @@ class LLMClient(Protocol):
         max_tokens: int | None = None,
     ) -> str:
         """Async variant of :meth:`chat` (see implementations)."""
+        ...
+
+    def chat_with_meta(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Rich-result variant of :meth:`chat`.
+
+        Returns an :class:`LLMResponse` carrying ``finish_reason`` and
+        ``completion_tokens`` (when reported) so the truncation-aware
+        generator can distinguish a genuine ``length`` truncation from a
+        heuristic near-cap response without string sniffing.
+        """
+        ...
+
+    async def achat_with_meta(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Async variant of :meth:`chat_with_meta`."""
         ...
 
     def set_session_id(self, session_id: str) -> None:
@@ -194,37 +234,23 @@ class OpenAIClient:
         """Enable or disable token streaming for this client."""
         self._stream_enabled = enabled
 
-    def chat(
+    def _chat_core(
         self,
         system_prompt: str,
         user_prompt: str,
         response_format: dict[str, object] | None = None,
         max_tokens: int | None = None,
-    ) -> str:
-        """Send a chat completion request with retry, backoff and streaming.
+    ) -> LLMResponse:
+        """Single source of truth for the retry / streaming / truncation loop.
 
-        By default the request is streamed token-by-token so the caller sees
-        live progress (and a ``still waiting`` watchdog fires if the stream
-        stalls). The accumulated text is returned as a single ``str`` (the
-        sync core contract is unchanged). If streaming is unsupported by the
-        provider, we transparently fall back to a blocking call.
+        Both :meth:`chat` (``str`` contract) and :meth:`chat_with_meta``
+        (rich :class:`LLMResponse`) delegate here; only the return shape
+        differs. Truncation semantics (unchanged from the original ``chat``):
 
-        If the response is truncated (``finish_reason == "length"``) but has
-        partial content, that partial is returned so the caller can salvage
-        it.         If it is truncated with *empty* content, a specific
-        :class:`LLMOutputTooLongError` is raised so the generator re-asks with
-        a compressed / fewer-cases scope (retrying the identical request cannot
-        help). The token budget is intentionally kept high on retry — shrinking
-        ``max_tokens`` makes truncation *more* likely, not less.
-
-        Args:
-            system_prompt: System message.
-            user_prompt: User message.
-            response_format: Optional ``response_format`` payload forwarded to
-                the OpenAI SDK (e.g. ``{"type": "json_object"}``). When the
-                backend does not support it, callers should pass ``None``
-                (the default) to avoid errors on non-OpenAI providers.
-            max_tokens: Optional per-call cap overriding ``self._max_output_tokens``.
+        - ``finish_reason == "length"`` WITH partial content → the partial is
+          returned (``finish_reason="length"``) so the caller can salvage it.
+        - empty content after all attempts → :class:`LLMOutputTooLongError`
+          (an empty/aborted provider response, NOT a token overflow).
         """
         sid = self._session_id or "-"
         effective_max = max_tokens if (max_tokens and max_tokens > 0) else self._max_output_tokens
@@ -286,6 +312,7 @@ class OpenAIClient:
                 if usage is not None:
                     self._record_usage(usage)
                 content_str = content or ""
+                completion_tokens = usage.completion_tokens if usage is not None else None
 
                 logger.info(
                     "[%s] ← model '%s' returned %d chars (finish_reason=%s)",
@@ -307,7 +334,11 @@ class OpenAIClient:
                         attempt,
                         MAX_RETRIES,
                     )
-                    return content_str.strip()
+                    return LLMResponse(
+                        text=content_str.strip(),
+                        finish_reason="length",
+                        completion_tokens=completion_tokens,
+                    )
 
                 if not content_str.strip():
                     # Empty response (any finish_reason, including 'length').
@@ -345,7 +376,11 @@ class OpenAIClient:
                         f"NOT fix an empty response (it would only make a genuine "
                         f"overflow more likely)."
                     )
-                return content_str.strip()
+                return LLMResponse(
+                    text=content_str.strip(),
+                    finish_reason=finish_reason,
+                    completion_tokens=completion_tokens,
+                )
             except LLMOutputTooLongError:
                 # Specific, fast-fail: let the generator re-ask with a smaller
                 # scope instead of retrying the identical (too-large) request.
@@ -361,6 +396,32 @@ class OpenAIClient:
         raise RuntimeError(
             f"Failed to get LLM response after {MAX_RETRIES} attempts. Last error: {last_error}"
         )
+
+    def chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Send a chat completion request (``str`` contract, unchanged).
+
+        Streams by default for live progress, retries with backoff, salvages
+        truncated partials, and raises :class:`LLMOutputTooLongError` on empty
+        responses. See :meth:`_chat_core` for the full semantics; this is a
+        thin wrapper returning only ``.text``.
+        """
+        return self._chat_core(system_prompt, user_prompt, response_format, max_tokens).text
+
+    def chat_with_meta(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Truncation-aware variant: expose finish_reason / completion_tokens."""
+        return self._chat_core(system_prompt, user_prompt, response_format, max_tokens)
 
     async def achat(
         self,
@@ -378,6 +439,25 @@ class OpenAIClient:
         """
         return await asyncio.to_thread(
             self.chat, system_prompt, user_prompt, response_format, max_tokens
+        )
+
+    async def achat_with_meta(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Async variant of :meth:`chat_with_meta` (same ``to_thread`` shim).
+
+        Kept source-identical to :meth:`achat` on purpose: the sync SDK core
+        has no native async channel, so ``to_thread`` *is* what makes the
+        concurrent fan-out possible. If the core ever moves to
+        ``openai.AsyncOpenAI``, replace the body with a native ``await`` on
+        the async core (the pre-arranged upgrade seam).
+        """
+        return await asyncio.to_thread(
+            self.chat_with_meta, system_prompt, user_prompt, response_format, max_tokens
         )
 
     def verify(self) -> None:
@@ -746,6 +826,74 @@ class MultiModelLLMClient:
                         client.model_name,
                     )
 
+        raise RuntimeError(
+            f"All {len(self._clients)} model(s) failed (async). Last error: {last_error}"
+        )
+
+    def chat_with_meta(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Rich-result variant of :meth:`chat` with identical fallback order."""
+        last_error: Exception | None = None
+        for idx, client in enumerate(self._clients):
+            label = "primary" if idx == 0 else f"fallback #{idx}"
+            try:
+                logger.debug("Trying %s model (meta): %s", label, client.model_name)
+                return client.chat_with_meta(
+                    system_prompt, user_prompt, response_format, max_tokens
+                )
+            except Exception as exc:
+                last_error = exc
+                if idx < len(self._clients) - 1:
+                    logger.warning(
+                        "%s model '%s' failed (%s); falling back to next model.",
+                        label,
+                        client.model_name,
+                        exc,
+                    )
+                else:
+                    logger.error(
+                        "%s model '%s' failed (%s); no more fallback candidates.",
+                        label,
+                        client.model_name,
+                        exc,
+                    )
+        raise RuntimeError(f"All {len(self._clients)} model(s) failed. Last error: {last_error}")
+
+    async def achat_with_meta(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_format: dict[str, object] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Async variant of :meth:`chat_with_meta` with identical fallback order."""
+        last_error: Exception | None = None
+        for idx, client in enumerate(self._clients):
+            label = "primary" if idx == 0 else f"fallback #{idx}"
+            try:
+                logger.debug("Trying %s model (async meta): %s", label, client.model_name)
+                return await client.achat_with_meta(
+                    system_prompt, user_prompt, response_format, max_tokens
+                )
+            except Exception as exc:
+                last_error = exc
+                if idx < len(self._clients) - 1:
+                    logger.warning(
+                        "%s model '%s' failed (async); falling back to next model.",
+                        label,
+                        client.model_name,
+                    )
+                else:
+                    logger.error(
+                        "%s model '%s' failed (async); no more fallback candidates.",
+                        label,
+                        client.model_name,
+                    )
         raise RuntimeError(
             f"All {len(self._clients)} model(s) failed (async). Last error: {last_error}"
         )
