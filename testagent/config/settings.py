@@ -60,6 +60,25 @@ class LLMSettings(BaseSettings):
     # provider does not support streaming (or ``stream_options``), the client
     # transparently falls back to a blocking call. Default True.
     stream: bool = Field(default=True, alias="OPENAI_STREAM")
+    # Explicit model profile override (plan v10 §3.3): empty = auto-match by
+    # model name, falling back to the generic profile. An unknown name fails
+    # fast at client construction listing the available profiles.
+    model_profile: str = Field(default="", alias="OPENAI_MODEL_PROFILE")
+    # First-round effort intent tier (e.g. "low" / "medium" / "disabled");
+    # empty = model default. This is an INTENT, not a raw parameter: the
+    # resolved profile translates it into the model's dialect.
+    reasoning_effort: str = Field(default="", alias="OPENAI_REASONING_EFFORT")
+    # One-shot downgrade effort tier for budget-exhausted recovery (plan v10
+    # §7). Empty = use the profile's own continuation_intent (deepseek:
+    # disabled, qwen: low, openai-reasoning: low).
+    continuation_reasoning_effort: str = Field(
+        default="", alias="OPENAI_CONTINUATION_REASONING_EFFORT"
+    )
+    # Qwen-only: thinking_budget cap applied when effort tier "low" is
+    # translated for the qwen3.8 profile (UNVERIFIED until diagnosed).
+    continuation_thinking_budget: int = Field(
+        default=4096, alias="OPENAI_CONTINUATION_THINKING_BUDGET"
+    )
 
     @property
     def models(self) -> list[str]:

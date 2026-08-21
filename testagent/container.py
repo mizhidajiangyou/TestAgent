@@ -19,6 +19,7 @@ from testagent.engine.session_store import create_session_store
 from testagent.generators.gui_test_generator import GUITestGenerator
 from testagent.generators.performance_generator import PerformanceGenerator
 from testagent.generators.testcase_generator import TestCaseGenerator
+from testagent.generators.truncation import TruncationPolicy
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
 from testagent.reports.performance_report import PerformanceReport
@@ -55,6 +56,15 @@ class Container(containers.DeclarativeContainer):
     # so caching it as a singleton is correct.
     review_client = providers.Singleton(llm_client.provided.secondary_client.call())
 
+    # Truncation policy mirrors OPENAI_MAX_OUTPUT_TOKENS so the engine's
+    # per-call cap and the client's configured budget stay in sync (plan
+    # v8 §4.4: the policy default previously hardcoded 16000 and silently
+    # diverged from a custom setting).
+    truncation_policy = providers.Singleton(
+        TruncationPolicy,
+        output_token_cap=settings.provided.llm.max_output_tokens,
+    )
+
     testcase_generator = providers.Singleton(
         TestCaseGenerator,
         llm_client=llm_client,
@@ -66,6 +76,7 @@ class Container(containers.DeclarativeContainer):
         json_mode=settings.provided.llm.json_mode,
         max_concurrency=settings.provided.llm.max_concurrency,
         verify_model=settings.provided.llm.verify_model,
+        truncation_policy=truncation_policy,
     )
 
     gui_generator = providers.Singleton(

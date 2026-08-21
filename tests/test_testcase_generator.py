@@ -259,7 +259,9 @@ class TestTestCaseGenerator:
         self.mock_llm.chat.return_value = "not valid json"
         test_cases = self.generator.generate(self._input_endpoints_only())
         assert len(test_cases) == 0
-        assert self.mock_llm.chat.call_count == MAX_PARSE_RETRIES
+        # v6 truncation loop re-asks until the call budget is exhausted
+        # (TruncationPolicy.max_total_calls), not a fixed retry count.
+        assert self.mock_llm.chat.call_count >= MAX_PARSE_RETRIES
 
     def test_review_disabled_calls_llm_once(self) -> None:
         """Test that review disabled results in a single LLM call (endpoints only)."""
@@ -459,7 +461,31 @@ class TestTestCaseGenerator:
             APIEndpoint(method="DELETE", path="/users/{id}", summary="Delete"),
             APIEndpoint(method="POST", path="/users/login", summary="Login"),
         ]
-        self.mock_llm.chat.return_value = MOCK_LLM_RESPONSE
+
+        # v6 filters raw items against the batch's endpoint scope, so each
+        # batch must return cases for ITS OWN endpoints (a catch-all response
+        # would be correctly dropped by the quota filter).
+        def case(cid: str, title: str, ep: str) -> dict[str, object]:
+            return {
+                "id": cid,
+                "title": title,
+                "endpoint": ep,
+                "test_type": "functional",
+                "priority": "high",
+                "steps": ["s"],
+                "expected_results": ["Status 200"],
+            }
+
+        batch1 = json.dumps(
+            [case("TC-001", "List", "GET /users"), case("TC-002", "Create", "POST /users")]
+        )
+        batch2 = json.dumps(
+            [
+                case("TC-003", "Delete", "DELETE /users/{id}"),
+                case("TC-004", "Login", "POST /users/login"),
+            ]
+        )
+        self.mock_llm.chat.side_effect = [batch1, batch2]
         generator = TestCaseGenerator(
             llm_client=self.mock_llm,
             prompt_builder=self.prompt_builder,
@@ -532,8 +558,10 @@ class TestTestCaseGenerator:
         generator.generate(self._input_endpoints_only())
         second_call_args = self.mock_llm.chat.call_args_list[1]
         user_prompt_arg = second_call_args.args[1]
-        assert "TRUNCATED" in user_prompt_arg
-        assert "FEWER" in user_prompt_arg
+        # v6 sends a CONTINUATION prompt after truncation: it names the
+        # truncation, lists what is already produced and what is still needed.
+        assert "truncated" in user_prompt_arg.lower()
+        assert "do NOT repeat" in user_prompt_arg
 
     def test_salvage_truncated_json(self) -> None:
         """Test that truncated JSON array is salvaged."""
@@ -1108,7 +1136,11 @@ class TestSessionAndEmptyRecovery:
         # Recovered on retry -> produced cases, not [].
         assert len(cases) == 2
         # Retry keeps the SAME token budget (no shrink) on every attempt.
-        assert seen_max_tokens == [None, None]
+        # v6 passes the policy cap explicitly (TruncationPolicy default 16000)
+        # instead of None, but never shrinks it between attempts.
+        from testagent.generators.truncation import TruncationPolicy
+
+        assert seen_max_tokens == [TruncationPolicy().output_token_cap] * 2
         # The re-ask tells the model its previous output was empty / to
         # regenerate, not the misleading "remove code fences" hint.
         assert "empty" in seen_prompts[1].lower() or "regenerate" in seen_prompts[1].lower()

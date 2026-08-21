@@ -82,13 +82,22 @@ class TestE2EPipeline:
         #   Phase 2 (API-specific): 4 endpoints / 2 per batch -> 2 calls
         #   Perf script: 1 call
         #   Total: 6 calls, 10 test cases (5 batches * 2 cases)
+        # v6 filters raw items against each batch's endpoint scope, so the
+        # Phase-2 batch-2 response must carry ITS endpoints (the second half
+        # of the spec: GET/DELETE /users/{id}); a catch-all GET/POST /users
+        # payload would be correctly dropped by the quota filter.
+        _batch2 = json.loads(MOCK_TESTCASE_RESPONSE)
+        _batch2[0]["endpoint"] = "GET /users/{id}"
+        _batch2[1]["endpoint"] = "DELETE /users/{id}"
+        batch2_response = json.dumps(_batch2, ensure_ascii=False)
+
         mock_llm = MagicMock()
         mock_llm.chat.side_effect = [
             MOCK_TESTCASE_RESPONSE,  # Phase 1: requirement 1
             MOCK_TESTCASE_RESPONSE,  # Phase 1: requirement 2
             MOCK_TESTCASE_RESPONSE,  # Phase 1: requirement 3
-            MOCK_TESTCASE_RESPONSE,  # Phase 2: API batch 1/2
-            MOCK_TESTCASE_RESPONSE,  # Phase 2: API batch 2/2
+            MOCK_TESTCASE_RESPONSE,  # Phase 2: API batch 1/2 (GET/POST /users)
+            batch2_response,  # Phase 2: API batch 2/2 (GET/DELETE /users/{id})
             MOCK_K6_RESPONSE,  # Performance script
         ]
 

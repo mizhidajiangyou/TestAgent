@@ -5,10 +5,13 @@ Uses Jinja2 templates for flexible prompt construction.
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 from jinja2 import BaseLoader, Environment, FileSystemLoader
+
+from testagent.config.models import APIEndpoint
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +192,61 @@ class PromptBuilder:
             )
 
         return system_prompt, user_prompt
+
+    def build_slim_continue_context(
+        self,
+        *,
+        endpoints_signature: str,
+        requirement_summary: str,
+        fingerprint: str,
+        label: str,
+        pending: dict[str, int],
+        max_tokens_budget: int = 2000,
+    ) -> str:
+        """Slim continuation context after truncation / downgrade (plan A).
+
+        Explicitly EXCLUDES the heavyweight parts of the original prompt:
+        the Rules region, worked example and historical cases. When the total
+        exceeds the budget, sections are truncated lowest-priority first —
+        requirement summary, then endpoint signature — while the "still
+        needed" (pending) and "already produced" (fingerprint) sections are
+        NEVER truncated (they are what makes the continuation converge).
+
+        ``max_tokens_budget`` is an approximate token budget; it is converted
+        to a character budget with a conservative mixed-script coefficient of
+        2 chars/token (CJK ≈ 1.5, Latin ≈ 4 — 2 is the safe middle).
+        """
+        del label  # reserved for diagnostics; the sections below are complete
+        pending_text = (
+            ", ".join(f"{ep} x{max(0, n)}" for ep, n in pending.items() if n > 0) or "(none)"
+        )
+        tail = (
+            "CONTINUATION: your previous response for this task was TRUNCATED "
+            "(or came back empty) before the JSON closed properly.\n\n"
+            f"## Already produced (do NOT repeat)\n{fingerprint}\n\n"
+            f"## Still needed (endpoint xcount): {pending_text}\n\n"
+            "Generate ONLY the still-needed cases, same JSON shape as before. "
+            "Keep each case compact. Return a complete, properly closed JSON array."
+        )
+        char_budget = max(500, max_tokens_budget * 2) - len(tail)
+
+        sig_header = "## Endpoint signatures (compact)\n"
+        sum_header = "## Requirement summary\n"
+        sig_block = f"{sig_header}{endpoints_signature or '(none)'}\n\n"
+        summary_block = f"{sum_header}{requirement_summary or '(unavailable)'}\n\n"
+
+        # Priority truncation: the summary is cut first; the signature only
+        # when it alone still exceeds the remaining budget.
+        summary_limit = char_budget - len(sig_block) - len(sum_header) - 2
+        if summary_limit < len(requirement_summary or ""):
+            summary_body = _truncate_marker(requirement_summary or "", max(0, summary_limit))
+            summary_block = f"{sum_header}{summary_body}\n\n"
+        if len(sig_block) + len(summary_block) > char_budget:
+            sig_limit = char_budget - len(summary_block) - len(sig_header) - 2
+            sig_body = _truncate_marker(endpoints_signature or "", max(0, sig_limit))
+            sig_block = f"{sig_header}{sig_body}\n\n"
+
+        return sig_block + summary_block + tail
 
     def build_review_prompt(
         self,
@@ -553,3 +611,83 @@ Output ONLY raw JavaScript. No markdown."""
 Output ONLY the Python script code. No markdown fences, no explanations.
 The script must be syntactically valid Python runnable with:
   pytest test_script.py --browser chromium"""
+
+
+# ----------------------------------------------------------------------
+# Slim continuation context (plan v10 §6 / v8 方案 A)
+# ----------------------------------------------------------------------
+
+#: Section header(s) that carry the requirement text in rendered prompts.
+_REQUIREMENT_SECTION_RE = re.compile(
+    r"## Requirements(?: Context)?\s*\n(.*?)(?=\n## |\n---|\Z)", re.S
+)
+
+
+def _format_param(name: str, schema: Any, required: bool) -> str:
+    """Format one parameter as ``name(type,req|opt[,enum:a|b])``."""
+    t = schema.get("type", "?") if isinstance(schema, dict) else "?"
+    extra = ""
+    if isinstance(schema, dict) and schema.get("enum"):
+        extra = ",enum:" + "|".join(str(e) for e in schema["enum"])
+    return f"{name}({t},{'req' if required else 'opt'}{extra})"
+
+
+def endpoints_to_signature(endpoints: list[APIEndpoint]) -> str:
+    """Compact endpoint signature (plan v8 §1.2, dict-safe access).
+
+    Keeps name/type/required/enum for both parameters and the request body
+    schema's top-level properties; drops descriptions/examples. This is the
+    constraint source boundary/negative cases need, at a fraction of the
+    full ``endpoints_to_text`` size.
+    """
+    lines: list[str] = []
+    for ep in endpoints:
+        parts: list[str] = []
+        for p in ep.parameters or []:
+            if not isinstance(p, dict):
+                continue
+            parts.append(
+                _format_param(
+                    str(p.get("name", "")), p.get("schema") or {}, bool(p.get("required", False))
+                )
+            )
+        line = f"- {ep.method} {ep.path}"
+        if parts:
+            line += f" params:[{', '.join(sorted(parts))}]"
+        body = ep.request_body or {}
+        props = (body.get("schema") or {}).get("properties", {}) if isinstance(body, dict) else {}
+        if isinstance(props, dict) and props:
+            req_set = set((body.get("schema") or {}).get("required", []))
+            bparts = [_format_param(k, v or {}, k in req_set) for k, v in props.items()]
+            line += f" body:[{', '.join(sorted(bparts))}]"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def extract_requirement_summary(user_prompt: str, max_chars: int) -> str | None:
+    """Extract the requirements section from a rendered prompt (plan A).
+
+    Templates delimit requirement text with a ``## Requirements`` /
+    ``## Requirements Context`` section header, so the summary is surgical:
+    the full Rules region / worked example / historical cases are left out.
+    Returns ``None`` when no section is found (caller falls back to the
+    legacy full-prompt continuation).
+    """
+    match = _REQUIREMENT_SECTION_RE.search(user_prompt)
+    if not match:
+        return None
+    text = match.group(1).strip()
+    if not text:
+        return None
+    if len(text) > max_chars:
+        return text[:max_chars] + "\n... [truncated]"
+    return text
+
+
+def _truncate_marker(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    cut = max(0, limit - len("\n... [truncated]"))
+    return text[:cut] + "\n... [truncated]"

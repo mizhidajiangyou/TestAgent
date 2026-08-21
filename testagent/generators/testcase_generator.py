@@ -37,12 +37,17 @@ from testagent.config.models import (
 )
 from testagent.engine.concurrency import gather_with_concurrency
 from testagent.engine.llm_client import JSON_OBJECT_FORMAT, LLMClient
-from testagent.engine.prompt_builder import PromptBuilder
+from testagent.engine.prompt_builder import (
+    PromptBuilder,
+    endpoints_to_signature,
+    extract_requirement_summary,
+)
 from testagent.generators.base import BaseGenerator
 from testagent.generators.truncation import (
     TruncationEngine,
     TruncationPolicy,
     _EngineHooks,
+    build_continue_prompt,
 )
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
@@ -159,9 +164,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 "multi-model cross-validation."
             )
 
-        # Truncation-aware generation loop (plan v6). The engine owns the loop
-        # mechanics; JSON extraction / salvage / conversion / re-ask prompt
-        # building stay here and are injected as hooks.
+        # Truncation-aware generation loop (plan v6 + v10 B). The engine owns
+        # the loop mechanics; JSON extraction / salvage / conversion / re-ask
+        # prompt building stay here and are injected as hooks.
         self._truncation_policy = truncation_policy or TruncationPolicy()
         self._engine = TruncationEngine(
             self._truncation_policy,
@@ -172,6 +177,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 to_test_cases=self._to_test_cases,
                 build_reask=self._build_reask_prompt,
                 case_dedup_key=self._case_dedup_key,
+                build_continue_context=self._build_continue_context,
             ),
         )
 
@@ -926,6 +932,35 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             # Some JSON structure exists but still failed to parse
             return "truncated"
         return "non_parseable"
+
+    def _build_continue_context(
+        self,
+        user_prompt: str,
+        endpoints: list[APIEndpoint],
+        fingerprint: str,
+        label: str,
+        pending: dict[str, int],
+    ) -> str:
+        """Slim continuation context hook (plan v10 §6 / v8 方案 A).
+
+        Replaces the legacy full-prompt continuation: endpoint signatures +
+        requirement summary + fingerprint + pending, WITHOUT the 9KB Rules
+        region, worked example or historical cases. Falls back to the legacy
+        full-prompt continuation when the requirement section cannot be
+        extracted from the rendered prompt (nothing to build a summary from).
+        """
+        char_budget = self._truncation_policy.slim_continue_max_tokens * 2
+        summary = extract_requirement_summary(user_prompt, char_budget)
+        if summary is None:
+            return build_continue_prompt(user_prompt, fingerprint, label, pending)
+        return self._prompt_builder.build_slim_continue_context(
+            endpoints_signature=endpoints_to_signature(endpoints),
+            requirement_summary=summary,
+            fingerprint=fingerprint,
+            label=label,
+            pending=pending,
+            max_tokens_budget=self._truncation_policy.slim_continue_max_tokens,
+        )
 
     @staticmethod
     def _build_reask_prompt(

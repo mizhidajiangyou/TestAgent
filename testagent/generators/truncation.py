@@ -31,10 +31,21 @@ from typing import Any
 
 from testagent.config.models import APIEndpoint, TestCase
 from testagent.engine.llm_client import (
+    CALL_LABEL,
     JSON_OBJECT_FORMAT,
     LLMClient,
     LLMOutputTooLongError,
     LLMResponse,
+    ReasoningBudgetExhaustedError,
+)
+from testagent.engine.model_profiles import (
+    ModelProfile,
+    NextAction,
+    Outcome,
+    RecoveryState,
+    RequestIntent,
+    classify_response,
+    recovery_plan,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +94,13 @@ class TruncationPolicy:
     max_empty_streak: int = 3
     #: Minimum remaining time (seconds) to justify another LLM call.
     min_call_budget: float = 30.0
+    #: Approximate token budget for the slim continuation context (plan v10
+    #: §8). Converted to a character budget (2 chars/token) inside the
+    #: prompt builder.
+    slim_continue_max_tokens: int = 2000
+    #: Multiplier for the last-resort RAISE_BUDGET recovery action; the result
+    #: is still clamped to the profile's real output cap (plan v10 §5.2).
+    budget_raise_multiplier: float = 2.0  # x2, capped by the profile
 
 
 # ----------------------------------------------------------------------
@@ -289,34 +307,31 @@ class _SyncPreferredAdapter:
         user_prompt: str,
         response_format: Any = None,
         max_tokens: Any = None,
+        intent_override: RequestIntent | None = None,
     ) -> LLMResponse:
+        # Layer 4 of the intent_override chain (plan v10 §4.2, P0-2): this
+        # method is EXPLICITLY defined, so the ``__getattr__`` fallback does
+        # NOT apply — a new parameter must be added here or it never reaches
+        # the inner client (the TypeError root cause found in review).
+        # The kwarg is only forwarded when set, so legacy inner clients with
+        # fixed signatures stay compatible.
+        call_kwargs: dict[str, Any] = {"response_format": response_format, "max_tokens": max_tokens}
+        if intent_override is not None:
+            call_kwargs["intent_override"] = intent_override
+
         cm = getattr(self._inner, "chat_with_meta", None)
         if cm is not None:
-            result = await asyncio.to_thread(
-                cm,
-                system_prompt,
-                user_prompt,
-                response_format=response_format,
-                max_tokens=max_tokens,
-            )
+            result = await asyncio.to_thread(cm, system_prompt, user_prompt, **call_kwargs)
             if isinstance(result, LLMResponse):
                 return result
             # Not a real rich result (e.g. an auto-created MagicMock attribute
             # on a plain double): fall through to the configured sync ``chat``.
         chat = getattr(self._inner, "chat", None)
         if chat is not None:
-            text = await asyncio.to_thread(
-                chat,
-                system_prompt,
-                user_prompt,
-                response_format=response_format,
-                max_tokens=max_tokens,
-            )
+            text = await asyncio.to_thread(chat, system_prompt, user_prompt, **call_kwargs)
             return LLMResponse(text=text)
         # Pure-async double (no sync contract at all): delegate unchanged.
-        result = await self._inner.achat_with_meta(
-            system_prompt, user_prompt, response_format, max_tokens
-        )
+        result = await self._inner.achat_with_meta(system_prompt, user_prompt, **call_kwargs)
         if isinstance(result, LLMResponse):
             return result
         return LLMResponse(text=str(result))
@@ -345,6 +360,12 @@ class _EngineHooks:
     to_test_cases: Callable[[list[Any], list[APIEndpoint]], list[TestCase]]
     build_reask: Callable[[str, str, str, str], str]
     case_dedup_key: Callable[[TestCase], str]
+    #: Optional slim continuation context builder (plan v10 §6 / v8 方案 A).
+    #: Signature: (user_prompt, endpoints, fingerprint, label, pending) -> str.
+    #: When None the engine falls back to the legacy full-prompt continuation.
+    build_continue_context: (
+        Callable[[str, list[APIEndpoint], str, str, dict[str, int]], str] | None
+    ) = None
 
 
 class TruncationEngine:
@@ -402,6 +423,7 @@ class TruncationEngine:
         prompt: str,
         fmt: dict[str, object] | None,
         cap: int,
+        intent: RequestIntent | None = None,
     ) -> LLMResponse:
         """Call the LLM preferring the rich API, degrading to ``achat``.
 
@@ -411,10 +433,18 @@ class TruncationEngine:
         ``MagicMock`` attribute), we transparently fall back to ``achat`` and
         wrap the text in an :class:`LLMResponse` with no metadata (the
         truncation heuristic then degrades to the character estimate).
+
+        ``intent`` is the recovery effort (plan v10 §4.2, P0-2). It is only
+        forwarded when the client advertises ``intent_capable`` — capability
+        probing rather than duck-typing the kwarg keeps the 316-test legacy
+        fake population free of TypeErrors.
         """
+        call_kwargs: dict[str, Any] = {"response_format": fmt, "max_tokens": cap}
+        if intent is not None and getattr(llm, "intent_capable", False):
+            call_kwargs["intent_override"] = intent
         rich = getattr(llm, "achat_with_meta", None)
         if rich is not None:
-            maybe = rich(system_prompt, prompt, response_format=fmt, max_tokens=cap)
+            maybe = rich(system_prompt, prompt, **call_kwargs)
             if inspect.isawaitable(maybe):
                 result = await maybe
                 if isinstance(result, LLMResponse):
@@ -431,10 +461,28 @@ class TruncationEngine:
         endpoints: list[APIEndpoint],
         label: str,
     ) -> list[TestCase]:
-        """Run the v6 truncation-aware loop (plan v6 §4)."""
+        """Run the v6/v10 truncation-aware loop (plan v6 §4 + v10 §5)."""
         policy = self._policy
         hooks = self._hooks
         fmt = JSON_OBJECT_FORMAT if self._json_mode else None
+
+        # Tag every client-side log line for this batch (e.g. "[sid][Req
+        # REQ-001/3] streaming: ..."). Concurrent fan-out otherwise makes
+        # interleaved streaming logs indistinguishable — it LOOKS sequential.
+        # Task-scoped: each gathered arun runs in its own asyncio Task with a
+        # copied context, and asyncio.to_thread propagates it to the worker,
+        # so labels never cross between concurrent batches.
+        CALL_LABEL.set(label)
+
+        # ---- capability detection (plan v10 §4.2 / §5) ----
+        # The profile and continuation intent live on the client; plain fakes
+        # (no attributes) degrade to the legacy behaviour transparently.
+        raw_profile = getattr(llm, "profile", None)
+        profile = raw_profile if isinstance(raw_profile, ModelProfile) else None
+        raw_cont = getattr(llm, "continuation_intent", None)
+        cont_effort = raw_cont if isinstance(raw_cont, str) and raw_cont else None
+        intent_capable = bool(getattr(llm, "intent_capable", False))
+        downgrade_possible = cont_effort is not None and intent_capable
 
         scope = [ep.full_path for ep in endpoints]
         batch_set = set(scope)
@@ -452,6 +500,11 @@ class TruncationEngine:
         deadline = time.monotonic() + policy.max_wall_time
         calls = 0
         transient_streak = 0
+        # Budget-exhausted recovery state (plan v10 §5.2).
+        downgrade_used = False
+        budget_raised = False
+        downgrade_effort: str | None = None
+        current_cap = policy.output_token_cap
 
         def _merge(new_cases: list[TestCase]) -> int:
             """Merge new cases into produced (dedup by key); return added count."""
@@ -480,6 +533,85 @@ class TruncationEngine:
             recompute_covered_pending(expected, produced, covered, pending)
             return added
 
+        def _handle_budget_exhausted() -> list[TestCase] | None:
+            """Recovery decision for BUDGET_EXHAUSTED (plan v10 §5.2).
+
+            Sequence: one-shot DOWNGRADE → SPLIT (shrink scope) →
+            RAISE_BUDGET (clamped to the profile cap) → FAIL (salvage).
+            Returns the final case list when recovery is exhausted, else
+            ``None`` to continue the loop with the action applied.
+            """
+            nonlocal downgrade_used, budget_raised, downgrade_effort, current_cap
+            nonlocal scope, batch_set, pending, scope_floor_reached
+            nonlocal stall, empty_streak, single_scope_rounds, forced, last_raw
+
+            state = RecoveryState(
+                downgrade_used=downgrade_used or not downgrade_possible,
+                pending_total=sum(max(0, v) for v in pending.values()),
+                scope_size=len(scope),
+                budget_raised=budget_raised,
+                floor_reached=scope_floor_reached or not expected,
+            )
+            action = recovery_plan(profile, state)
+
+            if action is NextAction.DOWNGRADE:
+                # One-shot effort downgrade (deepseek: disable thinking → zero
+                # reasoning overhead + temperature=0 determinism, P1-2). The
+                # downgraded effort stays sticky for the rest of the batch.
+                downgrade_used = True
+                downgrade_effort = cont_effort
+                logger.warning(
+                    "[%s] budget exhausted; downgrading effort to '%s' (one-shot)",
+                    label,
+                    cont_effort,
+                )
+                forced, last_raw = "truncated", ""
+                return None
+
+            if action is NextAction.SPLIT:
+                # Main recovery: shrink the scope (v6 machinery reuse).
+                logger.warning(
+                    "[%s] budget exhausted; splitting scope %d -> %d",
+                    label,
+                    len(scope),
+                    max(policy.min_scope, len(scope) // 2),
+                )
+                scope, batch_set, pending, scope_floor_reached = shrink_scope(
+                    scope, expected, produced, covered, policy
+                )
+                stall = 0
+                empty_streak = 0
+                single_scope_rounds = 0
+                forced, last_raw = "truncated", ""
+                return None
+
+            if action is NextAction.RAISE_BUDGET:
+                # Last resort, clamped to the model's real output cap (P0-4).
+                raw_cap = getattr(llm, "max_output_cap", None)
+                hard_cap = raw_cap if isinstance(raw_cap, int) and raw_cap > 0 else None
+                new_cap = int(current_cap * policy.budget_raise_multiplier)
+                if hard_cap is not None:
+                    new_cap = min(new_cap, hard_cap)
+                if new_cap > current_cap:
+                    budget_raised = True
+                    current_cap = new_cap
+                    logger.warning(
+                        "[%s] budget exhausted; raising output budget to %d (last resort)",
+                        label,
+                        new_cap,
+                    )
+                    forced, last_raw = "truncated", ""
+                    return None
+
+            logger.warning(
+                "[%s] budget exhausted; recovery options exhausted, returning %d cases",
+                label,
+                len(produced),
+            )
+            return self._salvage_and_return(
+                produced, last_raw, endpoints, batch_set, expected, seen_keys
+            )
+
         while True:
             # ---- global budget guards ----
             if calls >= policy.max_total_calls:
@@ -502,25 +634,47 @@ class TruncationEngine:
 
             # ---- prompt selection ----
             if forced == "truncated":
-                prompt = build_continue_prompt(
-                    user_prompt, compress_fingerprint(produced), label, pending
-                )
+                fingerprint = compress_fingerprint(produced)
+                if hooks.build_continue_context is not None:
+                    # Slim continuation context (plan v10 §6 / v8 方案 A):
+                    # endpoint signatures + requirement summary instead of
+                    # re-sending the full prompt with the 9KB Rules region.
+                    prompt = hooks.build_continue_context(
+                        user_prompt, endpoints, fingerprint, label, pending
+                    )
+                else:
+                    prompt = build_continue_prompt(user_prompt, fingerprint, label, pending)
             elif forced:
                 prompt = hooks.build_reask(user_prompt, last_raw, label, forced)
             else:
                 prompt = user_prompt
 
             # ---- LLM call (rich result) ----
+            intent = (
+                RequestIntent(budget=current_cap, effort=downgrade_effort)
+                if downgrade_effort
+                else None
+            )
             try:
                 result = await self._call_llm(
-                    llm, system_prompt, prompt, fmt, policy.output_token_cap
+                    llm, system_prompt, prompt, fmt, current_cap, intent=intent
                 )
+            except ReasoningBudgetExhaustedError as exc:
+                # P0-3 main path: the client short-circuited the identical
+                # retries and every fallback model already failed. Recovery:
+                # one downgrade → split → raise budget → fail.
+                logger.warning("[%s] reasoning budget exhausted: %s", label, exc)
+                final = _handle_budget_exhausted()
+                if final is not None:
+                    return final
+                continue
             except LLMOutputTooLongError:
-                # Empty truncation. With an endpoint scope this means the
-                # scope is beyond the model's real output capacity — shrink
-                # it and continue. Without endpoints (requirements-only
-                # batches) there is nothing to shrink: treat it as a
-                # retryable empty response (v2 parity) instead of bailing out.
+                # Transient empty exhaustion (stream + blocking both empty).
+                # With an endpoint scope this means the scope is beyond the
+                # model's real output capacity — shrink it and continue.
+                # Without endpoints (requirements-only batches) there is
+                # nothing to shrink: treat it as a retryable empty response
+                # (v2 parity) instead of bailing out.
                 logger.warning("[%s] empty truncation (scope=%d)", label, len(scope))
                 if not expected:
                     empty_streak += 1
@@ -534,7 +688,9 @@ class TruncationEngine:
                     forced, last_raw = "empty", ""
                     continue
                 if scope_floor_reached:
-                    return self._salvage_and_return(produced, last_raw)
+                    return self._salvage_and_return(
+                        produced, last_raw, endpoints, batch_set, expected, seen_keys
+                    )
                 scope, batch_set, pending, scope_floor_reached = shrink_scope(
                     scope, expected, produced, covered, policy
                 )
@@ -582,7 +738,9 @@ class TruncationEngine:
                                 policy.max_single_scope_rounds,
                                 len(produced),
                             )
-                            return self._salvage_and_return(produced, raw_response)
+                            return self._salvage_and_return(
+                                produced, raw_response, endpoints, batch_set, expected, seen_keys
+                            )
                     else:
                         scope, batch_set, pending, scope_floor_reached = shrink_scope(
                             scope, expected, produced, covered, policy
@@ -606,6 +764,21 @@ class TruncationEngine:
 
             # ---- empty response ----
             if empty_return:
+                # Compatibility path (plan v10 §4.3): production clients raise
+                # instead of returning empty bodies, so this branch serves
+                # legacy clients and test fakes. Classify with the profile
+                # when available so a budget-exhausted empty body takes the
+                # recovery ladder here too.
+                if profile is not None and (
+                    classify_response(
+                        profile, text=raw_response, finish_reason=result.finish_reason
+                    )
+                    is Outcome.BUDGET_EXHAUSTED
+                ):
+                    final = _handle_budget_exhausted()
+                    if final is not None:
+                        return final
+                    continue
                 empty_streak += 1
                 logger.debug("[%s] empty return (streak=%d)", label, empty_streak)
                 if empty_streak >= policy.max_empty_streak:
@@ -640,11 +813,37 @@ class TruncationEngine:
                 raw_response,
             )
 
-    def _salvage_and_return(self, produced: list[TestCase], raw: str) -> list[TestCase]:
-        """Best-effort final salvage of the last raw response, then return."""
+    def _salvage_and_return(
+        self,
+        produced: list[TestCase],
+        raw: str,
+        endpoints: list[APIEndpoint],
+        batch_set: set[str],
+        expected: dict[str, int],
+        seen_keys: set[str],
+    ) -> list[TestCase]:
+        """Best-effort final salvage of the last raw response, then return.
+
+        v7-review bug fix: the salvaged items used to be discarded (both
+        branches returned ``produced`` untouched). They now go through the
+        same scope filter + conversion + dedup merge as in-loop absorptions.
+        """
         if not raw.strip():
             return produced
         items = self._hooks.salvage_truncated(raw)
         if not items:
             return produced
-        return produced
+        filtered = filter_to_scope(items, batch_set, expected) if batch_set else items
+        merged = list(produced)
+        keys = set(seen_keys)
+        added = 0
+        for tc in self._hooks.to_test_cases(filtered, endpoints):
+            key = self._hooks.case_dedup_key(tc)
+            if key in keys:
+                continue
+            keys.add(key)
+            merged.append(tc)
+            added += 1
+        if added:
+            logger.info("Final salvage merged %d additional cases", added)
+        return merged
