@@ -42,6 +42,7 @@ from testagent.engine.prompt_builder import (
     endpoints_to_signature,
     extract_requirement_summary,
 )
+from testagent.engine.review import ReviewLoop
 from testagent.generators.base import BaseGenerator
 from testagent.generators.truncation import (
     TruncationEngine,
@@ -164,6 +165,16 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 "multi-model cross-validation."
             )
 
+        # Shared review loop (plan v2 §4.3): round alternation, per-round
+        # fallback and counters live in engine/review.py; this generator
+        # contributes prompt building and its retry-heavy LLM call as hooks.
+        self._review_loop = ReviewLoop[list[TestCase]](
+            primary_llm=llm_client,
+            review_llm=self._review_llm,
+            prompt_builder=prompt_builder,
+            max_rounds=self._review_max_rounds,
+        )
+
         # Truncation-aware generation loop (plan v6 + v10 B). The engine owns
         # the loop mechanics; JSON extraction / salvage / conversion / re-ask
         # prompt building stay here and are injected as hooks.
@@ -180,6 +191,14 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 build_continue_context=self._build_continue_context,
             ),
         )
+
+    def set_review_enabled(self, enabled: bool) -> None:
+        """Runtime override of the review switch (CLI ``--review/--no-review``).
+
+        Public setter on purpose: callers (CLI/web) must never reach into
+        private attributes to flip runtime behavior.
+        """
+        self._review_enabled = enabled
 
     # ------------------------------------------------------------------
     # Public API
@@ -597,63 +616,19 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
     ) -> list[TestCase]:
         """Async mirror of :meth:`_review_and_refine`.
 
-        Review rounds stay serial (each round consumes the previous round's
-        output), but each round's ``_agenerate_with_retry`` may itself run
-        concurrently with other batches elsewhere — here only one round is in
-        flight at a time by design.
+        Delegates round control (alternation / fallback / counters) to the
+        shared :class:`ReviewLoop`; the LLM call itself stays on this
+        generator's retry-heavy ``_agenerate_with_retry`` path. Review rounds
+        remain serial — each round consumes the previous round's output.
         """
-        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
-        requirements_text = RequirementParser.requirements_to_text(requirements)
-
-        current_cases = test_cases
-        for round_idx in range(1, self._review_max_rounds + 1):
-            use_secondary = round_idx % 2 == 1
-            if use_secondary:
-                client = self._review_llm
-                client_label = "secondary" if self._review_is_cross_model else "primary(same)"
-            else:
-                client = self._llm
-                client_label = "primary"
-
-            current_json = json.dumps(
-                [self._testcase_to_dict(tc) for tc in current_cases],
-                ensure_ascii=False,
-            )
-            system_prompt, user_prompt = self._prompt_builder.build_review_prompt(
-                endpoints_text=endpoints_text,
-                requirements_text=requirements_text,
-                test_cases_json=current_json,
-                output_language=self._output_language,
-                json_mode=self._json_mode,
-            )
-
-            logger.info(
-                "Review round %d/%d using %s model (%d cases in)...",
-                round_idx,
-                self._review_max_rounds,
-                client_label,
-                len(current_cases),
-            )
-            refined = await self._agenerate_with_retry(
-                system_prompt,
-                user_prompt,
-                endpoints,
-                f"Review round {round_idx}",
-                client=client,
-            )
-
-            if not refined:
-                logger.warning(
-                    "Review round %d returned nothing; keeping previous %d cases.",
-                    round_idx,
-                    len(current_cases),
-                )
-                continue
-
-            logger.info("Review round %d: %d -> %d", round_idx, len(current_cases), len(refined))
-            current_cases = refined
-
-        return current_cases
+        build_prompt, _, acall_llm = self._review_hooks(endpoints, requirements)
+        result = await self._review_loop.arun(
+            test_cases,
+            build_prompt=build_prompt,
+            acall_llm=acall_llm,
+            label="test-cases",
+        )
+        return result.artifact
 
     # ------------------------------------------------------------------
     # Phase 1: Requirements-driven (module-batched)
@@ -1026,6 +1001,62 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
     # Review
     # ------------------------------------------------------------------
 
+    def _review_hooks(
+        self,
+        endpoints: list[APIEndpoint],
+        requirements: list[RequirementItem],
+    ) -> tuple[
+        Callable[[list[TestCase], int], tuple[str, str]],
+        Callable[[str, str, LLMClient, int], list[TestCase]],
+        Callable[[str, str, LLMClient, int], Awaitable[list[TestCase]]],
+    ]:
+        """Build the artifact-specific hooks for the shared ReviewLoop.
+
+        Returns ``(build_prompt, call_llm, acall_llm)``: prompt construction
+        serializes the current cases to the review-prompt JSON contract, and
+        the call hooks delegate to this generator's retry-heavy generation
+        methods (plan v2 R2: only this generator injects ``call_llm``).
+        """
+        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        requirements_text = RequirementParser.requirements_to_text(requirements)
+
+        def build_prompt(current_cases: list[TestCase], round_idx: int) -> tuple[str, str]:
+            current_json = json.dumps(
+                [self._testcase_to_dict(tc) for tc in current_cases],
+                ensure_ascii=False,
+            )
+            return self._prompt_builder.build_review_prompt(
+                endpoints_text=endpoints_text,
+                requirements_text=requirements_text,
+                test_cases_json=current_json,
+                output_language=self._output_language,
+                json_mode=self._json_mode,
+            )
+
+        def call_llm(
+            system_prompt: str, user_prompt: str, client: LLMClient, round_idx: int
+        ) -> list[TestCase]:
+            return self._generate_with_retry(
+                system_prompt,
+                user_prompt,
+                endpoints,
+                f"Review round {round_idx}",
+                client=client,
+            )
+
+        async def acall_llm(
+            system_prompt: str, user_prompt: str, client: LLMClient, round_idx: int
+        ) -> list[TestCase]:
+            return await self._agenerate_with_retry(
+                system_prompt,
+                user_prompt,
+                endpoints,
+                f"Review round {round_idx}",
+                client=client,
+            )
+
+        return build_prompt, call_llm, acall_llm
+
     def _review_and_refine(
         self,
         test_cases: list[TestCase],
@@ -1040,67 +1071,18 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
           - Round 3: secondary reviews round-2 output.
           - ... alternating until ``review_max_rounds`` exhausted.
 
-        Each round runs in a fresh conversation with no prior context. If a
-        round fails to parse, the previous round's output is kept and the
-        loop continues (so a transient parse failure does not discard
-        accumulated refinement). If every round fails, the original input
-        is returned unchanged.
+        Round control (alternation, fresh conversation per round, per-round
+        fallback on parse failure, original-input fallback when every round
+        fails) is implemented once in :class:`ReviewLoop` (plan v2 §4.3).
         """
-        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
-        requirements_text = RequirementParser.requirements_to_text(requirements)
-
-        current_cases = test_cases
-        for round_idx in range(1, self._review_max_rounds + 1):
-            # Odd rounds: secondary (non-primary) model.
-            # Even rounds: primary model.
-            # This gives true cross-validation when two models are configured.
-            use_secondary = round_idx % 2 == 1
-            if use_secondary:
-                client = self._review_llm
-                client_label = "secondary" if self._review_is_cross_model else "primary(same)"
-            else:
-                client = self._llm
-                client_label = "primary"
-
-            current_json = json.dumps(
-                [self._testcase_to_dict(tc) for tc in current_cases],
-                ensure_ascii=False,
-            )
-            system_prompt, user_prompt = self._prompt_builder.build_review_prompt(
-                endpoints_text=endpoints_text,
-                requirements_text=requirements_text,
-                test_cases_json=current_json,
-                output_language=self._output_language,
-                json_mode=self._json_mode,
-            )
-
-            logger.info(
-                "Review round %d/%d using %s model (%d cases in)...",
-                round_idx,
-                self._review_max_rounds,
-                client_label,
-                len(current_cases),
-            )
-            refined = self._generate_with_retry(
-                system_prompt,
-                user_prompt,
-                endpoints,
-                f"Review round {round_idx}",
-                client=client,
-            )
-
-            if not refined:
-                logger.warning(
-                    "Review round %d returned nothing; keeping previous %d cases.",
-                    round_idx,
-                    len(current_cases),
-                )
-                continue
-
-            logger.info("Review round %d: %d -> %d", round_idx, len(current_cases), len(refined))
-            current_cases = refined
-
-        return current_cases
+        build_prompt, call_llm, _ = self._review_hooks(endpoints, requirements)
+        result = self._review_loop.run(
+            test_cases,
+            build_prompt=build_prompt,
+            call_llm=call_llm,
+            label="test-cases",
+        )
+        return result.artifact
 
     # ------------------------------------------------------------------
     # Historical case merging

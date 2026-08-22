@@ -4,6 +4,7 @@ Covers script generation, code-fence stripping, Python syntax validation,
 file saving, and LLM interaction.
 """
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -218,3 +219,88 @@ class TestValidatePython:
             assert "line" in str(e).lower() or "syntax" in str(e).lower()
         else:
             pytest.fail("Expected ValueError for invalid syntax")
+
+
+# A review-refined variant (valid Python, distinct from the original).
+_REVISED_PLAYWRIGHT_SCRIPT = _VALID_PLAYWRIGHT_SCRIPT + "\n\n# reviewed: added logout flow\n"
+
+
+class TestGUIReview:
+    """Review integration for GUITestGenerator (plan v2 §4.3).
+
+    Context per decision 4: URL + requirements + generated script. Review
+    candidates must pass fence-stripping + Python syntax validation.
+    """
+
+    def setup_method(self) -> None:
+        self.mock_llm = MagicMock()
+        self.prompt_builder = PromptBuilder()
+
+    def _generator(self, *, review_enabled: bool) -> GUITestGenerator:
+        return GUITestGenerator(
+            llm_client=self.mock_llm,
+            prompt_builder=self.prompt_builder,
+            review_enabled=review_enabled,
+            review_max_rounds=1,
+        )
+
+    def _input(self) -> GUITestGenInput:
+        return GUITestGenInput(
+            requirements=_REQUIREMENTS,
+            url="https://example.com",
+            endpoints=_ENDPOINTS,
+        )
+
+    def test_review_enabled_runs_second_pass(self) -> None:
+        self.mock_llm.chat.side_effect = [_VALID_PLAYWRIGHT_SCRIPT, _REVISED_PLAYWRIGHT_SCRIPT]
+        gen = self._generator(review_enabled=True)
+        script = gen.generate(self._input())
+        assert "reviewed: added logout flow" in script
+        assert self.mock_llm.chat.call_count == 2
+
+    def test_review_prompt_carries_url_and_requirements(self) -> None:
+        self.mock_llm.chat.side_effect = [_VALID_PLAYWRIGHT_SCRIPT, _REVISED_PLAYWRIGHT_SCRIPT]
+        gen = self._generator(review_enabled=True)
+        gen.generate(self._input())
+        system_prompt, user_prompt = self.mock_llm.chat.call_args_list[1].args
+        assert "Playwright" in system_prompt
+        assert "https://example.com" in user_prompt  # URL context
+        assert "User Login" in user_prompt  # requirements context
+        assert "def test_user_login" in user_prompt  # the script under review
+
+    def test_review_invalid_python_candidate_keeps_original(self) -> None:
+        # 1 round x 2 attempts, both candidates fail the syntax check.
+        self.mock_llm.chat.side_effect = [
+            _VALID_PLAYWRIGHT_SCRIPT,
+            _INVALID_PYTHON_SCRIPT,
+            _INVALID_PYTHON_SCRIPT,
+        ]
+        gen = self._generator(review_enabled=True)
+        script = gen.generate(self._input())
+        # _extract_script strips whitespace; the first-pass script is kept.
+        assert script == _VALID_PLAYWRIGHT_SCRIPT.strip()
+
+    def test_review_disabled_by_default_single_llm_call(self) -> None:
+        self.mock_llm.chat.return_value = _VALID_PLAYWRIGHT_SCRIPT
+        gen = GUITestGenerator(llm_client=self.mock_llm, prompt_builder=self.prompt_builder)
+        gen.generate(self._input())
+        self.mock_llm.chat.assert_called_once()
+
+    def test_save_writes_meta_when_review_succeeded(self, tmp_path: Path) -> None:
+        self.mock_llm.chat.side_effect = [_VALID_PLAYWRIGHT_SCRIPT, _REVISED_PLAYWRIGHT_SCRIPT]
+        gen = self._generator(review_enabled=True)
+        script = gen.generate(self._input())
+        gen.save(script, tmp_path / "gui_test.py")
+
+        meta = json.loads((tmp_path / "gui_test.meta.json").read_text())
+        assert meta["generator"] == "gui"
+        assert meta["reviewed"] is True
+        assert meta["rounds_executed"] == 1
+        assert meta["rounds_succeeded"] == 1
+
+    def test_save_no_meta_when_review_did_not_run(self, tmp_path: Path) -> None:
+        self.mock_llm.chat.return_value = _VALID_PLAYWRIGHT_SCRIPT
+        gen = self._generator(review_enabled=False)
+        script = gen.generate(self._input())
+        gen.save(script, tmp_path / "gui_test.py")
+        assert not (tmp_path / "gui_test.meta.json").exists()

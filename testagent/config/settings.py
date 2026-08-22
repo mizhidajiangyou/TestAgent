@@ -131,6 +131,7 @@ class PerfSettings(BaseSettings):
     duration_seconds: int = 300
     ramp_up_seconds: int = 60
     think_time_ms: int = 500
+    auth_type: str = "none"
 
 
 class Settings(BaseSettings):

@@ -53,6 +53,12 @@ from testagent.generators.testcase_generator import TestCaseGenerator
     default=None,
     help="Resume a previous run by its session id (re-runs with the same inputs/config).",
 )
+@click.option(
+    "--review/--no-review",
+    "review",
+    default=None,
+    help="Override REVIEW_ENABLED: cross-validate generated test cases",
+)
 @click.pass_context
 def generate_tests(
     ctx: click.Context,
@@ -62,6 +68,7 @@ def generate_tests(
     output_format: str,
     historical_cases: str | None,
     resume: str | None,
+    review: bool | None,
 ) -> None:
     """Generate test cases from requirements and/or API spec."""
     container: Container = ctx.obj["container"]
@@ -108,9 +115,12 @@ def generate_tests(
 
     console.print(f"[bold]Session:[/] [cyan]{session_id}[/]")
     console.print("[bold blue]Generating test cases via LLM...[/]")
+    generator = container.testcase_generator()
+    if review is not None:
+        generator.set_review_enabled(review)
     try:
         test_cases = asyncio.run(
-            container.testcase_generator().agenerate(
+            generator.agenerate(
                 TestCaseGenInput(
                     endpoints=endpoints,
                     requirements=req_items,

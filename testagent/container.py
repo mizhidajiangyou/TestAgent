@@ -84,6 +84,9 @@ class Container(containers.DeclarativeContainer):
         llm_client=llm_client,
         prompt_builder=prompt_builder,
         output_language=settings.provided.output_language,
+        review_enabled=settings.provided.review_enabled,
+        review_llm_client=review_client,
+        review_max_rounds=settings.provided.review_max_rounds,
     )
 
     performance_generator = providers.Singleton(
@@ -92,6 +95,9 @@ class Container(containers.DeclarativeContainer):
         prompt_builder=prompt_builder,
         script_format=settings.provided.script_format,
         output_language=settings.provided.output_language,
+        review_enabled=settings.provided.review_enabled,
+        review_llm_client=review_client,
+        review_max_rounds=settings.provided.review_max_rounds,
     )
 
     # Conversation session persistence backend, selected by SESSION_STORE.

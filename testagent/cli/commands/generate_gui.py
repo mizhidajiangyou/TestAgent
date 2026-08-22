@@ -34,6 +34,12 @@ from testagent.container import Container
     default=None,
     help="Output file path (default: ./output/gui_test.py)",
 )
+@click.option(
+    "--review/--no-review",
+    "review",
+    default=None,
+    help="Override REVIEW_ENABLED: cross-validate the generated script",
+)
 @click.pass_context
 def generate_gui(
     ctx: click.Context,
@@ -41,6 +47,7 @@ def generate_gui(
     swagger: str | None,
     url: str | None,
     output: str | None,
+    review: bool | None,
 ) -> None:
     """Generate Playwright Python test script for web/GUI testing."""
     container: Container = ctx.obj["container"]
@@ -62,6 +69,8 @@ def generate_gui(
 
     console.print("[bold blue]Generating Playwright GUI test script via LLM...[/]")
     generator = container.gui_generator()
+    if review is not None:
+        generator.set_review_enabled(review)
     script = generator.generate(
         GUITestGenInput(
             requirements=req_items,

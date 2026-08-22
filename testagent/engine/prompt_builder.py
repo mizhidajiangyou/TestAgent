@@ -294,6 +294,69 @@ class PromptBuilder:
 
         return system_prompt, user_prompt
 
+    def build_script_review_prompt(
+        self,
+        script_kind: str,
+        script: str,
+        context_text: str,
+        output_language: str = "english",
+    ) -> tuple[str, str]:
+        """Build prompts for reviewing a generated test SCRIPT (plan v2 §4.2).
+
+        Unlike :meth:`build_review_prompt` (testcase JSON contract), the
+        output contract here is the COMPLETE revised script (decision 2:
+        diff/patch line alignment is unreliable for generated scripts).
+
+        Args:
+            script_kind: ``"k6"`` | ``"jmeter"`` | ``"playwright"`` — selects
+                the checklist branch and the system prompt.
+            script: Full generated script to review.
+            context_text: Rendered review context the script must stay
+                consistent with (perf: load config + endpoint signatures;
+                GUI: target URL + requirements).
+            output_language: Language for comments/labels in the script.
+        """
+        if script_kind == "jmeter":
+            system_prompt = (
+                "You are a meticulous senior performance engineer reviewing a JMeter "
+                "JMX test plan. Detect parameter mismatches, missing assertions and "
+                "structural errors, then produce the complete revised script. "
+                "Output only complete, valid JMX XML."
+            )
+        elif script_kind == "k6":
+            system_prompt = (
+                "You are a meticulous senior performance engineer reviewing a k6 "
+                "JavaScript test script. Detect parameter mismatches, missing "
+                "assertions and structural errors, then produce the complete "
+                "revised script. Output only complete, runnable k6 JavaScript."
+            )
+        else:
+            system_prompt = (
+                "You are a meticulous senior QA automation engineer reviewing a "
+                "Playwright (pytest) GUI test script. Detect missing requirement "
+                "coverage, fragile locators and weak assertions, then produce the "
+                "complete revised script. Output only complete, valid Python code."
+            )
+        lang_hint = self._language_instruction(output_language, code_context=True)
+        if lang_hint:
+            system_prompt += " " + lang_hint
+
+        context = {
+            "script_kind": script_kind,
+            "script": script,
+            "context_text": context_text,
+        }
+
+        try:
+            template = self._env.get_template("script_review_prompt.j2")
+            user_prompt = template.render(**context)
+        except Exception:
+            user_prompt = self._build_inline_script_review_prompt(
+                script_kind=script_kind, script=script, context_text=context_text
+            )
+
+        return system_prompt, user_prompt
+
     def build_performance_prompt(
         self,
         endpoints_text: str,
@@ -532,6 +595,65 @@ Return the COMPLETE final list. After the JSON, on a new line output: SUMMARY: a
 {lang_section}
 
 {output_footer}"""
+
+    def _build_inline_script_review_prompt(
+        self, script_kind: str, script: str, context_text: str
+    ) -> str:
+        """Fallback inline prompt for script review (template missing).
+
+        Must stay in sync with ``templates/script_review_prompt.j2`` — the
+        output contract (COMPLETE revised script, no diff) is the critical
+        part that parse/validate relies on.
+        """
+        if script_kind == "jmeter":
+            checklist = (
+                "1. ThreadGroup users/ramp-up/duration match the context.\n"
+                "2. Every endpoint in the context has a sampler; POST/PUT carry realistic bodies.\n"
+                "3. Assertions exist for status codes and at least one key field.\n"
+                "4. Auth flow is coherent when auth is enabled.\n"
+                "5. Valid JMX structure (XML declaration, balanced tags, jmeterTestPlan root).\n"
+                "6. Cleanup for data-creating samplers."
+            )
+            output_hint = (
+                "Output the COMPLETE revised JMX XML only — raw XML, no markdown, no diff."
+            )
+        elif script_kind == "k6":
+            checklist = (
+                "1. options/stages match the configured VUs, duration, ramp-up and think time.\n"
+                "2. Every endpoint in the context is covered; POST/PUT carry realistic bodies.\n"
+                "3. check() assertions on res.status and at least one key field.\n"
+                "4. thresholds exist (http_req_duration / http_req_failed).\n"
+                "5. Auth flow is coherent when auth is enabled.\n"
+                "6. No hardcoded host/secrets; setup/teardown clean up test data."
+            )
+            output_hint = (
+                "Output the COMPLETE revised k6 JavaScript only — raw code, no markdown, no diff."
+            )
+        else:
+            checklist = (
+                "1. Target URL and requirement coverage match the context.\n"
+                "2. Robust locators (get_by_role / get_by_label / get_by_text) over CSS/XPath.\n"
+                "3. Machine-checkable expect() assertions on observable outcomes.\n"
+                "4. Explicit waits, no brittle fixed sleeps as the only synchronization.\n"
+                "5. Test data cleanup and proper fixtures.\n"
+                "6. Complete, syntactically valid, runnable Python."
+            )
+            output_hint = (
+                "Output the COMPLETE revised Python script only — raw code, no markdown, no diff."
+            )
+        return f"""Review the following {script_kind} test script and produce a COMPLETE revised version.
+
+## Review Context (the script MUST stay consistent with this)
+{context_text}
+
+## Current Script
+{script}
+
+## Review Checklist
+{checklist}
+
+{output_hint}
+Preserve the original structure and naming where possible. If nothing needs to change, return the original script unchanged."""
 
     def _build_inline_performance_prompt(
         self, endpoints: str, config: dict[str, Any], script_format: str, **kwargs: Any
