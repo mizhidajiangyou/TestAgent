@@ -2,13 +2,9 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Generic, TypeVar
-
-#: Input data type for a report generator.
-T_in = TypeVar("T_in")
 
 
-class BaseReport(ABC, Generic[T_in]):
+class BaseReport[T_in](ABC):
     """Abstract report interface.
 
     Subclasses bind their concrete input type via the generic parameter,
