@@ -32,7 +32,7 @@ from testagent.engine.model_profiles import DEEPSEEK_V4, RequestIntent
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.testcase_generator import TestCaseGenerator
 from testagent.generators.truncation import TruncationPolicy
-from tests.test_truncation_v6 import MetaMockClient
+from tests.test_truncation_engine import MetaMockClient
 
 _EPS = [
     APIEndpoint(method="GET", path="/users", summary="list"),
