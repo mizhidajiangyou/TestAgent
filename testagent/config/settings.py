@@ -38,6 +38,47 @@ class LLMSettings(BaseSettings):
     model: str = "gpt-4o-mini"
     timeout: int = 300
     max_output_tokens: int = 16000
+    # Opt-in JSON mode (OpenAI ``response_format={"type":"json_object"}``).
+    # When true, test-case generation wraps its output in
+    # ``{"test_cases": [...]}`` so the model is forced to emit valid JSON.
+    # Leave disabled (default) when the backend is a non-OpenAI compatible
+    # provider that does not support ``response_format`` (e.g. some
+    # OpenAI-compatible gateways). The default-off posture keeps the
+    # existing bare-array contract and never breaks those endpoints.
+    json_mode: bool = Field(default=False, alias="OPENAI_JSON_MODE")
+    # Max number of LLM batches generated concurrently in the async path
+    # (``TestCaseGenerator.agenerate``). Bounds the asyncio semaphore so we
+    # never flood the provider with simultaneous requests (which would trip
+    # 429 rate limits). Default 5.
+    max_concurrency: int = Field(default=5, alias="OPENAI_MAX_CONCURRENCY")
+    # Run a zero-token model availability check (GET /v1/models/{model}) before
+    # generation starts, so a misconfigured key / endpoint / model name fails
+    # fast (with a clear error) instead of hanging for minutes. Set to False
+    # only if your provider does not implement the OpenAI /models API. Default True.
+    verify_model: bool = Field(default=True, alias="OPENAI_VERIFY_MODEL")
+    # Stream tokens for real-time progress logs during generation. When the
+    # provider does not support streaming (or ``stream_options``), the client
+    # transparently falls back to a blocking call. Default True.
+    stream: bool = Field(default=True, alias="OPENAI_STREAM")
+    # Explicit model profile override (plan v10 §3.3): empty = auto-match by
+    # model name, falling back to the generic profile. An unknown name fails
+    # fast at client construction listing the available profiles.
+    model_profile: str = Field(default="", alias="OPENAI_MODEL_PROFILE")
+    # First-round effort intent tier (e.g. "low" / "medium" / "disabled");
+    # empty = model default. This is an INTENT, not a raw parameter: the
+    # resolved profile translates it into the model's dialect.
+    reasoning_effort: str = Field(default="", alias="OPENAI_REASONING_EFFORT")
+    # One-shot downgrade effort tier for budget-exhausted recovery (plan v10
+    # §7). Empty = use the profile's own continuation_intent (deepseek:
+    # disabled, qwen: low, openai-reasoning: low).
+    continuation_reasoning_effort: str = Field(
+        default="", alias="OPENAI_CONTINUATION_REASONING_EFFORT"
+    )
+    # Qwen-only: thinking_budget cap applied when effort tier "low" is
+    # translated for the qwen3.8 profile (UNVERIFIED until diagnosed).
+    continuation_thinking_budget: int = Field(
+        default=4096, alias="OPENAI_CONTINUATION_THINKING_BUDGET"
+    )
 
     @property
     def models(self) -> list[str]:
@@ -119,6 +160,11 @@ class Settings(BaseSettings):
     output_language: Literal["english", "chinese"] = Field(
         default="chinese", alias="OUTPUT_LANGUAGE"
     )
+    #: Conversation session persistence backend. ``"file"`` persists each
+    #: session as ``<output_dir>/conversations/<id>.json`` so it survives
+    #: process restarts and can be resumed; ``"memory"`` keeps sessions
+    #: in-process only (lost on restart). Default ``"file"``.
+    session_store: Literal["file", "memory"] = Field(default="file", alias="SESSION_STORE")
 
 
 @lru_cache(maxsize=1)

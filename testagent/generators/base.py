@@ -2,15 +2,9 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Generic, TypeVar
-
-#: Input data type for a generator.
-T_in = TypeVar("T_in")
-#: Output data type produced by a generator.
-T_out = TypeVar("T_out")
 
 
-class BaseGenerator(ABC, Generic[T_in, T_out]):
+class BaseGenerator[T_in, T_out](ABC):
     """Abstract generator interface.
 
     Subclasses bind their concrete input/output types via the generic

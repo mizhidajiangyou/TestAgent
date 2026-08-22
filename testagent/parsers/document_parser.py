@@ -269,7 +269,7 @@ class DocumentParser:
             parts = style_lower.split()
             try:
                 level = int(parts[-1])
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 level = 1
             level = max(1, min(level, 6))
             return f"{'#' * level} {text}"

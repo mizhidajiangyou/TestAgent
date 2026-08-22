@@ -23,12 +23,15 @@ import logging
 import re
 import uuid
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from testagent.engine.llm_client import LLMClient
 from testagent.engine.prompt_builder import PromptBuilder
+from testagent.engine.session_store import InMemoryStore, SessionStore
+from testagent.generators.gui_test_generator import DEFAULT_TARGET_URL
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +200,7 @@ class ConversationSession:
         prompt_builder: PromptBuilder,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         output_language: str = "english",
+        persist_callback: Callable[[ConversationSession], None] | None = None,
     ) -> None:
         self._session_id = session_id
         self._llm = llm_client
@@ -214,6 +218,12 @@ class ConversationSession:
         self._endpoints_text: str = ""
         self._requirements_text: str = ""
 
+        # Optional persistence hook: when set (by ConversationManager), each
+        # ``send()`` writes the resulting snapshot to the configured store so
+        # the session survives process restarts. ``None`` keeps the session
+        # purely in-memory (used by unit tests that construct a session directly).
+        self._persist_callback = persist_callback
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -222,6 +232,49 @@ class ConversationSession:
     def session_id(self) -> str:
         """Return this session's id."""
         return self._session_id
+
+    @property
+    def persist_callback(self) -> Callable[[ConversationSession], None] | None:
+        """Return the persistence hook (or ``None`` when persistence is off)."""
+        return self._persist_callback
+
+    @persist_callback.setter
+    def persist_callback(self, cb: Callable[[ConversationSession], None] | None) -> None:
+        """Set or clear the persistence hook (used by ConversationManager)."""
+        self._persist_callback = cb
+
+    def to_snapshot(self) -> dict[str, Any]:
+        """Serialize the session state for persistence.
+
+        Captures messages, artifacts, feedback, iteration, status and the
+        cached context (endpoints/requirements text). The ``llm_client`` and
+        ``prompt_builder`` are runtime-only dependencies and are NOT included;
+        they are re-injected when the session is restored by the manager.
+        """
+        return {
+            "session_id": self._session_id,
+            "messages": [asdict(m) for m in self._messages],
+            "artifacts": {k: asdict(v) for k, v in self._artifacts.items()},
+            "feedback": self._feedback,
+            "iteration": self._iteration,
+            "status": self._status,
+            "endpoints_text": self._endpoints_text,
+            "requirements_text": self._requirements_text,
+        }
+
+    def _apply_snapshot(self, data: dict[str, Any]) -> None:
+        """Restore in-memory state from a snapshot produced by ``to_snapshot``.
+
+        Overwrites all session fields; used by ConversationManager when a
+        session is resumed from the store.
+        """
+        self._messages = [ConversationMessage(**m) for m in data.get("messages", [])]
+        self._artifacts = {k: Artifact(**v) for k, v in data.get("artifacts", {}).items()}
+        self._feedback = data.get("feedback", "")
+        self._iteration = data.get("iteration", 0)
+        self._status = data.get("status", "idle")
+        self._endpoints_text = data.get("endpoints_text", "")
+        self._requirements_text = data.get("requirements_text", "")
 
     @property
     def iteration(self) -> int:
@@ -286,7 +339,13 @@ class ConversationSession:
             response,
             {"action": action, "iteration": self._iteration},
         )
+        self._persist()
         return response
+
+    def _persist(self) -> None:
+        """Invoke the persistence hook (if any) to flush the current state."""
+        if self._persist_callback is not None:
+            self._persist_callback(self)
 
     def get_state(self) -> ConversationState:
         """Return a snapshot of the current session state."""
@@ -464,7 +523,19 @@ class ConversationSession:
                 script_format=script_format,
                 output_language=self._output_language,
             )
-        # gui_script / code: generic inline prompt.
+        if artifact_type == "gui_script":
+            # GUI scripts are Playwright Python and must target a real URL.
+            # The caller supplies it via context ``gui_url``; fall back to the
+            # generator's default when absent so interactive chat still works.
+            url = str(ctx.get("gui_url") or "").strip() or DEFAULT_TARGET_URL
+            requirements_text = self._requirements_text or user_message
+            return self._prompt_builder.build_gui_test_prompt(
+                url=url,
+                requirements_text=requirements_text,
+                endpoints_text=self._endpoints_text,
+                output_language=self._output_language,
+            )
+        # code (and any other type): generic inline prompt.
         system_prompt = (
             "You are a senior test automation engineer. Generate the requested artifact."
         )
@@ -733,9 +804,18 @@ class ConversationSession:
                     )
 
     def _validate_script(self, artifact: Artifact, issues: list[str], script_kind: str) -> None:
-        content = artifact.content
+        content = _strip_code_fences(artifact.content)
         if not content.strip():
             issues.append("Script content is empty.")
+            return
+        # GUI scripts are Python (Playwright) — verify real syntax, which is
+        # stricter than bracket balancing and catches malformed statements.
+        if script_kind == "gui":
+            try:
+                ast.parse(content)
+            except SyntaxError as exc:
+                lineno = exc.lineno or "?"
+                issues.append(f"Python syntax error: {exc.msg} (line {lineno}).")
             return
         # JMeter JMX is XML; everything else is treated as JS-like.
         if content.lstrip().startswith("<?xml") or "<jmeterTestPlan" in content:
@@ -905,12 +985,29 @@ class ConversationManager:
         prompt_builder: PromptBuilder,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         output_language: str = "english",
+        store: SessionStore | None = None,
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
         self._max_iterations = max(1, max_iterations)
         self._output_language = output_language
         self._sessions: dict[str, ConversationSession] = {}
+        # Persistence backend. Defaults to in-memory (process-local) so unit
+        # tests that build a manager directly keep the old non-persistent
+        # behavior; production wiring (Container) injects a FileStore so
+        # sessions survive restarts.
+        self._store: SessionStore = store or InMemoryStore()
+
+    def _new_session(self, sid: str) -> ConversationSession:
+        """Build a session wired to flush its state to the store on each send."""
+        return ConversationSession(
+            session_id=sid,
+            llm_client=self._llm,
+            prompt_builder=self._prompt_builder,
+            max_iterations=self._max_iterations,
+            output_language=self._output_language,
+            persist_callback=lambda s: self._store.save(s.session_id, s.to_snapshot()),
+        )
 
     def create_session(self, session_id: str | None = None) -> ConversationSession:
         """Create a new conversation session.
@@ -920,31 +1017,49 @@ class ConversationManager:
                 when omitted. Raises ``ValueError`` if the id already exists.
         """
         sid = session_id or _new_artifact_id()
-        if sid in self._sessions:
+        if sid in self._sessions or self._store.load(sid) is not None:
             raise ValueError(f"Session '{sid}' already exists.")
-        session = ConversationSession(
-            session_id=sid,
-            llm_client=self._llm,
-            prompt_builder=self._prompt_builder,
-            max_iterations=self._max_iterations,
-            output_language=self._output_language,
-        )
+        session = self._new_session(sid)
         self._sessions[sid] = session
+        # Persist the initial (empty) snapshot so the session is resumable
+        # even before the first message.
+        self._store.save(sid, session.to_snapshot())
         logger.info("Created conversation session '%s'", sid)
         return session
 
     def get_session(self, session_id: str) -> ConversationSession | None:
-        """Get an existing session by id (or ``None``)."""
-        return self._sessions.get(session_id)
+        """Get an existing session by id (or ``None``).
+
+        Hits the in-memory cache first; on miss, attempts to restore the
+        session from the persistent store (so a session created in a previous
+        process run can be resumed). Returns ``None`` when neither has it.
+        """
+        cached = self._sessions.get(session_id)
+        if cached is not None:
+            return cached
+        snapshot = self._store.load(session_id)
+        if snapshot is None:
+            return None
+        session = self._new_session(session_id)
+        session._apply_snapshot(snapshot)
+        self._sessions[session_id] = session
+        logger.info("Restored conversation session '%s' from store", session_id)
+        return session
 
     def list_sessions(self) -> list[str]:
-        """Return all session ids."""
-        return list(self._sessions.keys())
+        """Return all known session ids (in-memory union persistent store)."""
+        return list(set(self._sessions.keys()) | set(self._store.list_ids()))
 
     def close_session(self, session_id: str) -> None:
-        """Close and remove a session (no-op if unknown, with a warning)."""
-        removed = self._sessions.pop(session_id, None)
-        if removed is None:
+        """Close and remove a session (no-op if unknown, with a warning).
+
+        Drops the session from both the in-memory cache and the persistent
+        store so it cannot be resumed afterwards.
+        """
+        in_memory = self._sessions.pop(session_id, None)
+        in_store = self._store.load(session_id) is not None
+        self._store.delete(session_id)
+        if in_memory is None and not in_store:
             logger.warning("Cannot close unknown session '%s'", session_id)
         else:
             logger.info("Closed conversation session '%s'", session_id)

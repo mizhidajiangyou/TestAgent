@@ -113,7 +113,7 @@ class TestCaseGenInput:
     #: When provided, the generator treats them as a baseline and merges
     #: new requirements on top, preserving unchanged historical cases and
     #: only generating net-new cases for the new requirements.
-    historical_cases: list["TestCase"] = field(default_factory=list)
+    historical_cases: list[TestCase] = field(default_factory=list)
 
 
 @dataclass

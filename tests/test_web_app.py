@@ -2,7 +2,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,6 +57,11 @@ def _make_container() -> SimpleNamespace:
     """Build a near-real container: real parser/generator/report, mock LLM."""
     mock_llm = MagicMock()
     mock_llm.chat.return_value = MOCK_LLM_RESPONSE
+    # The web route drives the async path (agenerate -> achat), so the mock
+    # must expose an awaitable achat that returns the same canned response.
+    mock_llm.achat = AsyncMock(return_value=MOCK_LLM_RESPONSE)
+    # The generator now runs a zero-token pre-flight (averify) before agenerate.
+    mock_llm.averify = AsyncMock()
     mock_llm.usage.summary.return_value = "prompt=10 completion=20 total=30"
     settings = SimpleNamespace(
         output_language="english",
@@ -65,22 +70,29 @@ def _make_container() -> SimpleNamespace:
         review_enabled=False,
         review_max_rounds=2,
     )
+    # Instances are built once and wrapped in lambdas so each provider-style
+    # ``container.<name>()`` call returns the same shared instance (the spy
+    # test mutates ``gen.agenerate`` and expects later calls to see it).
+    gen = TestCaseGenerator(llm_client=mock_llm, prompt_builder=PromptBuilder())
+    req_parser = RequirementParser()
+    # Swagger parser returns real endpoints so generated cases get real
+    # endpoint paths (matches the historical baseline for dedup tests).
+    swagger_parser = MagicMock(
+        parse=MagicMock(
+            return_value=[
+                APIEndpoint(method="GET", path="/users", summary="List users"),
+                APIEndpoint(method="POST", path="/users", summary="Create user"),
+            ]
+        )
+    )
+    tc_report = TestCaseReport()
     return SimpleNamespace(
-        testcase_generator=TestCaseGenerator(llm_client=mock_llm, prompt_builder=PromptBuilder()),
-        requirement_parser=RequirementParser(),
-        # Swagger parser returns real endpoints so generated cases get real
-        # endpoint paths (matches the historical baseline for dedup tests).
-        swagger_parser=MagicMock(
-            parse=MagicMock(
-                return_value=[
-                    APIEndpoint(method="GET", path="/users", summary="List users"),
-                    APIEndpoint(method="POST", path="/users", summary="Create user"),
-                ]
-            )
-        ),
-        testcase_report=TestCaseReport(),
-        llm_client=mock_llm,
-        settings=settings,
+        testcase_generator=lambda: gen,
+        requirement_parser=lambda: req_parser,
+        swagger_parser=lambda: swagger_parser,
+        testcase_report=lambda: tc_report,
+        llm_client=lambda: mock_llm,
+        settings=lambda: settings,
     )
 
 
@@ -211,33 +223,57 @@ class TestGenerate:
         assert data["count"] == 2
 
     def test_generate_propagates_generation_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A generation failure surfaces as a 500 with the detail."""
+        """A total generation failure surfaces as a 500 with actionable guidance.
+
+        Per-requirement LLM failures degrade to an empty unit (so one bad
+        requirement does not abort the whole run), but when *every* call fails
+        the generator raises a clear error that the web layer returns as 500.
+        """
         container = _make_container()
         # Make the generator raise by giving it an LLM that always errors.
-        container.testcase_generator._llm.chat.side_effect = RuntimeError("boom")
+        # The async path uses achat, so the failure must be injected there.
+        container.testcase_generator()._llm.achat.side_effect = RuntimeError("boom")
         c = TestClient(create_app(container=container))
         r = c.post(
             "/api/generate",
             json={"requirements": _REQUIREMENTS_MD, "output_format": "json"},
         )
         assert r.status_code == 500
-        assert "boom" in r.json()["detail"]
+        assert "0 test cases" in r.json()["detail"]
+
+    def test_generate_model_unavailable_returns_400(self) -> None:
+        """A zero-token pre-flight failure surfaces as a 400 with guidance."""
+        container = _make_container()
+        from testagent.engine.llm_client import ModelUnavailableError
+
+        container.testcase_generator()._llm.averify.side_effect = ModelUnavailableError(
+            "Model 'gpt-4o-mini' is not available: 401"
+        )
+        c = TestClient(create_app(container=container))
+        r = c.post(
+            "/api/generate",
+            json={"requirements": _REQUIREMENTS_MD, "output_format": "json"},
+        )
+        assert r.status_code == 400
+        detail = r.json()["detail"]
+        assert "Model unavailable" in detail
+        assert "OPENAI_API_KEY" in detail
 
 
 class TestGenerateIntegration:
     """End-to-end-ish: confirm the generator receives parsed requirements."""
 
     def test_generate_calls_generator_with_parsed_requirements(self) -> None:
-        """The web layer parses markdown into RequirementItems before generate."""
+        """The web layer parses markdown into RequirementItems before agenerate."""
         container = _make_container()
         captured: list[TestCaseGenInput] = []
-        original_generate = container.testcase_generator.generate
+        original_agenerate = container.testcase_generator().agenerate
 
-        def spy(data: TestCaseGenInput) -> list[TestCase]:
+        async def spy(data: TestCaseGenInput, session_id: str | None = None) -> list[TestCase]:
             captured.append(data)
-            return original_generate(data)
+            return await original_agenerate(data, session_id=session_id)
 
-        container.testcase_generator.generate = spy  # type: ignore[method-assign]
+        container.testcase_generator().agenerate = spy  # type: ignore[method-assign]
 
         c = TestClient(create_app(container=container))
         r = c.post(

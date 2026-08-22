@@ -22,6 +22,7 @@ dependencies = [
     "reportlab>=4.0.0",
     "matplotlib>=3.7.0",
     "rich>=13.0.0",
+    "dependency-injector>=4.45.0",
 ]
 
 [project.optional-dependencies]
@@ -54,7 +55,11 @@ testagent = "testagent.cli:main"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
+# The ``cankao/`` directory holds third-party reference projects (langgraph,
+# etc.) for study only — it is not part of TestAgent and must not be linted
+# as if it were project source.
+extend-exclude = ["cankao"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "A", "SIM", "RUF"]
@@ -68,11 +73,14 @@ ignore = ["E501"]
 "testagent/web/app.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+# Skip the ``cankao/`` reference projects; they are studied, not shipped, and
+# contain their own (incompatible) stdlib-shadowing modules like ``typing.py``.
+exclude = "(^|/)cankao/"
 
 [[tool.mypy.overrides]]
 module = [
