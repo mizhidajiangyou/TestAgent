@@ -39,6 +39,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: A review round whose list-shaped artifact shrinks below this fraction of
+#: the input is treated as a FAILURE (previous artifact kept). Truncated
+#: responses salvaged down to a handful of cases must never replace a
+#: complete list — observed 2026-08-23: a salvaged 1-case round silently
+#: replaced 30+ cases. Legitimate dedup rarely exceeds 50% reduction.
+MIN_RETENTION_RATIO = 0.5
+
+
+def _coverage_regression(current: object, refined: object) -> bool:
+    """True when a list-shaped round result shrank catastrophically.
+
+    Only applies to sized artifacts (lists); scripts (str) are unaffected.
+    Empty ``current`` never regresses (first-round semantics).
+    """
+    if not isinstance(current, list) or not isinstance(refined, list):
+        return False
+    if len(current) == 0:
+        return False
+    return len(refined) < len(current) * MIN_RETENTION_RATIO
+
 
 @dataclass(frozen=True, slots=True)
 class ReviewResult[T]:
@@ -137,6 +157,20 @@ class ReviewLoop[T]:
                 self._log_round(round_idx, client, label, ok=False, tokens_out=tokens_out)
                 continue
 
+            if _coverage_regression(current, refined):
+                logger.warning(
+                    "review round %d/%d shrank the artifact %d -> %d items "
+                    "(< %.0f%% retention, likely a truncated/salvaged response); "
+                    "keeping the previous artifact",
+                    round_idx,
+                    self._max_rounds,
+                    len(current),  # type: ignore[arg-type]
+                    len(refined),  # type: ignore[arg-type]
+                    MIN_RETENTION_RATIO * 100,
+                )
+                self._log_round(round_idx, client, label, ok=False, tokens_out=tokens_out)
+                continue
+
             rounds_succeeded += 1
             current = refined
             self._log_round(round_idx, client, label, ok=True, tokens_out=tokens_out)
@@ -189,6 +223,20 @@ class ReviewLoop[T]:
                 )
 
             if not refined:
+                self._log_round(round_idx, client, label, ok=False, tokens_out=tokens_out)
+                continue
+
+            if _coverage_regression(current, refined):
+                logger.warning(
+                    "review round %d/%d shrank the artifact %d -> %d items "
+                    "(< %.0f%% retention, likely a truncated/salvaged response); "
+                    "keeping the previous artifact",
+                    round_idx,
+                    self._max_rounds,
+                    len(current),  # type: ignore[arg-type]
+                    len(refined),  # type: ignore[arg-type]
+                    MIN_RETENTION_RATIO * 100,
+                )
                 self._log_round(round_idx, client, label, ok=False, tokens_out=tokens_out)
                 continue
 

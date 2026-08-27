@@ -1297,3 +1297,57 @@ class TestFanOutRecovery:
         assert fake.achat_calls == 1 + 2 * (MAX_PARSE_RETRIES + 1)
         # Recovery was serial: at no point did two recovery calls overlap.
         assert active_rec <= 1
+
+
+class TestNormalizeCases:
+    """Boundary cleanup: degenerate stubs dropped, duplicates deduped, IDs renumbered."""
+
+    @staticmethod
+    def _mk(
+        title: str,
+        *,
+        endpoint: str = "GET /x",
+        expected: list[str] | None = None,
+        case_id: str = "TC-X",
+    ) -> TestCase:
+        method, path = endpoint.split(None, 1)
+        return TestCase(
+            id=case_id,
+            title=title,
+            description="d",
+            endpoint=APIEndpoint(method=method, path=path),
+            test_type=TestType.FUNCTIONAL,
+            priority=TestPriority.HIGH,
+            steps=["Send request"],
+            expected_results=expected if expected is not None else ["Status 200"],
+        )
+
+    def test_drops_degenerate_stubs(self) -> None:
+        """Cases with empty title or no expected_results are unexecutable noise."""
+        cases = [
+            self._mk("Valid case"),
+            self._mk(""),  # empty title -> stub
+            self._mk("No assertions", expected=[]),  # no expected_results -> stub
+            self._mk("   "),  # whitespace-only title -> stub
+        ]
+        kept = TestCaseGenerator._normalize_cases(cases)
+        assert [c.title for c in kept] == ["Valid case"]
+
+    def test_keeps_valid_cases_untouched(self) -> None:
+        """Valid cases survive in order; only degenerate ones are dropped."""
+        cases = [
+            self._mk("List users", case_id="TC-1"),
+            self._mk("", expected=[]),  # stub
+            self._mk("Create user", endpoint="POST /x", case_id="TC-3"),
+        ]
+        kept = TestCaseGenerator._normalize_cases(cases)
+        assert [c.title for c in kept] == ["List users", "Create user"]
+        assert kept[1].endpoint.method == "POST"
+
+    def test_renumbers_sequentially(self) -> None:
+        cases = [self._mk("A", case_id="TC-007"), self._mk("B", case_id="TC-042")]
+        kept = TestCaseGenerator._normalize_cases(cases)
+        assert [c.id for c in kept] == ["TC-001", "TC-002"]
+
+    def test_empty_input_returns_empty(self) -> None:
+        assert TestCaseGenerator._normalize_cases([]) == []

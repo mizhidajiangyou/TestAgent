@@ -145,6 +145,74 @@ class TestReviewLoopSync:
         assert result.rounds_succeeded == 2
         assert result.used_review is True
 
+    def test_shrunk_list_result_is_rejected_and_previous_kept(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A round that salvages/returns a drastically smaller list (truncated
+        response) must NOT replace the accumulated artifact — it is treated as
+        a failed round and the next round receives the previous artifact."""
+        outcomes: list[list[str]] = [["a", "b", "c", "d"], ["only-1"]]
+        prompts_seen: list[tuple[list[str], int]] = []
+
+        def call_llm(system: str, user: str, client: object, round_idx: int) -> list[str]:
+            return outcomes.pop(0)
+
+        def build_prompt(artifact: list[str], round_idx: int) -> tuple[str, str]:
+            prompts_seen.append((artifact, round_idx))
+            return ("s", "u")
+
+        loop2 = ReviewLoop[list[str]](
+            primary_llm=FakeClient([]),  # type: ignore[arg-type]
+            review_llm=FakeClient([]),  # type: ignore[arg-type]
+            prompt_builder=None,  # type: ignore[arg-type]
+            max_rounds=2,
+        )
+        with caplog.at_level(logging.WARNING):
+            result = loop2.run(
+                ["original"],
+                build_prompt=build_prompt,
+                parse=None,
+                call_llm=call_llm,
+            )
+
+        # Round 2 must have seen round-1's 4-item artifact and returned 1 item;
+        # the shrink is rejected, so the final artifact stays round-1's list.
+        assert prompts_seen[1] == (["a", "b", "c", "d"], 2)
+        assert result.artifact == ["a", "b", "c", "d"]
+        assert result.rounds_succeeded == 1
+        assert result.used_review is True
+        assert any("shrank the artifact" in rec.message for rec in caplog.records)
+
+    def test_shrink_at_exactly_half_is_accepted(self) -> None:
+        """Boundary: exactly 50% retention is legitimate dedup, not regression."""
+        outcomes: list[list[str]] = [["a", "b", "c", "d"], ["a", "b"]]
+        loop2 = ReviewLoop[list[str]](
+            primary_llm=FakeClient([]),  # type: ignore[arg-type]
+            review_llm=FakeClient([]),  # type: ignore[arg-type]
+            prompt_builder=None,  # type: ignore[arg-type]
+            max_rounds=2,
+        )
+        result = loop2.run(
+            ["original"],
+            build_prompt=lambda a, i: ("s", "u"),
+            parse=None,
+            call_llm=lambda s, u, c, i: outcomes.pop(0),
+        )
+        assert result.artifact == ["a", "b"]
+        assert result.rounds_succeeded == 2
+
+    def test_string_artifact_unaffected_by_shrink_guard(self) -> None:
+        """Script artifacts (str) have no length-regression semantics."""
+        loop = make_loop(FakeClient([]), FakeClient([]), max_rounds=1)
+        result = loop.run(
+            "a very long original script " * 10,
+            build_prompt=lambda a, i: ("s", "u"),
+            parse=None,
+            call_llm=lambda s, u, c, i: "short",
+        )
+        assert result.artifact == "short"
+        assert result.rounds_succeeded == 1
+
     def test_all_rounds_fail_returns_original_with_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -362,6 +430,31 @@ class TestReviewLoopAsync:
         assert secondary.async_calls and not secondary.calls
         assert primary.async_calls and not primary.calls
         assert result.artifact == "RAW-2"
+        assert result.used_review is True
+
+    async def test_arun_shrunk_list_result_is_rejected(self) -> None:
+        """Async mirror of the shrink guard: salvaged 1-item round must not
+        replace a larger list artifact."""
+        outcomes: list[list[str]] = [["a", "b", "c", "d"], ["only-1"]]
+
+        async def acall_llm(system: str, user: str, client: object, round_idx: int) -> list[str]:
+            return outcomes.pop(0)
+
+        loop2 = ReviewLoop[list[str]](
+            primary_llm=FakeClient([]),  # type: ignore[arg-type]
+            review_llm=FakeClient([]),  # type: ignore[arg-type]
+            prompt_builder=None,  # type: ignore[arg-type]
+            max_rounds=2,
+        )
+        result = await loop2.arun(
+            ["original"],
+            build_prompt=lambda a, i: ("s", "u"),
+            parse=None,
+            acall_llm=acall_llm,
+        )
+
+        assert result.artifact == ["a", "b", "c", "d"]
+        assert result.rounds_succeeded == 1
         assert result.used_review is True
 
     async def test_arun_retries_once_on_parse_failure(self) -> None:

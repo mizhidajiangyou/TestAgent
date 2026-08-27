@@ -263,6 +263,11 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             )
             all_cases.extend(api_cases)
 
+        # Boundary cleanup of LLM output (degenerate stubs) — run BEFORE the
+        # historical merge so user-provided baseline cases are never dropped,
+        # and before review so the reviewer sees a smaller, cleaner list.
+        all_cases = self._normalize_cases(all_cases)
+
         # --- Merge historical cases (baseline) with newly generated cases ---
         if historical_cases:
             merged = self._merge_historical_cases(historical_cases, all_cases)
@@ -276,6 +281,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         if self._review_enabled and all_cases:
             all_cases = self._review_and_refine(all_cases, endpoints, requirements)
+            all_cases = self._normalize_cases(all_cases)
 
         return all_cases
 
@@ -332,6 +338,11 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             )
             all_cases.extend(api_cases)
 
+        # Boundary cleanup of LLM output (degenerate stubs) — run BEFORE the
+        # historical merge so user-provided baseline cases are never dropped,
+        # and before review so the reviewer sees a smaller, cleaner list.
+        all_cases = self._normalize_cases(all_cases)
+
         if historical_cases:
             merged = self._merge_historical_cases(historical_cases, all_cases)
             all_cases = merged
@@ -343,6 +354,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         if self._review_enabled and all_cases:
             all_cases = await self._areview_and_refine(all_cases, endpoints, requirements)
+            all_cases = self._normalize_cases(all_cases)
 
         return all_cases
 
@@ -1017,7 +1029,10 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         the call hooks delegate to this generator's retry-heavy generation
         methods (plan v2 R2: only this generator injects ``call_llm``).
         """
-        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        # Signature format (name/type/required/enum) instead of endpoints_to_text:
+        # it is what checklist item "type fidelity" validates against, and it is
+        # also smaller — less prompt input lowers review-truncation risk.
+        endpoints_text = endpoints_to_signature(endpoints) if endpoints else ""
         requirements_text = RequirementParser.requirements_to_text(requirements)
 
         def build_prompt(current_cases: list[TestCase], round_idx: int) -> tuple[str, str]:
@@ -1087,6 +1102,29 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
     # ------------------------------------------------------------------
     # Historical case merging
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_cases(cases: list[TestCase]) -> list[TestCase]:
+        """Boundary cleanup for LLM output before save/review.
+
+        Long generations (and truncated-then-salvaged responses) leak
+        degenerate stub cases — empty title and/or no ``expected_results`` —
+        which are unexecutable noise the reviewer should not have to spend
+        output tokens on. Drop them and renumber the survivors sequentially.
+        (Scenario-level deduplication stays the reviewer's job.)
+        """
+        kept: list[TestCase] = []
+        dropped = 0
+        for tc in cases:
+            if not tc.title.strip() or not tc.expected_results:
+                dropped += 1
+                continue
+            kept.append(tc)
+        if dropped:
+            logger.info("Normalization dropped %d degenerate case(s); %d kept", dropped, len(kept))
+        for idx, tc in enumerate(kept, 1):
+            tc.id = f"TC-{idx:03d}"
+        return kept
 
     @staticmethod
     def _historical_cases_to_text(cases: list[TestCase] | None) -> str:

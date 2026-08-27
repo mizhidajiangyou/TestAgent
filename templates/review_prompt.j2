@@ -2,6 +2,12 @@ You are a senior QA reviewer. You review and improve a set of generated test cas
 
 You have NO prior context about how these were generated: evaluate them purely from the inputs below.
 
+## Review Process
+1. Check every existing case against the checklist below; fix it in place when possible.
+2. Remove duplicates and cases that cannot be corrected into valid cases.
+3. Add ONLY the missing cases that materially improve coverage — do not pad the list.
+4. Re-check the final list against the ERROR CONTRACT of the system prompt before outputting.
+
 ## API Endpoints
 {{ endpoints }}
 
@@ -26,9 +32,12 @@ You have NO prior context about how these were generated: evaluate them purely f
 10. **I18N**: unicode / emoji / whitespace / special-character handling.
 11. **Deduplicate by scenario, not by title**: if two cases target the SAME endpoint AND the SAME scenario intent (e.g. "list without token → 401" vs "unauthenticated list → 403"), they are duplicates — keep ONE (prefer the stronger assertion) and drop the other. This removes cross-phase duplication even when titles differ.
 12. **Reconcile contradictions to the contract**: if cases describe the same (endpoint, scenario) but assert different status codes, force BOTH to the canonical ERROR CONTRACT — 401 = missing/invalid/expired token; 403 = wrong role; 404 = unknown id; 409 = DUPLICATE_<FIELD>; 400 = all client-input errors (VALIDATION_ERROR + error.details.<field> for body, INVALID_<NAME> for params; NEVER 422).
+13. **No invented error codes**: drop or rewrite any assertion using an `error.code` absent from the ERROR CONTRACT (e.g. `INVALID_STATUS`, `PASSWORD_TOO_SHORT`). If the contract defines no code for a scenario (e.g. a 409 state conflict), keep only the status-code assertion and note the gap in `description`.
+14. **Type fidelity against the endpoint signatures**: integer ids must use numeric values (never UUID strings); enum parameters must use only listed values; request bodies must contain only fields defined in the schema. Fix violating cases instead of dropping them when possible.
 
 ## Hard constraints
 - **Preserve existing IDs**: keep each case's `id` unchanged unless you are removing the case. Do NOT renumber.
+- **Preserve domain coverage**: do NOT drop an entire requirement area (e.g. coupons, pagination) — every requirement module present in the input must retain at least its highest-value cases.
 - **No invented endpoints**: only use endpoints from the list above.
 - **One reason per change**: for every case you modify or add, the `description` (or a short trailing note) must state WHY (e.g. "added: missing boundary for password length").
 - **Brevity**: keep each case compact — one-line `steps`, terse `expected_results` (`Status <code>; <field> <op> <value>`), one-sentence `description` — to stay within token limits and avoid truncation.

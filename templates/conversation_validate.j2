@@ -18,6 +18,15 @@ You are a QA validator. Review the artifact below and identify issues.
 2. Are all endpoints from the spec included?
 3. Are load parameters (VU, duration, ramp-up) correct?
 4. Are assertions/checks included?
+{% elif artifact_type == "gui_script" %}
+1. Is the script syntactically valid for its target framework (e.g. Playwright)?
+2. Do element locators use stable strategies (data-testid / role / unique text) instead of fragile selectors?
+3. Are there explicit waits instead of arbitrary sleeps, and assertions that verify observable outcomes?
+4. Is the scenario flow complete (setup, actions, verification, teardown)?
+{% else %}
+1. Is the artifact complete and well-formed for its declared type?
+2. Does it satisfy the requirements it was generated from?
+3. Are there any obvious correctness, safety or quality issues?
 {% endif %}
 
 ## Output

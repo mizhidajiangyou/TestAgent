@@ -1,4 +1,11 @@
-Generate test cases for the requirements below{% if endpoints %} together with the listed API endpoints{% endif %}.
+You are generating a focused, production-grade API/functional test suite from the inputs below. Work methodically rather than enumerating everything you can think of.
+
+## Process (follow in order)
+1. Analyze the requirements and the API endpoints: identify resources, auth model, data constraints and documented status codes.
+2. Pick the highest-value scenarios — one representative case per equivalence class (happy path, boundary, negative, security, integration). Skip redundant variants.
+3. Draft each case as an executable request with machine-checkable assertions.
+4. Before outputting, self-check every case against the Hard Constraints; drop duplicates and any case that violates them.
+
 {% if requirements %}
 ## Requirements
 {{ requirements }}
@@ -16,7 +23,7 @@ covered (even with slightly different wording or status codes), do NOT regenerat
 {{ historical_cases }}
 {% endif %}
 ---
-## Output
+## Output schema
 {% if json_mode %}Return a JSON OBJECT with exactly one top-level key "test_cases", whose value is the JSON array described below (do NOT return a bare array). Each element:{% else %}Return a JSON array of test cases. Each element:{% endif %}
 ```json
 {
@@ -32,31 +39,33 @@ covered (even with slightly different wording or status codes), do NOT regenerat
   "tags": ["labels"]
 }
 ```
-## Rules (must follow strictly)
-1. **Endpoint verbatim & no invention**: When API endpoints are given, the `endpoint` field MUST be copied EXACTLY (including HTTP method and path) from the API Endpoints list above. The `steps` MUST call that exact endpoint. Do NOT invent paths that are not in the list (e.g. if there is no `/login` endpoint, set `endpoint` to the real auth endpoint or "N/A" and describe the login flow in `description`). If testing an unsupported method on a valid path, set endpoint to the actual method+path and note in description that it verifies 405.
-2. **Assertable (HARD)**: Every `expected_results` entry MUST contain an explicit HTTP status code AND at least one concrete field-level check, using exact values.
-   - Correct: `"Status 201; response.body.email == \"a@x.com\""`, `"Status 409; response.body.error.code == 'DUPLICATE_EMAIL'"`, `"Status 401; response.headers contains WWW-Authenticate"`.
-   - Wrong (forbidden): `"返回成功"`, `"登录失败"`, `"works correctly"`, `"works as expected"`, `"responds properly"`, `"用户创建成功"`. Any assertion using these vague terms is rejected.
-3. **Executable steps**: For API cases, the `steps` MUST contain the actual request — HTTP method, full path, required headers (include `Authorization: Bearer <TOKEN>` for protected endpoints), and a **realistic request body** (JSON) for POST/PUT taken from the endpoint schema. The first step for a protected endpoint MUST be "acquire a Bearer token (see login flow) and store it as `<TOKEN>`". No prose like "call the endpoint" — give the concrete call. **Write each step as a SINGLE line** (method + path + essential headers + JSON body on one line); no narration.
-4. **Auth context**: If an endpoint requires authentication, `preconditions` MUST state how the token is obtained (reference the documented auth/login endpoint) and `steps` MUST send it. Never assume an anonymous call succeeds on a protected route.
-5. **Cleanup / re-runnability (HARD)**: For ANY case that creates or modifies data, the last `step` (or the `description`) MUST state how to clean up — delete the created resource via the documented DELETE endpoint, or reset state — so the test stays re-runnable and does not pollute other runs.
-6. **Tags required**: Include at least one tag from EACH applicable category — scope (smoke, regression), domain (auth, crud, pagination, user), type (boundary, security, negative, integration). Example: `["smoke","auth","negative"]`.
-7. **No duplicates**: Do not generate cases that differ only by expected status code for the same input. If the spec defines multiple valid status codes, pick the canonical one and document the alternative in description.
-8. **ID placeholder**: Use `"TC-XXX"` as the id value. The caller will assign sequential IDs after merging with historical cases. Keep this placeholder; do NOT number them yourself.
-9. **Self-check before output**: Before returning, review every case — remove duplicates (same input + same goal regardless of wording), drop cases with invalid assertions (rule 2) or mismatched endpoints (rule 1), and ensure no required field is missing. Output only verified, error-free cases.
-10. **Unified error codes**: Error responses for the same business scenario MUST use a consistent error code. If multiple cases verify the same type of error (e.g. not found, permission denied, validation failure), the code in their `expected_results` must be identical.
-11. **Avoid excessive redundancy**: One representative case per equivalence class is sufficient; do not enumerate every equivalent input.
-12. **Brevity (HARD)**: Keep output compact to avoid hitting the token limit. Write each `step` as ONE line (method + path + essential headers + JSON body). Write each `expected_results` entry in terse form `Status <code>; <field> <op> <value>` with NO extra prose. Keep `description` to ONE sentence. Do NOT pad with explanations or repeat information. Generate the MINIMUM cases that cover the must-haves (one per equivalence class).
-13. **Error contract (HARD)**: Use EXACTLY the status codes and `error.code` values defined in the ERROR CONTRACT of the system prompt. Do NOT invent codes — no `PASSWORD_TOO_SHORT` / `INVALID_EMAIL` / `LIMIT_TOO_LARGE` / `PARSE_ERROR` as standalone codes; use `VALIDATION_ERROR` + `error.details.<field>` for body validation, `INVALID_<NAME>` for bad params, `MALFORMED_JSON` for bad body, all with **400**. Never use **422** — use 400. For auth use 401 (missing/invalid/expired token) and 403 (wrong role).
-14. **Test isolation / concurrency (HARD)**: Each case MUST use UNIQUE data so parallel or repeated runs do not collide — derive a unique suffix (uuid / timestamp / random) for emails and usernames (e.g. `user_<uniq>@example.com`); NEVER reuse fixed values like `dup@example.com` or `duplicate@example.com` across cases. Each case cleans up ONLY the data it created. Do NOT assert global counts (e.g. "exactly 20 users") unless the case itself creates exactly that many users in setup and queries its own created set; prefer asserting on the response of the created resource, not the shared list. This keeps cases safe under concurrent execution.
 
-## Coverage must-haves (use judgment, but cover these when relevant)
-- **Boundary**: password shorter than the required length (e.g. 7 chars when min is 8), invalid email format, empty required fields, `page=0` / `limit=0` / `limit` huge for list endpoints, string longer than max length, special characters.
-- **Security (target the specific endpoint, not generic)**: SQL injection (`' OR '1'='1`) and XSS (`<script>`) in inputs, missing/expired/wrong token ⇒ 401, wrong role ⇒ 403, IDOR (access `/users/{otherId}` as another user), rate limiting / account lockout (e.g. 5 failed logins ⇒ lock 10 min).
+## Hard Constraints (a case violating any of these must be dropped)
+1. **Endpoint verbatim & no invention**: When API endpoints are given, the `endpoint` field MUST be copied EXACTLY (method + path) from the API Endpoints list, and `steps` MUST call that exact endpoint. Do NOT invent paths absent from the list (if there is no `/login`, use the real auth endpoint or "N/A" and describe the flow in `description`). To test an unsupported method on a valid path, use the actual method+path and note in `description` that it verifies 405.
+2. **Assertable**: Every `expected_results` entry MUST contain an explicit HTTP status code AND at least one concrete field-level check with exact values.
+   - Correct: `"Status 201; response.body.email == \"a@x.com\""`, `"Status 409; response.body.error.code == 'DUPLICATE_EMAIL'"`, `"Status 401; response.headers contains WWW-Authenticate"`.
+   - Rejected vague forms: `"返回成功"`, `"登录失败"`, `"works correctly"`, `"works as expected"`, `"responds properly"`, `"用户创建成功"`.
+3. **Executable steps**: For API cases, `steps` MUST contain the actual request — HTTP method, full path, required headers (include `Authorization: Bearer <TOKEN>` for protected endpoints) and a realistic JSON body for POST/PUT taken from the endpoint schema. The first step for a protected endpoint MUST be "acquire a Bearer token (see login flow) and store it as `<TOKEN>`". Write each step as a SINGLE line (method + path + essential headers + JSON body); no narration like "call the endpoint".
+4. **Auth context**: If an endpoint requires authentication, `preconditions` MUST state how the token is obtained (reference the documented auth/login endpoint) and `steps` MUST send it. Never assume an anonymous call succeeds on a protected route.
+5. **Cleanup / re-runnability**: For ANY case that creates or modifies data, the last `step` (or `description`) MUST state how to clean up — delete the created resource via the documented DELETE endpoint, or reset state — so the test stays re-runnable.
+6. **Test isolation / concurrency**: Each case MUST use UNIQUE data so parallel or repeated runs do not collide — derive a unique suffix (uuid / timestamp / random) for emails and usernames (e.g. `user_<uniq>@example.com`). NEVER reuse fixed values like `dup@example.com` across cases. Each case cleans up ONLY the data it created. Do NOT assert global counts (e.g. "exactly 20 users") unless the case itself creates exactly that many in setup and queries its own set; prefer asserting on the created resource's own response.
+7. **Error contract**: Use EXACTLY the status codes and `error.code` values defined in the ERROR CONTRACT of the system prompt. Do NOT invent codes (no `PASSWORD_TOO_SHORT` / `INVALID_EMAIL` / `LIMIT_TOO_LARGE` / `PARSE_ERROR`). All client-input errors are **400** — never **422**. Auth: 401 = missing/invalid/expired token; 403 = wrong role.
+8. **Consistent error codes**: The same business scenario MUST use the same error code across cases (e.g. every not-found case asserts the identical 404 shape). If the contract defines NO `error.code` for a scenario (e.g. a 409 state conflict such as cancelling a paid order), assert ONLY the status code and note in `description` that no code is defined — NEVER invent one.
+9. **Type fidelity**: path/query params and body fields MUST respect the declared types and enums — integer ids take numeric values (never UUID strings), enum params take only listed values, and request bodies contain ONLY fields present in the endpoint schema.
+10. **No duplicates**: Do not generate cases that differ only by expected status code for the same input, or that restate the same scenario in different words. If the spec allows multiple valid codes, pick the canonical one and note the alternative in `description`.
+11. **ID placeholder**: Use `"TC-XXX"` as the id value. The caller assigns sequential IDs after merging; do NOT number them yourself.
+12. **Tags required**: Include at least one tag from EACH applicable category — scope (smoke, regression), domain (auth, crud, pagination, user), type (boundary, security, negative, integration). Example: `["smoke","auth","negative"]`.
+
+## Style & Brevity (HARD — prevents token-limit truncation)
+Write each `step` as ONE line (method + path + essential headers + JSON body). Write each `expected_results` entry in terse form `Status <code>; <field> <op> <value>`. Keep `description` to ONE sentence. Output the MINIMUM set of cases that covers the must-haves (one per equivalence class) — do not pad with explanations or repeat information.
+
+## Coverage must-haves (cover these when relevant to the inputs)
+- **Boundary**: password shorter than the required length, invalid email format, empty required fields, `page=0` / `limit=0` / huge `limit` for list endpoints, over-long strings, special characters.
+- **Security (target the specific endpoint, not generic)**: SQL injection (`' OR '1'='1`) and XSS (`<script>`) in inputs; missing/expired/wrong token ⇒ 401; wrong role ⇒ 403; IDOR (access `/users/{otherId}` as another user); rate limiting / account lockout (e.g. 5 failed logins ⇒ lock 10 min).
 - **Integration**: Create→Read, Update→Read, Delete→Read(404), cross-endpoint data consistency.
 - **Performance/pagination**: for list endpoints include at least one case asserting p(95) or a page/limit boundary.
 
-## Worked example (follow this STRUCTURE only; prefer TERSE output — do not exceed this verbosity, keep steps one line)
+## Worked example (follow this STRUCTURE only; keep your output this terse — one-line steps)
 ```json
 {
   "id": "TC-XXX",
@@ -89,7 +98,7 @@ Wrap the array in a single JSON object:
 ```json
 { "test_cases": [ { ...case object with the fields above... } ] }
 ```
-Output ONLY that JSON object. Do not return a bare array.
+Output ONLY that JSON object. Do not return a bare array, and add no text before or after it.
 {% else %}
 Output ONLY the JSON array. No markdown fences, no explanation before or after.
 {% endif %}

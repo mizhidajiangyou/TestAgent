@@ -865,7 +865,7 @@ class OpenAIClient:
                         now = time.time()
                         if now - last_think_log >= THINKING_LOG_INTERVAL:
                             last_think_log = now
-                            logger.info(
+                            logger.debug(
                                 "[%s] %s thinking: %d chars so far...",
                                 sid,
                                 self._model,
@@ -878,7 +878,7 @@ class OpenAIClient:
                 now = time.time()
                 if now - last_log >= 3.0 and streamed_chars:
                     last_log = now
-                    logger.info(
+                    logger.debug(
                         "[%s] %s streaming: %d chars so far...",
                         sid,
                         self._model,
