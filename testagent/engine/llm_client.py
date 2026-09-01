@@ -17,7 +17,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol, cast
 
-from openai import OpenAI
+import httpx
+from openai import APIConnectionError, APITimeoutError, BadRequestError, OpenAI
 from openai.types import ResponseFormatJSONObject
 from openai.types.chat import ChatCompletion
 
@@ -68,6 +69,43 @@ THINKING_LOG_INTERVAL = 30.0
 #: (conversation / gui / perf generators) — logs stay unchanged.
 CALL_LABEL: ContextVar[str] = ContextVar("testagent_call_label", default="")
 
+#: Hard wall-clock limit for ONE blocking call when the operator did not
+#: configure one (plan-c B1.1): resolved as max(timeout * 2, this default) so
+#: a legitimately slow completion (blocking ≈ thinking + full generation) is
+#: not killed early. An EXPLICIT OPENAI_BLOCKING_HARD_TIMEOUT is honoured
+#: verbatim (validated >= OPENAI_TIMEOUT at construction).
+DEFAULT_BLOCKING_HARD_TIMEOUT_SECONDS = 600.0
+
+#: Max hard-timeout retries within ONE ``_chat_core`` loop (plan-c B2.2).
+#: Prevents 3 serial multi-minute waits on a genuinely wedged provider: after
+#: this many timed-out attempts the error propagates to the caller (engine
+#: recovery / model fallback) instead of burning the remaining attempts.
+MAX_TIMEOUT_RETRIES_PER_CALL = 1
+
+#: Consecutive TRANSIENT streaming failures before streaming is disabled for
+#: the session (plan-c B2.1). A provider REJECTING streaming outright (HTTP
+#: 400 mentioning "stream") disables it immediately; transient transport
+#: drops only count toward this threshold.
+MAX_STREAM_FAIL_STREAK = 3
+
+#: Default multiple of max_concurrency for the abandoned-worker circuit
+#: breaker (plan-c B1.2): when more abandoned (timed-out but still running)
+#: worker threads than this accumulate, further retries are skipped in favour
+#: of model fallback.
+ABANDONED_WORKER_BREAKER_MULTIPLIER = 2
+
+#: Transport-level exceptions counted toward the streaming de-stickiness
+#: streak (plan-c B2.1, review #16). Deliberately NARROW: programming bugs
+#: (KeyError / TypeError) are NOT here — they propagate as-is instead of
+#: being masked as provider failures.
+_TRANSIENT_STREAM_ERRORS: tuple[type[Exception], ...] = (
+    APIConnectionError,
+    APITimeoutError,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+    httpx.ReadTimeout,
+)
+
 
 class ModelUnavailableError(RuntimeError):
     """Raised when a configured model cannot be reached or is not served.
@@ -116,6 +154,22 @@ class ReasoningBudgetExhaustedError(LLMOutputTooLongError):
         self.finish_reason = finish_reason
         self.completion_tokens = completion_tokens
         self.reasoning_tokens = reasoning_tokens
+
+
+class LLMCallTimeoutError(RuntimeError):
+    """Raised when a blocking LLM call exceeds the hard wall-clock limit
+    (plan-c B2.2).
+
+    Semantically DISTINCT from :class:`ReasoningBudgetExhaustedError`: a
+    timeout means NO response arrived at all (wedged provider / dropped
+    connection), not an empty-but-classified budget exhaustion — so the v10
+    engine treats it as TRANSIENT (retry + model fallback), never as a
+    downgrade trigger.
+
+    The abandoned worker thread is a daemon and cannot be killed; it is
+    registered on the client's abandoned-worker ledger (plan-c B1.2) and
+    finishes on its own or dies with the process.
+    """
 
 
 @dataclass
@@ -284,6 +338,7 @@ class OpenAIClient:
         profile: ModelProfile | None = None,
         reasoning_effort: str | None = None,
         continuation_intent: str | None = None,
+        blocking_hard_timeout: float | None = None,
     ) -> None:
         self._client = client
         self._model = model
@@ -296,6 +351,21 @@ class OpenAIClient:
             effort=reasoning_effort or None,
             deterministic=True,
         )
+        # Hard wall-clock limit for a single blocking call (plan-c B1.1).
+        # Unset -> max(timeout*2, DEFAULT) so a legitimately slow completion
+        # is not killed; an EXPLICIT value is honoured verbatim but must be
+        # >= the request timeout (else construction fails loudly — a hard
+        # timeout below the per-request timeout is a configuration error).
+        if blocking_hard_timeout is not None:
+            if blocking_hard_timeout < timeout:
+                raise ValueError(
+                    f"blocking_hard_timeout ({blocking_hard_timeout}s) must be >= "
+                    f"the request timeout ({timeout}s); a hard timeout below the "
+                    "per-request timeout would abort every call."
+                )
+            self._blocking_hard_timeout = float(blocking_hard_timeout)
+        else:
+            self._blocking_hard_timeout = max(timeout * 2, DEFAULT_BLOCKING_HARD_TIMEOUT_SECONDS)
         self.usage = TokenUsage()
         # Guards ``usage`` which may be mutated from multiple worker threads
         # when batches run concurrently via the async shim.
@@ -307,6 +377,20 @@ class OpenAIClient:
         # rejects streaming (or ``stream_options``), we transparently fall
         # back to blocking mode for subsequent attempts.
         self._stream_enabled: bool = True
+        # Consecutive TRANSIENT streaming failures (connection resets etc.,
+        # plan-c B2.1). Resets on any successful stream; at
+        # MAX_STREAM_FAIL_STREAK streaming is disabled for the session so a
+        # persistently broken transport stops churning (one dropped chunked
+        # read must NOT pin the whole session into blocking mode).
+        self._stream_fail_streak = 0
+        # Abandoned-worker ledger (plan-c B1.2): workers whose hard timeout
+        # fired but whose SDK call may still be running. Entries are removed
+        # when the worker eventually finishes, so the counts are live.
+        self._abandoned_workers: set[int] = set()
+        self._abandoned_ages: dict[int, float] = {}
+        self._abandoned_lock = threading.Lock()
+        # Count of blocking SDK workers currently being waited on.
+        self._active_workers = 0
 
     @property
     def model_name(self) -> str:
@@ -346,6 +430,72 @@ class OpenAIClient:
     def set_stream_enabled(self, enabled: bool) -> None:
         """Enable or disable token streaming for this client."""
         self._stream_enabled = enabled
+        self._stream_fail_streak = 0  # external override resets the streak
+
+    def _abandoned_breaker_threshold(self) -> int:
+        """Circuit-breaker threshold for abandoned workers (plan-c B1.2).
+
+        Defaults to ABANDONED_WORKER_BREAKER_MULTIPLIER times 10 (a
+        conservative stand-in for max_concurrency, which the client does not
+        know); tests monkeypatch this method to simulate breaker trips.
+        """
+        return ABANDONED_WORKER_BREAKER_MULTIPLIER * 10
+
+    def _register_transient_stream_failure(self, sid: str, exc: Exception) -> None:
+        """Count one transient streaming failure toward the de-stickiness
+        streak (plan-c B2.1). The current call falls back to blocking, but
+        streaming is retried on the NEXT call until the streak hits
+        MAX_STREAM_FAIL_STREAK (then disabled for the session).
+        """
+        self._stream_fail_streak += 1
+        if self._stream_fail_streak >= MAX_STREAM_FAIL_STREAK:
+            logger.warning(
+                "[%s] streaming failed %d consecutive times for model '%s'; "
+                "disabling streaming for this session.",
+                sid,
+                self._stream_fail_streak,
+                self._model,
+            )
+            self._stream_enabled = False
+        else:
+            logger.warning(
+                "[%s] streaming unavailable for model '%s' (%s); blocking mode "
+                "for this call (streaming retries next call).",
+                sid,
+                self._model,
+                exc,
+            )
+
+    # -- abandoned-worker observability (plan-c B1.2) ---------------------
+
+    @property
+    def abandoned_worker_count(self) -> int:
+        """Live count of timed-out-but-still-running blocking workers."""
+        with self._abandoned_lock:
+            return len(self._abandoned_workers)
+
+    def worker_metrics(self) -> dict[str, int | float]:
+        """Resource-model metrics for logging/monitoring (plan-c B1.2).
+
+        ``active_llm_workers`` counts blocking SDK workers currently being
+        waited on; ``abandoned_llm_workers`` counts workers whose hard
+        timeout fired but whose SDK call may still hold a thread + HTTP
+        connection; ``abandoned_llm_workers_oldest_age`` is the age in
+        seconds of the oldest abandoned entry (0 when none).
+        """
+        with self._abandoned_lock:
+            abandoned = len(self._abandoned_workers)
+            oldest = (
+                (time.monotonic() - min(self._abandoned_ages.values()))
+                if self._abandoned_ages
+                else 0.0
+            )
+        active = max(0, self._active_workers - abandoned)
+        return {
+            "active_llm_workers": active,
+            "abandoned_llm_workers": abandoned,
+            "abandoned_llm_workers_oldest_age": round(oldest, 1),
+        }
 
     def _chat_core(
         self,
@@ -386,6 +536,7 @@ class OpenAIClient:
             )
         )
         last_error = ""
+        timeout_attempts = 0
         truncated_hint = (
             " [IMPORTANT: Your previous response was truncated. "
             "Please make each case MORE COMPACT: shorter descriptions, "
@@ -567,7 +718,37 @@ class OpenAIClient:
                 # Specific, fast-fail: let the generator re-ask with a smaller
                 # scope instead of retrying the identical (too-large) request.
                 raise
+            except LLMCallTimeoutError as exc:
+                # Bounded timeout budget (plan-c B2.2): a wedged provider may
+                # time out every attempt; cap how many this loop spends before
+                # surfacing to the engine (transient path — retry + model
+                # fallback, NEVER a v10 downgrade trigger).
+                timeout_attempts += 1
+                last_error = str(exc)
+                logger.warning(
+                    "[%s] Attempt %d/%d hit the blocking hard timeout.",
+                    sid,
+                    attempt,
+                    MAX_RETRIES,
+                )
+                if timeout_attempts > MAX_TIMEOUT_RETRIES_PER_CALL or attempt >= MAX_RETRIES:
+                    raise
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
             except Exception as exc:
+                # Abandoned-worker circuit breaker (plan-c B1.2): when the
+                # residue of timed-out-but-still-running workers already
+                # exceeds the breaker threshold, further retries would only
+                # pile up threads/connections — surface the error now so the
+                # multi-model fallback layer takes over.
+                if self.abandoned_worker_count > self._abandoned_breaker_threshold():
+                    logger.warning(
+                        "[%s] abandoned worker breaker tripped (%d > %d); "
+                        "surfacing error for model fallback.",
+                        sid,
+                        self.abandoned_worker_count,
+                        self._abandoned_breaker_threshold(),
+                    )
+                    raise
                 last_error = str(exc)
                 logger.warning(
                     "[%s] Attempt %d/%d failed: %s", sid, attempt, MAX_RETRIES, last_error
@@ -705,34 +886,77 @@ class OpenAIClient:
         a silent black screen. It works identically whether ``chat`` is invoked
         synchronously or from inside ``asyncio.to_thread`` (the async shim),
         because the polling happens on whatever thread called ``chat``.
+
+        Hard timeout (plan-c B2.2): when the wall-clock limit fires, the
+        caller regains control immediately via :class:`LLMCallTimeoutError`.
+        The worker itself is a daemon and cannot be killed — it is registered
+        on the abandoned-worker ledger (plan-c B1.2) and removes itself when
+        it eventually finishes, so :meth:`worker_metrics` stays live.
         """
         holder: dict[str, ChatCompletion] = {}
         error: dict[str, BaseException] = {}
+        # The worker reports its own thread ident (threading.Thread.ident is
+        # Optional until start(); inside the worker get_ident() is exact).
+        ident_holder: dict[str, int] = {}
 
         def _run() -> None:
+            ident_holder["id"] = threading.get_ident()
             try:
                 holder["resp"] = self._client.chat.completions.create(**create_kwargs)
             except Exception as exc:  # re-raised in the caller thread
                 error["exc"] = exc
+            finally:
+                # Worker finished (success, error or post-timeout): remove it
+                # from the abandoned ledger so the metrics decay to zero.
+                wid = ident_holder.get("id")
+                if wid is not None:
+                    with self._abandoned_lock:
+                        self._abandoned_workers.discard(wid)
+                        self._abandoned_ages.pop(wid, None)
 
         worker = threading.Thread(target=_run, daemon=True)
+        with self._abandoned_lock:
+            self._active_workers += 1
         worker.start()
+        try:
+            interval = WAITING_LOG_INTERVAL
+            elapsed = 0.0
+            timed_out = False
+            while worker.is_alive():
+                worker.join(timeout=interval)
+                if worker.is_alive():
+                    elapsed += interval
+                    logger.info(
+                        "[%s] still waiting (%ds, model=%s) ...", sid, int(elapsed), self._model
+                    )
+                    if elapsed >= self._blocking_hard_timeout:
+                        timed_out = True
+                        break
 
-        interval = WAITING_LOG_INTERVAL
-        elapsed = 0.0
-        while worker.is_alive():
-            worker.join(timeout=interval)
-            if worker.is_alive():
-                elapsed += interval
-                logger.info(
-                    "[%s] still waiting (%ds, model=%s) ...", sid, int(elapsed), self._model
+            if timed_out:
+                # The worker keeps running (daemon, unkilleable) and its HTTP
+                # connection stays open until the provider answers or the
+                # socket dies; the caller regains control NOW. Register the
+                # worker so the resource metrics reflect the residue.
+                wid = ident_holder.get("id")
+                if wid is not None:
+                    with self._abandoned_lock:
+                        self._abandoned_workers.add(wid)
+                        self._abandoned_ages.setdefault(wid, time.monotonic())
+                raise LLMCallTimeoutError(
+                    f"Blocking LLM call for model '{self._model}' exceeded the "
+                    f"{self._blocking_hard_timeout:.0f}s hard timeout with no "
+                    f"response; abandoning this attempt."
                 )
 
-        if "exc" in error:
-            raise error["exc"]
-        if "resp" not in holder:
-            raise RuntimeError("LLM call worker thread terminated without a response")
-        return holder["resp"]
+            if "exc" in error:
+                raise error["exc"]
+            if "resp" not in holder:
+                raise RuntimeError("LLM call worker thread terminated without a response")
+            return holder["resp"]
+        finally:
+            with self._abandoned_lock:
+                self._active_workers -= 1
 
     def _record_usage(self, usage: Any) -> None:
         """Accumulate token usage from a usage object (thread-safe)."""
@@ -764,15 +988,34 @@ class OpenAIClient:
         """
         if self._stream_enabled and not force_blocking:
             try:
-                return self._stream_completion(create_kwargs, sid=sid)
-            except Exception as exc:  # streaming unsupported → blocking fallback
-                logger.warning(
-                    "[%s] streaming unavailable for model '%s' (%s); using blocking mode.",
-                    sid,
-                    self._model,
-                    exc,
-                )
-                self._stream_enabled = False
+                result = self._stream_completion(create_kwargs, sid=sid)
+                self._stream_fail_streak = 0  # healthy stream resets streak
+                return result
+            except BadRequestError as exc:
+                # A 400 MAY mean the provider rejects streaming outright, but
+                # it may equally be an unrelated parameter error (plan-c B2.1,
+                # review #17): only treat it as "streaming unsupported" when
+                # the error message mentions stream; otherwise fall through to
+                # the generic transient path (this call only).
+                if "stream" in str(exc).lower():
+                    logger.warning(
+                        "[%s] provider rejected streaming for model '%s' (%s); "
+                        "disabling streaming for this session.",
+                        sid,
+                        self._model,
+                        exc,
+                    )
+                    self._stream_enabled = False
+                else:
+                    self._register_transient_stream_failure(sid, exc)
+            except _TRANSIENT_STREAM_ERRORS as exc:
+                # Transport-level failure (connection reset / read timeout /
+                # incomplete chunked read): blocking fallback for THIS call
+                # only; streaming retries next call (plan-c B2.1).
+                self._register_transient_stream_failure(sid, exc)
+            # Programming errors (KeyError / TypeError / ...) propagate as-is:
+            # they are NOT provider failures and must not be masked by a
+            # silent blocking fallback (review #16).
 
         # Blocking fallback path.
         blocking_kwargs = {k: v for k, v in create_kwargs.items() if k != "stream"}
@@ -1272,6 +1515,12 @@ def create_llm_client(settings: Settings) -> MultiModelLLMClient:
     max_tokens = settings.llm.max_output_tokens
     reasoning_effort = settings.llm.reasoning_effort or None
     continuation_intent = settings.llm.continuation_reasoning_effort or None
+    # Plan-c B1.1: an explicit OPENAI_BLOCKING_HARD_TIMEOUT is honoured
+    # verbatim (validated >= OPENAI_TIMEOUT inside OpenAIClient); unset means
+    # max(timeout*2, 600) so slow completions are not killed early.
+    blocking_hard_timeout: float | None = (
+        float(settings.llm.blocking_hard_timeout) if settings.llm.blocking_hard_timeout else None
+    )
 
     def _build(model_name: str, sdk_client: OpenAI | AzureOpenAI) -> OpenAIClient:
         profile = _resolve_profile_for(model_name, settings)
@@ -1292,6 +1541,7 @@ def create_llm_client(settings: Settings) -> MultiModelLLMClient:
             profile=profile,
             reasoning_effort=reasoning_effort,
             continuation_intent=continuation_intent,
+            blocking_hard_timeout=blocking_hard_timeout,
         )
 
     if settings.azure_llm.enabled:

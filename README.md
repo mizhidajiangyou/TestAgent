@@ -25,15 +25,17 @@ TestAgent/
 ├── testagent/                 # 主包
 │   ├── config/                # 配置层（settings、数据模型、日志）
 │   ├── parsers/               # 解析层（Swagger、需求文档、DocumentParser）
-│   ├── engine/                # AI 引擎层（LLM 客户端、Prompt 构建、会话引擎）
-│   ├── generators/            # 生成层（测试用例、性能脚本、GUI 脚本）
+│   ├── engine/                # AI 引擎层（LLM 客户端 + 模型档案、Prompt 构建、会话引擎）
+│   ├── pipeline/              # 任务包管道（manifest/executor/registry/校验/写出）
+│   ├── generators/            # 生成层（测试用例、性能脚本、GUI 脚本、截断恢复引擎）
 │   ├── reports/               # 报告层（测试用例报告、性能报告）
 │   ├── utils/                 # 工具函数
-│   ├── cli.py                 # CLI 命令
+│   ├── cli/                   # CLI 命令包（commands/ 含 tasks、checkpoint）
 │   └── container.py           # 依赖注入容器
+├── tasks/                     # 任务包（_example 最小示例）
 ├── templates/                 # Jinja2 Prompt 模板
 ├── examples/                  # 示例输入文件
-├── tests/                     # 单元测试 + 端到端测试
+├── tests/                     # 单元测试 + 端到端测试 + 架构门禁
 ├── docker/                    # Docker 镜像与编排
 ├── k8s/                       # Kubernetes 部署清单
 └── monitoring/                # Prometheus / Grafana 监控配置
@@ -66,11 +68,18 @@ cp .env.example .env
 | `OPENAI_BASE_URL` | API 地址（可指向兼容服务） | `https://api.openai.com/v1` |
 | `OPENAI_TIMEOUT` | 单次请求超时（秒） | `300` |
 | `OPENAI_MAX_OUTPUT_TOKENS` | 单次最大输出 token（防截断） | `16000` |
+| `OPENAI_MODEL_PROFILE` | 显式指定模型档案（deepseek-v4 / qwen3.8 / openai-reasoning / openai-classic / generic-openai-compatible），空 = 按模型名自动匹配 | 空 |
+| `OPENAI_REASONING_EFFORT` | 首轮推理强度意图（low/medium/high/disabled），空 = 模型默认 | 空 |
+| `OPENAI_BLOCKING_HARD_TIMEOUT` | 单次阻塞调用的硬墙钟上限（秒）。显式配置严格生效且必须 ≥ `OPENAI_TIMEOUT`；未配置 = max(超时×2, 600) | `0`（未配置） |
+| `OPENAI_STREAM` | 流式输出（实时进度日志） | `true` |
 | `AZURE_OPENAI_ENABLED` | 启用 Azure OpenAI | `false` |
 | `PERF_BASE_URL` | 性能测试目标地址 | `https://api.example.com` |
 | `PERF_VIRTUAL_USERS` | 虚拟用户数 | `100` |
 | `PERF_DURATION_SECONDS` | 压测时长（秒） | `300` |
 | `OUTPUT_DIR` | 输出目录 | `./output` |
+| `TASKS_DIR` | 任务包扫描目录（每个子目录一个 manifest.json → 一个 CLI 命令） | `./tasks` |
+| `TASKS_DISABLE` | 屏蔽指定任务包（逗号分隔，迁移期回滚开关） | 空 |
+| `CHECKPOINT_KEEP_LAST` | 保留最近 N 个 pre-review 快照 | `50` |
 | `SCRIPT_FORMAT` | 默认性能脚本格式 | `k6` |
 | `REVIEW_ENABLED` | 生成后是否二次复检（多轮交叉校验） | `false` |
 | `REVIEW_MAX_ROUNDS` | Review 轮数（奇数轮用非首选模型、偶数轮用首选模型） | `2` |
@@ -210,6 +219,37 @@ testagent chat -r requirements.md --session my-session-1
 
 内置命令：`generate` / `refine` / `validate` / `save`（保存最新 artifact）/ `history`（查看历史）/ `exit`。
 
+### 任务包管道（Task Packages）
+
+除内置命令外，TestAgent 支持以**任务包**方式声明式扩展新任务：一个目录 + `manifest.json` + Jinja2 模板，即可获得一个新的 CLI 命令（无需写 Python）。内置 `tasks/_example` 是最小示例：
+
+```bash
+# 列出发现的任务包（--all 含下划线隐藏包）
+testagent tasks list --all
+
+# 校验所有任务包（manifest 严格 schema + 模板 synthetic-context 渲染）
+testagent tasks validate          # 报告问题但 exit 0
+testagent tasks validate --strict # 任何问题 exit 1（CI 模式）
+
+# 运行隐藏示例包（单阶段 echo：text 输入 → JSON 数组产物）
+testagent _example --text "hello world" -o out/echo.json
+```
+
+manifest.json 声明输入（swagger/requirements/file/text/choice/int/bool）、阶段（模板 + 拆分策略 + 输出契约）、校验器（jsonschema / python_compile / xml / regex）、合并（baseline 去重 + 重编号）与输出格式。schema 全字段 `extra="forbid"`——拼写错误在校验期即报错，不会静默变成默认值。
+
+**五分钟加一个新任务**：复制 `tasks/_example` → 改 `manifest.json`（name/inputs/stages）→ 放模板 → `testagent tasks validate --strict` → `testagent <name> ...`。模板中可选变量用 `{{ x | default('') }}` 守卫；manifest 的 `template_context` 字段可声明样例上下文用于校验期渲染。
+
+**失败语义与恢复**：每个生成单元按封闭七态分类（SUCCESS / EMPTY / INVALID / TIMEOUT / PROVIDER_ERROR / VALIDATION_ERROR / CANCELLED），各自映射恢复策略——空响应串行重问、超时与 provider 错误走重试 + 模型 fallback、校验失败走定向修复；引擎恢复阶梯已耗尽仍空的单元不再重复请求。
+
+**快照（pre_review_snapshot）**：每次任务运行在 review 前原子写入 `<session_id>.pre_review_snapshot.json`（保留最近 `CHECKPOINT_KEEP_LAST` 个）。它是**产物快照**而非断点续跑——用于 review 阶段异常时找回已生成的产物：
+
+```bash
+testagent checkpoint list                      # 列出可恢复的快照
+testagent checkpoint recover <session_id> --save-as out/recovered.json
+```
+
+与旧 Generator 的关系：任务包管道与现有 `generate-tests` / `generate-perf` / `generate-gui` **并存**（旧命令在迁移期始终优先），迁移按 `output/plan-c.md` 渐进执行；`TASKS_DISABLE` 可屏蔽单个任务包作回滚开关。
+
 ### 运行生成的脚本
 
 ```bash
@@ -226,7 +266,8 @@ pytest output/gui_test.py --browser chromium
 ## 开发
 
 ```bash
-# 运行测试（192 个用例，含端到端流水线 + 多模型 fallback + 多轮 review + 会话引擎 + GUI 生成器 + 文档解析器）
+# 运行测试（487 个用例：端到端流水线 + 多模型 fallback + 多轮 review + 会话引擎 +
+# GUI 生成器 + 文档解析器 + 截断恢复引擎 + 任务包管道 E2E + 架构门禁）
 pytest
 
 # 代码检查（ruff lint + format）
@@ -235,7 +276,12 @@ ruff format --check testagent/ tests/
 
 # 严格类型检查
 mypy testagent/
+
+# 任务包严格校验（CI 模式，任何 manifest/模板问题 exit 1）
+testagent tasks validate --strict
 ```
+
+架构约束（由 `tests/test_pipeline_e2e.py` 的架构门禁测试强制）：`testagent/pipeline/` 不得 import 旧的 `generators` / `prompt_builder` / `conversation`——新管道与旧生成器通过依赖注入容器在组合根装配，防止迁移期反向耦合。
 
 ## 部署
 

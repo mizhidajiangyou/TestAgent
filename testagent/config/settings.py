@@ -79,6 +79,13 @@ class LLMSettings(BaseSettings):
     continuation_thinking_budget: int = Field(
         default=4096, alias="OPENAI_CONTINUATION_THINKING_BUDGET"
     )
+    # Hard wall-clock limit (seconds) for a single blocking (non-streaming)
+    # LLM call (plan-c B1.1/B2.2). An EXPLICIT value is honoured verbatim
+    # (must be >= OPENAI_TIMEOUT, else startup fails); unset means
+    # max(OPENAI_TIMEOUT * 2, 600). Exceeding it raises LLMCallTimeoutError
+    # into a bounded retry path instead of waiting forever on a wedged
+    # provider. Default 0 = unset.
+    blocking_hard_timeout: int = Field(default=0, alias="OPENAI_BLOCKING_HARD_TIMEOUT")
 
     @property
     def models(self) -> list[str]:
@@ -150,6 +157,11 @@ class Settings(BaseSettings):
     output_dir: str = Field(default="./output", alias="OUTPUT_DIR")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     script_format: Literal["k6", "jmeter"] = Field(default="k6", alias="SCRIPT_FORMAT")
+    #: Directory scanned for task packages (manifest.json + templates), each
+    #: subdirectory becoming a ``testagent run <name>`` command (plan-c B4.1).
+    #: Underscore-prefixed dirs (e.g. ``_example``) are loadable but hidden
+    #: from the default command listing.
+    tasks_dir: str = Field(default="./tasks", alias="TASKS_DIR")
 
     #: Whether to run a second-pass LLM review after generating test cases.
     review_enabled: bool = Field(default=False, alias="REVIEW_ENABLED")

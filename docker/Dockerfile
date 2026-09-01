@@ -52,6 +52,10 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY testagent/ testagent/
 COPY templates/ templates/
+# Task packages (plan-c pipeline): each directory with a manifest.json becomes
+# a CLI command at startup. Mount a host dir over /app/tasks (TASKS_DIR) to
+# add custom tasks without rebuilding the image.
+COPY tasks/ tasks/
 
 RUN uv pip install --system ".[documents,web]"
 

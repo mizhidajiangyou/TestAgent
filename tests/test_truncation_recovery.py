@@ -16,6 +16,7 @@ identical retries with no output" — end to end:
 
 import asyncio
 import json
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -461,9 +462,11 @@ class TestObservability:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Reasoning-token streaming is visible at INFO (was DEBUG-only):
-        a oneshot 'is thinking' notice, throttled progress lines, and the
-        final response log carries the reasoning char count."""
+        """Reasoning-token streaming is observable: a oneshot 'is thinking'
+        notice and the final response log (with the reasoning char count) at
+        INFO; throttled progress lines at DEBUG (downgraded from INFO in the
+        prompt-engineering pass to cut log noise — the one-shot notice and
+        the completion summary carry the signal)."""
         monkeypatch.setattr("testagent.engine.llm_client.THINKING_LOG_INTERVAL", 0.0)
 
         def _rchunk(text: str) -> MagicMock:
@@ -482,11 +485,12 @@ class TestObservability:
         ]
         client = OpenAIClient(client=inner, model="qwen3.8-max", timeout=1.0, max_output_tokens=100)
 
-        with caplog.at_level("INFO"):
+        with caplog.at_level(logging.DEBUG, logger="testagent.engine.llm_client"):
             assert client.chat("sys", "usr") == "hello"
 
-        messages = [rec.message for rec in caplog.records]
-        assert any("is thinking" in m for m in messages)
-        assert any("thinking: 5000 chars so far" in m for m in messages)
-        assert any("thinking: 11000 chars so far" in m for m in messages)
-        assert any("reasoning=11000 chars" in m for m in messages)
+        info_messages = [rec.message for rec in caplog.records if rec.levelno >= logging.INFO]
+        all_messages = [rec.message for rec in caplog.records]
+        assert any("is thinking" in m for m in info_messages)
+        assert any("reasoning=11000 chars" in m for m in info_messages)
+        assert any("thinking: 5000 chars so far" in m for m in all_messages)
+        assert any("thinking: 11000 chars so far" in m for m in all_messages)

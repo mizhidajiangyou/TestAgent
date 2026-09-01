@@ -22,6 +22,9 @@ from testagent.generators.testcase_generator import TestCaseGenerator
 from testagent.generators.truncation import TruncationPolicy
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
+from testagent.pipeline.executor import PipelineExecutor
+from testagent.pipeline.registry import get_registry
+from testagent.pipeline.runtime import build_generate_unit
 from testagent.reports.performance_report import PerformanceReport
 from testagent.reports.testcase_report import TestCaseReport
 
@@ -63,6 +66,21 @@ class Container(containers.DeclarativeContainer):
     truncation_policy = providers.Singleton(
         TruncationPolicy,
         output_token_cap=settings.provided.llm.max_output_tokens,
+    )
+
+    # Task-package pipeline (plan-c B4.6/B4.7): registry scans TASKS_DIR,
+    # the executor orchestrates, and the unit generator is INJECTED (arch
+    # gate: pipeline modules never import the legacy generators; the wiring
+    # lives here at the composition root).
+    task_registry = providers.Singleton(get_registry, base_dir=settings.provided.tasks_dir)
+    pipeline_executor = providers.Singleton(
+        PipelineExecutor,
+        llm_client=llm_client,
+        settings=settings,
+        generate_unit=providers.Callable(
+            build_generate_unit,
+            llm=llm_client.provided,
+        ),
     )
 
     testcase_generator = providers.Singleton(

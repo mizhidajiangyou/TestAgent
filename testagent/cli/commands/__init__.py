@@ -7,9 +7,11 @@ themselves are imported here purely for this registration side-effect.
 
 from testagent.cli.commands import (  # noqa: F401  (registration side-effect)
     chat,
+    checkpoint,
     config,
     generate_gui,
     generate_perf,
     generate_tests,
     serve,
+    tasks,
 )
