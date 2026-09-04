@@ -91,22 +91,37 @@ INPUT_PARSERS: dict[str, InputParser] = {
 }
 
 
+def _format_param(name: str, schema: Any, required: bool) -> str:
+    """Format one parameter as ``name(type,req|opt[,enum:a|b])``.
+
+    Byte-parity with ``prompt_builder._format_param`` (B5.1 gate: the perf
+    review context renders the signature, so any drift is a fingerprint
+    diff). Kept local — the arch gate forbids importing the legacy
+    prompt_builder from the pipeline.
+    """
+    t = schema.get("type", "?") if isinstance(schema, dict) else "?"
+    extra = ""
+    if isinstance(schema, dict) and schema.get("enum"):
+        extra = ",enum:" + "|".join(str(e) for e in schema["enum"])
+    return f"{name}({t},{'req' if required else 'opt'}{extra})"
+
+
 def _endpoints_signature(endpoints: list[Any]) -> str:
     """Compact endpoint signature (arch gate B4.11: the pipeline must not
     import the legacy prompt_builder, so this is a local implementation of
-    the same name/type/required/enum format)."""
+    the same name/type/required/enum format — byte-parity verified by the
+    B5.1 fingerprint tests)."""
     lines: list[str] = []
     for ep in endpoints:
         parts: list[str] = []
         for p in getattr(ep, "parameters", None) or []:
             if not isinstance(p, dict):
                 continue
-            schema = p.get("schema") or {}
-            t = schema.get("type", "?") if isinstance(schema, dict) else "?"
-            extra = ""
-            if isinstance(schema, dict) and schema.get("enum"):
-                extra = ",enum:" + "|".join(str(e) for e in schema["enum"])
-            parts.append(f"{p.get('name', '')}({t},{'req' if p.get('required') else 'opt'}{extra})")
+            parts.append(
+                _format_param(
+                    str(p.get("name", "")), p.get("schema") or {}, bool(p.get("required", False))
+                )
+            )
         line = f"- {ep.method} {ep.path}"
         if parts:
             line += f" params:[{', '.join(sorted(parts))}]"
@@ -116,10 +131,7 @@ def _endpoints_signature(endpoints: list[Any]) -> str:
             props = schema.get("properties", {}) if isinstance(schema, dict) else {}
             if isinstance(props, dict) and props:
                 req_set = set(schema.get("required", []))
-                bparts = [
-                    f"{k}({(v or {}).get('type', '?')},{'req' if k in req_set else 'opt'})"
-                    for k, v in props.items()
-                ]
+                bparts = [_format_param(k, v or {}, k in req_set) for k, v in props.items()]
                 line += f" body:[{', '.join(sorted(bparts))}]"
         lines.append(line)
     return "\n".join(lines)

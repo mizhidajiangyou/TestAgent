@@ -20,15 +20,17 @@ if TYPE_CHECKING:
     from testagent.pipeline.manifest import Manifest
 
 #: Sample values per input kind, used when the manifest does not declare an
-#: explicit ``template_context`` entry for the variable.
-_KIND_SAMPLES: dict[str, str] = {
+#: explicit ``template_context`` entry for the variable. int/bool use native
+#: types — templates legitimately do arithmetic on them (B5.1: k6 think-time
+#: ``{{ think_time_ms // 1000 }}``).
+_KIND_SAMPLES: dict[str, Any] = {
     "swagger": "GET /items - list items\nPOST /items - create item",
     "requirements": "- REQ-001: sample requirement",
     "file": "sample file content",
     "text": "sample text",
     "choice": "sample-choice",
-    "int": "10",
-    "bool": "true",
+    "int": 10,
+    "bool": True,
 }
 
 
@@ -65,6 +67,15 @@ def build_synthetic_context(manifest: Manifest) -> dict[str, Any]:
         "json_mode": False,
         "historical_cases": "",
         "already_covered": "",
+        # Review-stage injected variables (plan-d B5.0): the review template
+        # renders with the serialized artifact and the round number. The
+        # script_* trio covers templates migrated verbatim from the legacy
+        # script_review_prompt.j2.
+        "artifact": "[]",
+        "round": 1,
+        "script_kind": "k6",
+        "script": "script content",
+        "context_text": "## Review Context",
     }
     for key, value in derived_defaults.items():
         ctx.setdefault(key, value)

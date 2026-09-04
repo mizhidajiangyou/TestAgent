@@ -35,7 +35,7 @@ from testagent.engine.llm_client import LLMClient, LLMResponse
 
 if TYPE_CHECKING:
     from testagent.engine.prompt_builder import PromptBuilder
-    from testagent.generators.truncation import TruncationPolicy
+    from testagent.engine.truncation import TruncationPolicy
 
 logger = logging.getLogger(__name__)
 

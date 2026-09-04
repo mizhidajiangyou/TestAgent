@@ -28,10 +28,10 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from testagent.config.constants import DEFAULT_TARGET_URL
 from testagent.engine.llm_client import LLMClient
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.engine.session_store import InMemoryStore, SessionStore
-from testagent.generators.gui_test_generator import DEFAULT_TARGET_URL
 
 logger = logging.getLogger(__name__)
 

@@ -16,15 +16,15 @@ from testagent.engine.conversation import ConversationManager
 from testagent.engine.llm_client import create_llm_client
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.engine.session_store import create_session_store
+from testagent.engine.truncation import TruncationPolicy
 from testagent.generators.gui_test_generator import GUITestGenerator
 from testagent.generators.performance_generator import PerformanceGenerator
 from testagent.generators.testcase_generator import TestCaseGenerator
-from testagent.generators.truncation import TruncationPolicy
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
 from testagent.pipeline.executor import PipelineExecutor
 from testagent.pipeline.registry import get_registry
-from testagent.pipeline.runtime import build_generate_unit
+from testagent.pipeline.runtime import build_generate_unit, build_review_runner
 from testagent.reports.performance_report import PerformanceReport
 from testagent.reports.testcase_report import TestCaseReport
 
@@ -69,9 +69,9 @@ class Container(containers.DeclarativeContainer):
     )
 
     # Task-package pipeline (plan-c B4.6/B4.7): registry scans TASKS_DIR,
-    # the executor orchestrates, and the unit generator is INJECTED (arch
-    # gate: pipeline modules never import the legacy generators; the wiring
-    # lives here at the composition root).
+    # the executor orchestrates, and the unit generator + review runner are
+    # INJECTED (arch gate: pipeline modules never import the legacy
+    # generators; the wiring lives here at the composition root).
     task_registry = providers.Singleton(get_registry, base_dir=settings.provided.tasks_dir)
     pipeline_executor = providers.Singleton(
         PipelineExecutor,
@@ -79,6 +79,10 @@ class Container(containers.DeclarativeContainer):
         settings=settings,
         generate_unit=providers.Callable(
             build_generate_unit,
+            llm=llm_client.provided,
+        ),
+        review_runner=providers.Callable(
+            build_review_runner,
             llm=llm_client.provided,
         ),
     )

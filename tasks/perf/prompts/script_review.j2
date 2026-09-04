@@ -1,0 +1,70 @@
+{% if script_format == "jmeter" %}
+Review the following JMeter JMX test plan and produce a COMPLETE revised version.
+
+## Review Context (the script MUST stay consistent with this)
+{{ context_text }}
+
+## Current Script
+{{ script }}
+
+## Review Checklist
+1. Load parameters match the context: ThreadGroup users / ramp-up / duration must equal the configured values.
+2. Every endpoint listed in the context has an HTTP Sampler; POST/PUT samplers carry realistic bodies.
+3. Assertions exist: success status codes AND at least one key response field per sampler.
+4. Auth flow is coherent: when auth is enabled, a login sampler extracts the token and later samplers reuse it.
+5. Structure is valid JMX: XML declaration, balanced tags, root <jmeterTestPlan>, listeners present.
+6. Error handling: connection/response failures do not silently pass (assertions catch them).
+7. Cleanup: data-creating samplers have matching teardown/cleanup steps.
+
+## Output Contract
+- Output the COMPLETE revised JMX XML, from <?xml ...?> to </jmeterTestPlan>.
+- No explanations, no diff, no markdown fences — raw XML only.
+- Preserve the original structure and naming where possible; change only what the checklist requires.
+- If nothing needs to change, return the original script unchanged.
+{% elif script_format == "k6" %}
+Review the following k6 JavaScript test script and produce a COMPLETE revised version.
+
+## Review Context (the script MUST stay consistent with this)
+{{ context_text }}
+
+## Current Script
+{{ script }}
+
+## Review Checklist
+1. Load parameters match the context: options/stages implement the configured VUs, duration and ramp-up (ramp-up then steady state).
+2. Pacing matches the configured think time (sleep between iterations).
+3. Every endpoint listed in the context is covered; POST/PUT carry realistic bodies.
+4. `check()` assertions exist: `res.status` against the expected code AND at least one key response field.
+5. `thresholds` exist (e.g. `http_req_duration`, `http_req_failed`).
+6. Auth flow is coherent when auth is enabled (token obtained in setup and sent as Authorization header).
+7. No hardcoded host/secrets: BASE_URL comes from `__ENV` with a documented default.
+8. Cleanup: setup-created data is deleted in teardown.
+
+## Output Contract
+- Output the COMPLETE revised k6 JavaScript script.
+- No explanations, no diff, no markdown fences — raw JavaScript only.
+- Preserve the original structure and naming where possible; change only what the checklist requires.
+- If nothing needs to change, return the original script unchanged.
+{% else %}
+Review the following Playwright (pytest) GUI test script and produce a COMPLETE revised version.
+
+## Review Context (the script MUST stay consistent with this)
+{{ context_text }}
+
+## Current Script
+{{ script }}
+
+## Review Checklist
+1. The target URL and requirement coverage match the review context; every required user flow is exercised.
+2. Locators are robust: prefer `get_by_role` / `get_by_label` / `get_by_placeholder` / `get_by_text` over fragile CSS/XPath selectors.
+3. Assertions are machine-checkable: `expect()` calls verify observable outcomes (URL, visible text, element state), not just "no exception".
+4. Waits are explicit (Playwright auto-waiting / `expect` retries), no brittle fixed sleeps as the only synchronization.
+5. Error handling and cleanup: test data created during the test is removed; fixtures tear down state.
+6. The script is complete and runnable: imports, fixtures and test functions are all present and syntactically valid Python.
+
+## Output Contract
+- Output the COMPLETE revised Python script.
+- No explanations, no diff, no markdown fences — raw Python only.
+- Preserve the original structure and naming where possible; change only what the checklist requires.
+- If nothing needs to change, return the original script unchanged.
+{% endif %}

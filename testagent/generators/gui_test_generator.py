@@ -22,6 +22,7 @@ import logging
 import re
 from pathlib import Path
 
+from testagent.config.constants import DEFAULT_TARGET_URL
 from testagent.config.models import GUITestGenInput
 from testagent.engine.llm_client import LLMClient
 from testagent.engine.prompt_builder import PromptBuilder
@@ -32,8 +33,9 @@ from testagent.parsers.swagger_parser import SwaggerParser
 
 logger = logging.getLogger(__name__)
 
-#: Default target URL used when the caller does not supply one.
-DEFAULT_TARGET_URL = "https://example.com"
+# DEFAULT_TARGET_URL moved to testagent/config/constants.py (plan-e B5.2a)
+# and re-imported here so existing module-level references keep working
+# until the generator is deleted in plan-d B5.4.
 
 
 class GUITestGenerator(BaseGenerator[GUITestGenInput, str]):

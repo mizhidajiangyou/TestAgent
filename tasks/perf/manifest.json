@@ -1,0 +1,133 @@
+{
+  "manifest_version": 1,
+  "name": "perf",
+  "display_name": "Performance test script (k6 / JMeter)",
+  "description": "Generate a k6 or JMeter performance test script from a Swagger/OpenAPI spec (B5.1 migration of the legacy generate-perf command).",
+  "version": "1.0.0",
+  "aliases": [],
+  "examples": "  testagent perf --swagger examples/ecommerce_swagger.json\n  testagent perf --swagger spec.json --script-format jmeter --virtual-users 50",
+  "inputs": [
+    {
+      "name": "swagger",
+      "kind": "swagger",
+      "required": true,
+      "option": ["--swagger", "-s"],
+      "help": "Path or URL to Swagger/OpenAPI spec"
+    },
+    {
+      "name": "script_format",
+      "kind": "choice",
+      "choices": ["k6", "jmeter"],
+      "default": "from_settings:script_format",
+      "option": ["--script-format"],
+      "help": "Script format (default from config)"
+    },
+    {
+      "name": "base_url",
+      "kind": "text",
+      "default": "from_settings:perf.base_url",
+      "option": ["--base-url"],
+      "help": "Base URL for the API"
+    },
+    {
+      "name": "virtual_users",
+      "kind": "int",
+      "default": "from_settings:perf.virtual_users",
+      "option": ["--virtual-users"],
+      "help": "Number of virtual users"
+    },
+    {
+      "name": "duration_seconds",
+      "kind": "int",
+      "default": "from_settings:perf.duration_seconds",
+      "option": ["--duration"],
+      "help": "Test duration in seconds"
+    },
+    {
+      "name": "ramp_up_seconds",
+      "kind": "int",
+      "default": "from_settings:perf.ramp_up_seconds",
+      "option": ["--ramp-up"],
+      "help": "Ramp-up period in seconds"
+    },
+    {
+      "name": "think_time_ms",
+      "kind": "int",
+      "default": "from_settings:perf.think_time_ms",
+      "option": ["--think-time"],
+      "help": "Think time between requests in ms"
+    },
+    {
+      "name": "auth_type",
+      "kind": "choice",
+      "choices": ["none", "bearer", "basic"],
+      "default": "from_settings:perf.auth_type",
+      "option": ["--auth-type"],
+      "help": "Authentication type to embed in the script"
+    }
+  ],
+  "require_any": ["swagger"],
+  "pipeline": {
+    "verify_model": "from_settings",
+    "json_mode": "from_settings",
+    "max_concurrency": "from_settings",
+    "output_language": "from_settings",
+    "fan_out_recover": false,
+    "stages": [
+      {
+        "name": "script",
+        "template": "prompts/performance.j2",
+        "system_prompt": "file:prompts/performance_system.j2",
+        "split": { "by": "single" },
+        "output": { "contract": "text" }
+      }
+    ],
+    "merge": { "renumber": { "field": "" } }
+  },
+  "artifact": {
+    "type": "text",
+    "validators": [
+      {
+        "kind": "xml",
+        "root": "jmeterTestPlan",
+        "declaration": "<?xml",
+        "closing": "</jmeterTestPlan>",
+        "when": { "script_format": "jmeter" }
+      }
+    ]
+  },
+  "review": {
+    "enabled": "from_settings",
+    "max_rounds": "from_settings",
+    "template": "prompts/script_review.j2",
+    "system_prompt": "file:prompts/script_review_system.j2",
+    "context_template": "prompts/review_context.j2",
+    "context": ["script", "round", "context_text"]
+  },
+  "output": {
+    "default_path": "./output/perf_test.js",
+    "formats": {
+      "text": {
+        "extension": {
+          "by_input": "script_format",
+          "map": { "k6": ".js", "jmeter": ".jmx" }
+        }
+      }
+    }
+  },
+  "session": { "record": true, "resume": true },
+  "template_context": {
+    "endpoints_text": "GET /items - list items\nPOST /items - create item",
+    "script_format": "k6",
+    "base_url": "https://api.example.com",
+    "virtual_users": 100,
+    "duration_seconds": 300,
+    "ramp_up_seconds": 60,
+    "think_time_ms": 500,
+    "auth_type": "none",
+    "endpoints_signature": "- GET /items\n- POST /items body:[name(string,req)]",
+    "script": "import http from 'k6/http';",
+    "context_text": "## Load Configuration",
+    "output_language": "english"
+  }
+}

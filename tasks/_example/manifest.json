@@ -1,0 +1,54 @@
+{
+  "manifest_version": 1,
+  "name": "_example",
+  "display_name": "Example task",
+  "description": "Minimal single-stage task: echo a text input as a JSON list (golden-path demo).",
+  "version": "1.0.0",
+  "aliases": [],
+  "examples": "  testagent run _example --text \"hello world\"",
+  "inputs": [
+    {
+      "name": "text",
+      "kind": "text",
+      "required": true,
+      "option": ["--text"],
+      "help": "Input text to transform"
+    }
+  ],
+  "require_any": ["text"],
+  "pipeline": {
+    "stages": [
+      {
+        "name": "echo",
+        "template": "prompts/echo.j2",
+        "system_prompt": "inline:You are a JSON echo service. Output only valid JSON.",
+        "split": { "by": "single" },
+        "output": { "contract": "json_list" }
+      }
+    ]
+  },
+  "artifact": {
+    "type": "structured",
+    "item_schema": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" }
+      },
+      "required": ["text"]
+    }
+  },
+  "review": {
+    "enabled": "from_settings",
+    "max_rounds": "from_settings",
+    "template": "prompts/review.j2",
+    "system_prompt": "inline:You are a JSON artifact reviewer. Output only valid JSON."
+  },
+  "output": {
+    "default_path": "./output/example_echo.json",
+    "formats": { "json": {} }
+  },
+  "session": { "record": true, "resume": true },
+  "template_context": {
+    "text": "sample text"
+  }
+}

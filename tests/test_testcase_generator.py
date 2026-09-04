@@ -1138,7 +1138,7 @@ class TestSessionAndEmptyRecovery:
         # Retry keeps the SAME token budget (no shrink) on every attempt.
         # v6 passes the policy cap explicitly (TruncationPolicy default 16000)
         # instead of None, but never shrinks it between attempts.
-        from testagent.generators.truncation import TruncationPolicy
+        from testagent.engine.truncation import TruncationPolicy
 
         assert seen_max_tokens == [TruncationPolicy().output_token_cap] * 2
         # The re-ask tells the model its previous output was empty / to

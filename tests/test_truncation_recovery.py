@@ -32,7 +32,7 @@ from testagent.engine.llm_client import (
 from testagent.engine.model_profiles import DEEPSEEK_V4, RequestIntent
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.testcase_generator import TestCaseGenerator
-from testagent.generators.truncation import TruncationPolicy
+from testagent.engine.truncation import TruncationPolicy
 from tests.test_truncation_engine import MetaMockClient
 
 _EPS = [
@@ -287,11 +287,27 @@ class TestEngineRecovery:
         assert llm.seen_caps == [300000, 300000, 393216]
 
     async def test_salvage_and_return_merges(self) -> None:
-        """v7-review leftover fix: salvaged items are merged, not discarded."""
+        """v7-review leftover fix: salvaged items are merged, not discarded.
+
+        B6a-1: the engine now works on plain dict items end to end; the
+        dedup keys are the adapter's dict-level keys (same identities the
+        legacy TestCase keys produced)."""
+        from testagent.generators.testcase_generator import (
+            _engine_dedup_key,
+            _item_scope_key,
+        )
+
         gen = _generator(RecoveryFakeClient([]))
         engine = gen._engine
 
-        existing = gen._to_test_cases([_case(1, "GET /users")], _EPS)
+        existing = [_case(1, "GET /users")]
+        # The engine's resolved scope key: declared endpoint, else the run's
+        # primary scope (first entry of the entry scope).
+        primary = _EPS[0].full_path
+
+        def scope_of(item: dict[str, Any]) -> str:
+            return _item_scope_key(item) or primary
+
         # Truncated JSON: first object complete (duplicate of existing),
         # second object complete (new), third cut mid-way.
         raw = (
@@ -304,16 +320,16 @@ class TestEngineRecovery:
         result = engine._salvage_and_return(
             existing,
             raw,
-            _EPS,
             {"GET /users", "POST /users"},
             {"GET /users": 2, "POST /users": 2},
-            # The loop would pass the produced cases' keys: the salvaged
+            # The loop would pass the produced items' keys: the salvaged
             # duplicate of case 1 must be deduped against them.
-            {gen._case_dedup_key(tc) for tc in existing},
+            {_engine_dedup_key(it, scope_of(it)) for it in existing},
+            scope_of=scope_of,
         )
-        # Existing case + salvaged NEW case (the duplicate is deduped).
+        # Existing item + salvaged NEW item (the duplicate is deduped).
         assert len(result) == 2
-        assert {tc.title for tc in result} == {"case 1", "case 2"}
+        assert {str(it["title"]) for it in result} == {"case 1", "case 2"}
 
     async def test_slim_continue_excludes_full_context(self) -> None:
         # Round 1 truncated with partial content; round 2 must receive the

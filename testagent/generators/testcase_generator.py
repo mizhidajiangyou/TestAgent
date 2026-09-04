@@ -43,13 +43,13 @@ from testagent.engine.prompt_builder import (
     extract_requirement_summary,
 )
 from testagent.engine.review import ReviewLoop
-from testagent.generators.base import BaseGenerator
-from testagent.generators.truncation import (
+from testagent.engine.truncation import (
+    GenericHooks,
     TruncationEngine,
     TruncationPolicy,
-    _EngineHooks,
     build_continue_prompt,
 )
+from testagent.generators.base import BaseGenerator
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
 
@@ -89,6 +89,29 @@ CSV_COLUMNS = [
     "expected_results",
     "tags",
 ]
+
+
+def _item_scope_key(item: dict[str, Any]) -> str:
+    """GenericHooks.scope_key adapter: the item's DECLARED endpoint key.
+
+    ``""`` when the item declares none — the engine then attributes it to
+    the run's primary scope (legacy converter parity).
+    """
+    return str(item.get("endpoint", "") or "")
+
+
+def _engine_dedup_key(item: dict[str, Any], scope_key: str) -> str:
+    """GenericHooks.dedup_key adapter — byte-equal to the legacy TestCase
+    key (``title|endpoint.full_path|test_type.value``, lowercased title /
+    endpoint, test_type normalized through the enum with a functional
+    fallback). The resolved scope key replaces the legacy post-conversion
+    ``endpoint.full_path`` (same attribution rule)."""
+    title = str(item.get("title", "")).strip().lower()
+    try:
+        test_type = TestType(item.get("test_type", "functional")).value
+    except ValueError:
+        test_type = TestType.FUNCTIONAL.value
+    return f"{title}|{scope_key.lower()}|{test_type}"
 
 
 class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
@@ -175,19 +198,22 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             max_rounds=self._review_max_rounds,
         )
 
-        # Truncation-aware generation loop (plan v6 + v10 B). The engine owns
-        # the loop mechanics; JSON extraction / salvage / conversion / re-ask
-        # prompt building stay here and are injected as hooks.
+        # Truncation-aware generation loop (plan v6 + v10 B, B6a-1 generalized).
+        # The engine owns the loop mechanics and produces plain dict items;
+        # this generator is the DOMAIN ADAPTER: it injects the data hooks
+        # (extract / salvage / scope / dedup / continue + re-ask) and converts
+        # the engine's returned dicts to TestCase objects afterwards
+        # (``_to_test_cases`` is no longer an engine hook).
         self._truncation_policy = truncation_policy or TruncationPolicy()
         self._engine = TruncationEngine(
             self._truncation_policy,
             self._json_mode,
-            _EngineHooks(
-                extract_json=self._extract_json,
-                salvage_truncated=self._salvage_truncated_json,
-                to_test_cases=self._to_test_cases,
+            GenericHooks(
+                extract=self._extract_json,
+                salvage=self._salvage_truncated_json,
+                scope_key=_item_scope_key,
+                dedup_key=_engine_dedup_key,
                 build_reask=self._build_reask_prompt,
-                case_dedup_key=self._case_dedup_key,
                 build_continue_context=self._build_continue_context,
             ),
         )
@@ -531,7 +557,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             return await self._agenerate_v2_legacy(
                 system_prompt, user_prompt, endpoints, step_label, llm
             )
-        return await self._engine.arun(llm, system_prompt, user_prompt, endpoints, step_label)
+        # B6a-1: the engine returns plain dict items; the adapter converts.
+        items = await self._engine.arun(llm, system_prompt, user_prompt, endpoints, step_label)
+        return self._to_test_cases(items, endpoints)
 
     async def _agenerate_v2_legacy(
         self,
@@ -804,7 +832,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         llm = client or self._llm
         if not self._truncation_policy.enable_v4_resume:
             return self._generate_v2_legacy(system_prompt, user_prompt, endpoints, step_label, llm)
-        return self._engine.run(llm, system_prompt, user_prompt, endpoints, step_label)
+        # B6a-1: the engine returns plain dict items; the adapter converts.
+        items = self._engine.run(llm, system_prompt, user_prompt, endpoints, step_label)
+        return self._to_test_cases(items, endpoints)
 
     def _generate_v2_legacy(
         self,

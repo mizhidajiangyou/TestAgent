@@ -1,4 +1,4 @@
-"""Truncation-aware generation loop (v6).
+"""Truncation-aware generation loop (v6 / B6a generalized).
 
 Implements the state machine from ``output/long_return_truncation_plan_v6.md``:
 a single ``while`` loop that keeps calling the LLM until every endpoint's
@@ -13,8 +13,18 @@ Design notes:
   path is the production driver; the sync ``run`` wrapper executes it via
   ``asyncio.run`` (the sync ``generate`` path never runs inside an event loop).
 - The engine owns only loop mechanics + pure helpers. JSON extraction /
-  salvage / conversion / re-ask prompt building stay on the generator and are
-  injected as hooks, so this module has no dependency on prompt templates.
+  salvage / re-ask prompt building stay on the host and are injected as
+  hooks (:class:`GenericHooks`), so this module has no dependency on prompt
+  templates.
+- **Domain-free (plan-d B6a-1 / R4)**: the engine produces and merges plain
+  ``dict`` items; conversion to domain types (``TestCase`` etc.) happens in
+  the host's ADAPTER outside the engine. The five data capabilities
+  (extract / salvage / scope / dedup / continue) plus the re-ask prompt
+  builder are supplied via hooks; generic dict-level implementations live
+  in :mod:`testagent.pipeline.truncation_hooks` (B6b.1 wires them from
+  manifest config).
+- Scope handling still reads ``endpoint.full_path`` off the ``endpoints``
+  parameter (duck-typed); B6a-2 generalizes this to scope items + keys.
 """
 
 import asyncio
@@ -29,7 +39,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from testagent.config.models import APIEndpoint, TestCase
 from testagent.engine.llm_client import (
     CALL_LABEL,
     JSON_OBJECT_FORMAT,
@@ -51,10 +60,12 @@ from testagent.engine.model_profiles import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "GenericHooks",
     "TruncationEngine",
     "TruncationPolicy",
     "build_continue_prompt",
     "chars_per_token_for",
+    "compress_fingerprint",
     "filter_to_scope",
     "is_truncated",
     "recompute_covered_pending",
@@ -218,27 +229,27 @@ def filter_to_scope(
 
 def recompute_covered_pending(
     expected: dict[str, int],
-    produced: list[TestCase],
+    produced: list[dict[str, Any]],
     covered: dict[str, int],
     pending: dict[str, int],
+    scope_of: Callable[[dict[str, Any]], str],
 ) -> None:
-    """Recompute per-endpoint coverage and remaining quota (in place).
+    """Recompute per-scope-key coverage and remaining quota (in place).
 
-    ``covered`` aggregates produced cases by ``endpoint.full_path``;
-    ``pending[ep] = max(0, expected[ep] - covered[ep])``.
+    ``covered`` aggregates produced items by their RESOLVED scope key
+    (``scope_of``); ``pending[key] = max(0, expected[key] - covered[key])``.
     """
     covered.clear()
-    for tc in produced:
-        ep = tc.endpoint.full_path
-        covered[ep] = covered.get(ep, 0) + 1
-    for ep in expected:
-        pending[ep] = max(0, expected[ep] - covered.get(ep, 0))
+    for it in produced:
+        key = scope_of(it)
+        covered[key] = covered.get(key, 0) + 1
+    for key in expected:
+        pending[key] = max(0, expected[key] - covered.get(key, 0))
 
 
 def shrink_scope(
     scope: list[str],
     expected: dict[str, int],
-    produced: list[TestCase],
     covered: dict[str, int],
     policy: TruncationPolicy,
 ) -> tuple[list[str], set[str], dict[str, int], bool]:
@@ -246,7 +257,6 @@ def shrink_scope(
 
     Returns ``(new_scope, new_batch_set, new_pending, floor_reached)``.
     """
-    del produced  # kept in the signature to mirror the plan; ranking uses covered
     new_n = max(policy.min_scope, len(scope) // 2)
     ranked = sorted(scope, key=lambda ep: covered.get(ep, 0), reverse=True)
     new_scope = ranked[:new_n]
@@ -255,11 +265,16 @@ def shrink_scope(
     return new_scope, set(new_scope), new_pending, floor
 
 
-def compress_fingerprint(produced: list[TestCase], max_items: int = 30) -> str:
-    """Compress already-produced cases into a short fingerprint for continue prompts."""
+def compress_fingerprint(
+    produced: list[dict[str, Any]],
+    scope_of: Callable[[dict[str, Any]], str],
+    max_items: int = 30,
+) -> str:
+    """Compress already-produced items into a short fingerprint for continue
+    prompts (``- <title> @ <resolved scope key>`` per item)."""
     if not produced:
         return "(none yet)"
-    lines = [f"- {tc.title} @ {tc.endpoint.full_path}" for tc in produced[:max_items]]
+    lines = [f"- {it.get('title', '')} @ {scope_of(it)}" for it in produced[:max_items]]
     if len(produced) > max_items:
         lines.append(f"... and {len(produced) - max_items} more")
     return "\n".join(lines)
@@ -352,20 +367,68 @@ class _SyncPreferredAdapter:
 
 
 @dataclass
-class _EngineHooks:
-    """Callables provided by the host generator (keeps this module pure)."""
+class GenericHooks:
+    """The engine's data capabilities, supplied by the host (plan-d R4).
 
-    extract_json: Callable[[str], list[Any] | None]
-    salvage_truncated: Callable[[str], list[Any] | None]
-    to_test_cases: Callable[[list[Any], list[APIEndpoint]], list[TestCase]]
+    Five core capabilities (extract / salvage / scope / dedup / continue)
+    plus the re-ask prompt builder. The engine produces and merges plain
+    ``dict`` items — **conversion to domain types is NOT an engine
+    capability**: the host adapter converts the returned items after
+    ``arun``/``run`` (``to_test_cases`` used to live here; B6a-1 moved it
+    out to keep the engine domain-free).
+
+    - ``extract`` / ``salvage``: raw response text -> item list (``None``
+      marks the attempt failed; salvage parses truncated text).
+    - ``scope_key``: item -> its DECLARED scope key (``""`` when the item
+      declares none — the engine then attributes it to the run's primary
+      scope, i.e. the first entry of the entry scope: legacy converter
+      parity, so scope-less items still count toward coverage).
+    - ``dedup_key``: ``(item, resolved_scope_key) -> str`` — the resolved
+      scope key is passed in so hosts that fold it into the identity get
+      the same attribution the coverage accounting uses.
+    - ``build_reask``: targeted re-ask prompt.
+    - ``build_continue_context``: optional slim continuation context
+      (plan v10 §6 / v8 方案 A); ``None`` -> the engine's legacy
+      full-prompt continuation (:func:`build_continue_prompt`).
+    """
+
+    extract: Callable[[str], list[Any] | None]
+    salvage: Callable[[str], list[Any] | None]
+    scope_key: Callable[[dict[str, Any]], str]
+    dedup_key: Callable[[dict[str, Any], str], str]
     build_reask: Callable[[str, str, str, str], str]
-    case_dedup_key: Callable[[TestCase], str]
-    #: Optional slim continuation context builder (plan v10 §6 / v8 方案 A).
-    #: Signature: (user_prompt, endpoints, fingerprint, label, pending) -> str.
-    #: When None the engine falls back to the legacy full-prompt continuation.
     build_continue_context: (
-        Callable[[str, list[APIEndpoint], str, str, dict[str, int]], str] | None
+        Callable[[str, list[Any], str, str, dict[str, int]], str] | None
     ) = None
+
+
+@dataclass(frozen=True)
+class EngineEvent:
+    """Behavior event emitted at the engine's decision points (plan-e E3 / B6a-0).
+
+    Events are BEHAVIOR markers in three categories — ``request`` (call),
+    ``recovery`` (salvage / continue / reask / budget_exhausted / downgrade /
+    split / raise_budget) and ``terminal`` (done / fail) — they do NOT carry
+    final-state semantics. ``round`` counts the LLM requests issued so far in
+    this batch (request events carry their own 1-based number; recovery
+    actions issue no request and keep the previous round). Recovery events
+    snapshot the POST-action state (e.g. a ``split`` event reports the
+    shrunk scope). Frozen-field discipline (plan-d v3 R5): golden files
+    diff on every field.
+    """
+
+    event: str
+    scope: str  # deterministic snapshot: ",".join of current scope keys
+    label: str
+    round: int
+    chars: int
+    pending: int
+    covered: int
+    budget: int
+
+
+#: Observer contract: receives every EngineEvent of one ``arun`` batch.
+EngineObserver = Callable[[EngineEvent], None]
 
 
 class TruncationEngine:
@@ -381,11 +444,16 @@ class TruncationEngine:
         self,
         policy: TruncationPolicy,
         json_mode: bool,
-        hooks: _EngineHooks,
+        hooks: GenericHooks,
+        observer: EngineObserver | None = None,
     ) -> None:
         self._policy = policy
         self._json_mode = json_mode
         self._hooks = hooks
+        # B6a-0 (plan-e E3): pure observation — when None (the default and
+        # every existing construction site) behaviour is bit-for-bit
+        # unchanged; the full suite proves the zero-control-flow-change.
+        self._observer = observer
 
     # -- sync entry point ------------------------------------------------
 
@@ -394,9 +462,9 @@ class TruncationEngine:
         llm: LLMClient,
         system_prompt: str,
         user_prompt: str,
-        endpoints: list[APIEndpoint],
+        endpoints: list[Any],
         label: str,
-    ) -> list[TestCase]:
+    ) -> list[dict[str, Any]]:
         """Run the loop synchronously.
 
         Normally executes ``asyncio.run`` directly. When called from inside a
@@ -458,10 +526,14 @@ class TruncationEngine:
         llm: LLMClient,
         system_prompt: str,
         user_prompt: str,
-        endpoints: list[APIEndpoint],
+        endpoints: list[Any],
         label: str,
-    ) -> list[TestCase]:
-        """Run the v6/v10 truncation-aware loop (plan v6 §4 + v10 §5)."""
+    ) -> list[dict[str, Any]]:
+        """Run the v6/v10 truncation-aware loop (plan v6 §4 + v10 §5).
+
+        Returns the produced items as plain dicts (B6a-1): the host adapter
+        converts them to domain types after the call.
+        """
         policy = self._policy
         hooks = self._hooks
         fmt = JSON_OBJECT_FORMAT if self._json_mode else None
@@ -487,9 +559,13 @@ class TruncationEngine:
         scope = [ep.full_path for ep in endpoints]
         batch_set = set(scope)
         expected = {ep.full_path: policy.default_expected_cases_per_endpoint for ep in endpoints}
+        # B6a-1: the run's PRIMARY scope key — items that declare no scope
+        # key are attributed to it (legacy converter parity: the host's
+        # converter used to remap scope-less items to the first endpoint).
+        primary_scope = scope[0] if scope else ""
         covered: dict[str, int] = {}
         pending = dict(expected)
-        produced: list[TestCase] = []
+        produced: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
         stall = 0
         empty_streak = 0
@@ -506,39 +582,72 @@ class TruncationEngine:
         downgrade_effort: str | None = None
         current_cap = policy.output_token_cap
 
-        def _merge(new_cases: list[TestCase]) -> int:
-            """Merge new cases into produced (dedup by key); return added count."""
+        observer = self._observer
+
+        def _scope_of(item: dict[str, Any]) -> str:
+            """Resolved scope key: the item's DECLARED key, else the run's
+            primary scope (see ``GenericHooks.scope_key``)."""
+            return str(hooks.scope_key(item) or "") or primary_scope
+
+        def _emit(event: str, *, chars: int = 0) -> None:
+            """Emit one behavior event (no-op without an observer, B6a-0).
+
+            Reads the LIVE loop state, so recovery events snapshot the
+            post-action scope/pending/budget; request events carry their own
+            1-based round (``calls`` was incremented just before emission).
+            """
+            if observer is None:
+                return
+            observer(
+                EngineEvent(
+                    event=event,
+                    scope=",".join(scope),
+                    label=label,
+                    round=calls,
+                    chars=chars,
+                    pending=sum(max(0, v) for v in pending.values()),
+                    covered=sum(covered.values()),
+                    budget=current_cap,
+                )
+            )
+
+        def _merge(new_items: list[Any]) -> int:
+            """Merge new items into produced (dedup by key); return added count."""
             added = 0
-            for tc in new_cases:
-                key = hooks.case_dedup_key(tc)
+            for it in new_items:
+                if not isinstance(it, dict):
+                    # Legacy converter parity: non-dict items were dropped
+                    # during conversion (they can never become domain items).
+                    continue
+                key = hooks.dedup_key(it, _scope_of(it))
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
-                produced.append(tc)
+                produced.append(it)
                 added += 1
             return added
 
         def _absorb(raw: str, *, salvage: bool) -> int:
-            """Extract/salvage items, scope-filter, convert and merge."""
-            items = hooks.salvage_truncated(raw) if salvage else None
+            """Extract/salvage items, scope-filter and merge (as dicts)."""
+            items = hooks.salvage(raw) if salvage else None
             if items is None:
-                items = hooks.extract_json(raw)
+                items = hooks.extract(raw)
             if items is None:
                 return 0
             # With no endpoint context (requirements-only batches) the scope
             # filter is bypassed: there is no batch set to clip against and
             # the behaviour matches the legacy v2 loop (accept everything).
             filtered = filter_to_scope(items, batch_set, expected) if batch_set else items
-            added = _merge(hooks.to_test_cases(filtered, endpoints))
-            recompute_covered_pending(expected, produced, covered, pending)
+            added = _merge(filtered)
+            recompute_covered_pending(expected, produced, covered, pending, _scope_of)
             return added
 
-        def _handle_budget_exhausted() -> list[TestCase] | None:
+        def _handle_budget_exhausted() -> list[dict[str, Any]] | None:
             """Recovery decision for BUDGET_EXHAUSTED (plan v10 §5.2).
 
             Sequence: one-shot DOWNGRADE → SPLIT (shrink scope) →
             RAISE_BUDGET (clamped to the profile cap) → FAIL (salvage).
-            Returns the final case list when recovery is exhausted, else
+            Returns the final item list when recovery is exhausted, else
             ``None`` to continue the loop with the action applied.
             """
             nonlocal downgrade_used, budget_raised, downgrade_effort, current_cap
@@ -566,6 +675,7 @@ class TruncationEngine:
                     cont_effort,
                 )
                 forced, last_raw = "truncated", ""
+                _emit("downgrade")
                 return None
 
             if action is NextAction.SPLIT:
@@ -577,12 +687,13 @@ class TruncationEngine:
                     max(policy.min_scope, len(scope) // 2),
                 )
                 scope, batch_set, pending, scope_floor_reached = shrink_scope(
-                    scope, expected, produced, covered, policy
+                    scope, expected, covered, policy
                 )
                 stall = 0
                 empty_streak = 0
                 single_scope_rounds = 0
                 forced, last_raw = "truncated", ""
+                _emit("split")
                 return None
 
             if action is NextAction.RAISE_BUDGET:
@@ -601,6 +712,7 @@ class TruncationEngine:
                         new_cap,
                     )
                     forced, last_raw = "truncated", ""
+                    _emit("raise_budget")
                     return None
 
             logger.warning(
@@ -608,9 +720,10 @@ class TruncationEngine:
                 label,
                 len(produced),
             )
+            _emit("fail", chars=len(last_raw))
             return self._salvage_and_return(
-                produced, last_raw, endpoints, batch_set, expected, seen_keys
-            )
+                    produced, last_raw, batch_set, expected, seen_keys, _emit, _scope_of
+                )
 
         while True:
             # ---- global budget guards ----
@@ -621,6 +734,7 @@ class TruncationEngine:
                     policy.max_total_calls,
                     len(produced),
                 )
+                _emit("fail", chars=len(last_raw))
                 return produced
             remaining = deadline - time.monotonic()
             if remaining <= 0 or remaining < policy.min_call_budget:
@@ -629,12 +743,12 @@ class TruncationEngine:
                     label,
                     len(produced),
                 )
+                _emit("fail", chars=len(last_raw))
                 return produced
-            calls += 1
 
             # ---- prompt selection ----
             if forced == "truncated":
-                fingerprint = compress_fingerprint(produced)
+                fingerprint = compress_fingerprint(produced, _scope_of)
                 if hooks.build_continue_context is not None:
                     # Slim continuation context (plan v10 §6 / v8 方案 A):
                     # endpoint signatures + requirement summary instead of
@@ -644,8 +758,10 @@ class TruncationEngine:
                     )
                 else:
                     prompt = build_continue_prompt(user_prompt, fingerprint, label, pending)
+                _emit("continue", chars=len(prompt))
             elif forced:
                 prompt = hooks.build_reask(user_prompt, last_raw, label, forced)
+                _emit("reask", chars=len(prompt))
             else:
                 prompt = user_prompt
 
@@ -655,6 +771,8 @@ class TruncationEngine:
                 if downgrade_effort
                 else None
             )
+            calls += 1
+            _emit("call")
             try:
                 result = await self._call_llm(
                     llm, system_prompt, prompt, fmt, current_cap, intent=intent
@@ -664,6 +782,7 @@ class TruncationEngine:
                 # retries and every fallback model already failed. Recovery:
                 # one downgrade → split → raise budget → fail.
                 logger.warning("[%s] reasoning budget exhausted: %s", label, exc)
+                _emit("budget_exhausted")
                 final = _handle_budget_exhausted()
                 if final is not None:
                     return final
@@ -684,20 +803,23 @@ class TruncationEngine:
                             label,
                             len(produced),
                         )
+                        _emit("fail", chars=len(last_raw))
                         return produced
                     forced, last_raw = "empty", ""
                     continue
                 if scope_floor_reached:
+                    _emit("fail", chars=len(last_raw))
                     return self._salvage_and_return(
-                        produced, last_raw, endpoints, batch_set, expected, seen_keys
+                        produced, last_raw, batch_set, expected, seen_keys, _emit, _scope_of
                     )
                 scope, batch_set, pending, scope_floor_reached = shrink_scope(
-                    scope, expected, produced, covered, policy
+                    scope, expected, covered, policy
                 )
                 stall = 0
                 empty_streak = 0
                 single_scope_rounds = 0
                 forced, last_raw = "truncated", ""
+                _emit("split")
                 continue
             except Exception as exc:
                 # Transient transport failure: short backoff, then retry. The
@@ -713,6 +835,7 @@ class TruncationEngine:
                         label,
                         len(produced),
                     )
+                    _emit("fail", chars=len(last_raw))
                     return produced
                 await asyncio.sleep(0.5)
                 continue
@@ -724,6 +847,7 @@ class TruncationEngine:
             # ---- truncated with partial content: salvage + continue ----
             if truncated and not empty_return:
                 added = _absorb(raw_response, salvage=True)
+                _emit("salvage", chars=len(raw_response))
                 stall = 0 if added else stall + 1
                 empty_streak = 0
 
@@ -738,16 +862,19 @@ class TruncationEngine:
                                 policy.max_single_scope_rounds,
                                 len(produced),
                             )
+                            _emit("fail", chars=len(raw_response))
                             return self._salvage_and_return(
-                                produced, raw_response, endpoints, batch_set, expected, seen_keys
+                                produced, raw_response, batch_set, expected, seen_keys, _emit,
+                                _scope_of,
                             )
                     else:
                         scope, batch_set, pending, scope_floor_reached = shrink_scope(
-                            scope, expected, produced, covered, policy
+                            scope, expected, covered, policy
                         )
                         stall = 0
                         empty_streak = 0
                         single_scope_rounds = 0
+                        _emit("split")
                     forced, last_raw = "truncated", raw_response
                     continue
 
@@ -758,6 +885,7 @@ class TruncationEngine:
                         len(produced),
                         calls,
                     )
+                    _emit("done", chars=len(raw_response))
                     return produced
                 forced, last_raw = "truncated", raw_response
                 continue
@@ -787,20 +915,23 @@ class TruncationEngine:
                         label,
                         len(produced),
                     )
+                    _emit("fail", chars=len(raw_response))
                     return produced
                 forced, last_raw = "empty", raw_response
                 continue
 
             # ---- complete response: parse and finish ----
-            items = hooks.extract_json(raw_response)
+            items = hooks.extract(raw_response)
             if items is not None:
                 added = _absorb(raw_response, salvage=False)
                 if added or produced:
                     logger.info("[%s]: %d cases (calls=%d)", label, len(produced), calls)
+                    _emit("done", chars=len(raw_response))
                     return produced
                 # Everything was filtered out by the scope quota: if the batch
                 # has zero coverage there is nothing more to ask for.
                 if all(v <= 0 for v in pending.values()):
+                    _emit("done", chars=len(raw_response))
                     return produced
                 forced, last_raw = "truncated", raw_response
                 continue
@@ -815,35 +946,46 @@ class TruncationEngine:
 
     def _salvage_and_return(
         self,
-        produced: list[TestCase],
+        produced: list[dict[str, Any]],
         raw: str,
-        endpoints: list[APIEndpoint],
         batch_set: set[str],
         expected: dict[str, int],
         seen_keys: set[str],
-    ) -> list[TestCase]:
+        emit: Callable[..., None] | None = None,
+        scope_of: Callable[[dict[str, Any]], str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Best-effort final salvage of the last raw response, then return.
 
         v7-review bug fix: the salvaged items used to be discarded (both
         branches returned ``produced`` untouched). They now go through the
-        same scope filter + conversion + dedup merge as in-loop absorptions.
+        same scope filter + dedup merge as in-loop absorptions (as dicts,
+        B6a-1 — conversion is the host adapter's job).
+
+        ``emit`` is the caller's B6a-0 event emitter (terminal ``fail`` was
+        already emitted by the caller; a successful final salvage emits its
+        own ``salvage`` event here). ``scope_of`` is the caller's resolved
+        scope-key function (required for dedup attribution).
         """
-        if not raw.strip():
+        if not raw.strip() or scope_of is None:
             return produced
-        items = self._hooks.salvage_truncated(raw)
+        items = self._hooks.salvage(raw)
         if not items:
             return produced
         filtered = filter_to_scope(items, batch_set, expected) if batch_set else items
         merged = list(produced)
         keys = set(seen_keys)
         added = 0
-        for tc in self._hooks.to_test_cases(filtered, endpoints):
-            key = self._hooks.case_dedup_key(tc)
+        for it in filtered:
+            if not isinstance(it, dict):
+                continue
+            key = self._hooks.dedup_key(it, scope_of(it))
             if key in keys:
                 continue
             keys.add(key)
-            merged.append(tc)
+            merged.append(it)
             added += 1
         if added:
             logger.info("Final salvage merged %d additional cases", added)
+            if emit is not None:
+                emit("salvage", chars=len(raw))
         return merged

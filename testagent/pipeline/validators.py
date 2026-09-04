@@ -53,6 +53,13 @@ def validate_text(script: str, validators: list[ValidatorSpec], ctx: TaskContext
             except SyntaxError as exc:
                 errors.append(f"python_compile: {exc}")
         elif v.kind == "xml":
+            # Declaration/closing first — mirrors the legacy _validate_jmx
+            # check order (B5.1: the observable pass/fail boundary must
+            # match; only the error strings are pipeline-native).
+            if v.declaration and not script.startswith(v.declaration):
+                errors.append(f"xml: declaration {v.declaration!r} missing")
+            if v.closing and not script.strip().endswith(v.closing):
+                errors.append(f"xml: closing {v.closing!r} missing")
             try:
                 root = ET.fromstring(script)
                 if v.root and root.tag != v.root:

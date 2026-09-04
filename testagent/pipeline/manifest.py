@@ -138,6 +138,11 @@ class ValidatorSpec(StrictModel):
     kind: ValidatorKind
     root: str = ""  # xml: expected root tag
     pattern: str = ""  # regex / contains
+    #: xml: required document prologue / epilogue (B5.1 — aligns the xml
+    #: validator with the legacy ``_validate_jmx`` boundary: declaration
+    #: prefix, closing suffix, parse, root tag).
+    declaration: str = ""
+    closing: str = ""
     when: dict[str, str] = Field(default_factory=dict)  # {"format": "jmeter"}
 
 
@@ -153,6 +158,16 @@ class ReviewSpec(StrictModel):
     enabled: bool | str = "from_settings"
     max_rounds: int | str = "from_settings"
     template: str = ""
+    #: Review system prompt, same convention as StageSpec ("file:<path>" |
+    #: "inline:<text>"); empty → the pipeline default. Declaring it keeps
+    #: the review request fingerprint fully task-controlled (plan-e I2).
+    system_prompt: str = ""
+    #: Review-context block template (B5.1): rendered once with the run
+    #: context and injected under ``context[2]``. Task packages own their
+    #: context SHAPE here (perf: load config + endpoint signatures; gui:
+    #: target URL + requirements) — byte-equal to the legacy generators'
+    #: Python-assembled ``context_text``.
+    context_template: str = ""
     context: list[str] = Field(default_factory=list)
     call_via_executor: bool = True
 
@@ -206,8 +221,9 @@ class Manifest(StrictModel):
     #: Synthetic template context (plan-c B3.4): variable name -> sample value
     #: used by ``tasks validate`` to smoke-render templates with
     #: StrictUndefined, catching variables the pipeline forgets to inject
-    #: (empty-context renders cannot).
-    template_context: dict[str, str] = Field(default_factory=dict)
+    #: (empty-context renders cannot). Values may be non-strings — templates
+    #: legitimately do arithmetic on int inputs (B5.1).
+    template_context: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("manifest_version")
     @classmethod
@@ -249,6 +265,10 @@ class Manifest(StrictModel):
                 refs.append(stage.system_prompt.removeprefix("file:"))
         if self.review.template:
             refs.append(self.review.template)
+        if self.review.system_prompt.startswith("file:"):
+            refs.append(self.review.system_prompt.removeprefix("file:"))
+        if self.review.context_template:
+            refs.append(self.review.context_template)
         return refs
 
 

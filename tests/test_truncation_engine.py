@@ -19,7 +19,7 @@ from testagent.config.models import APIEndpoint, TestCase
 from testagent.engine.llm_client import LLMOutputTooLongError, LLMResponse
 from testagent.engine.prompt_builder import PromptBuilder
 from testagent.generators.testcase_generator import TestCaseGenerator
-from testagent.generators.truncation import (
+from testagent.engine.truncation import (
     TruncationPolicy,
     build_continue_prompt,
     chars_per_token_for,
@@ -165,9 +165,8 @@ class TestShrinkScope:
         scope = ["A", "B", "C", "D"]
         covered = {"A": 3, "C": 2, "B": 0, "D": 0}
         expected = {"A": 2, "B": 2, "C": 2, "D": 2}
-        produced: list[TestCase] = []
         new_scope, new_set, new_pending, floor = shrink_scope(
-            scope, expected, produced, covered, TruncationPolicy(min_scope=1)
+            scope, expected, covered, TruncationPolicy(min_scope=1)
         )
         assert len(new_scope) == 2
         assert new_scope[0] == "A"  # best covered first
@@ -178,7 +177,7 @@ class TestShrinkScope:
     def test_floor_reached(self) -> None:
         scope = ["A", "B"]
         new_scope, _, _, floor = shrink_scope(
-            scope, {"A": 2, "B": 2}, [], {}, TruncationPolicy(min_scope=1)
+            scope, {"A": 2, "B": 2}, {}, TruncationPolicy(min_scope=1)
         )
         assert len(new_scope) == 1
         assert floor is True
@@ -224,10 +223,10 @@ class TestEngineEndToEnd:
             ]
         )
         gen = _generator(llm)
-        cases = await gen._engine.arun(llm, "sys", "user", _EPS, "batch 1/1")
-        got = [c.endpoint.full_path for c in cases]
+        items = await gen._engine.arun(llm, "sys", "user", _EPS, "batch 1/1")
+        got = [str(it["endpoint"]) for it in items]
         assert got.count("GET /users") == 2  # quota respected
-        assert len(cases) == 4
+        assert len(items) == 4
 
     async def test_empty_streak_gives_up(self) -> None:
         llm = MetaMockClient([LLMResponse(text="", finish_reason="stop")])

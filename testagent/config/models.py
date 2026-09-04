@@ -49,6 +49,7 @@ class APIEndpoint:
         """Return method + path string."""
         return f"{self.method} {self.path}"
 
+
 @dataclass
 class TestCase:
     """Generated test case."""

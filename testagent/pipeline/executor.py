@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from testagent.engine.concurrency import gather_with_concurrency
 from testagent.engine.llm_client import CALL_LABEL, ReasoningBudgetExhaustedError
 from testagent.pipeline.merge import StageResult, apply_merge
+from testagent.pipeline.review_hooks import REVIEW_DISABLED
 from testagent.pipeline.split import evaluate_when, make_units
 from testagent.pipeline.status import (
     UnitResult,
@@ -47,6 +48,15 @@ SNAPSHOT_SUFFIX = ".pre_review_snapshot.json"
 DEFAULT_SNAPSHOT_KEEP_LAST = 50
 
 
+def _reduce_text_artifact(items: list[dict[str, Any]]) -> str:
+    """Reduce text-unit items ``[{"script": ...}]`` back to the script
+    artifact (B5.1). V1 text tasks are single-unit (``split: single``) —
+    one unit, one script; a hypothetical multi-unit text task joins its
+    scripts in unit order (deterministic, documented)."""
+    scripts = [str(it.get("script", "")) for it in items if isinstance(it, dict)]
+    return "\n\n".join(scripts)
+
+
 @dataclass
 class PipelineResult:
     """One pipeline run's outcome."""
@@ -67,14 +77,21 @@ class PipelineExecutor:
         llm_client: MultiModelLLMClient,
         settings: Settings,
         generate_unit: Any = None,
+        review_runner: Any = None,
     ) -> None:
         """``generate_unit``: callable(task, stage, label, unit_ctx, ctx) ->
         UnitResult. Injected so the executor stays LLM-mechanics-free and
         tests drive it with fakes; production wires the engine-backed
-        implementation (see testagent.pipeline.runtime)."""
+        implementation (see testagent.pipeline.runtime).
+
+        ``review_runner``: async callable(task, artifact, snapshot_artifact,
+        ctx, settings) -> ReviewOutcome (plan-d B5.0, injected the same
+        way; None disables the review post-process entirely).
+        """
         self._llm = llm_client
         self._settings = settings
         self._generate_unit = generate_unit
+        self._review_runner = review_runner
 
     # -- public API ----------------------------------------------------
 
@@ -120,17 +137,42 @@ class PipelineExecutor:
                 )
             )
 
-        merged = apply_merge(task.manifest.pipeline.merge, results, ctx)
+        merged_items = apply_merge(task.manifest.pipeline.merge, results, ctx)
+        # Text artifacts (B5.1): units carry the script as ``{"script": ...}``
+        # items through the shared merge machinery; the pipeline-level
+        # artifact is the script STRING (legacy parity — a text task's
+        # artifact is one script, not a list of items).
+        merged: list[dict[str, Any]] | str = (
+            _reduce_text_artifact(merged_items)
+            if task.manifest.artifact.type == "text"
+            else merged_items
+        )
 
         # Pre-review snapshot (review P0-3): the artifact survives a review
         # explosion; recover does NOT re-run anything (no --resume illusion).
+        snapshot_artifact = merged
         self._write_snapshot(task.name, session_id, merged)
+
+        # Review post-process (plan-d B5.0, lifecycle R1/R2): runs AFTER the
+        # snapshot; REVIEW_FAILED falls back to the snapshot content, and the
+        # terminal status rides on review_meta for parity assertions.
+        # REVIEW_DISABLED writes NO meta file — the legacy generators wrote
+        # ``<stem>.meta.json`` only when a review actually ran (B5.1 parity).
+        review_meta: dict[str, Any] | None = None
+        if self._review_runner is not None:
+            outcome = await self._review_runner(
+                task, merged, snapshot_artifact, ctx, self._settings
+            )
+            merged = outcome.artifact
+            if outcome.status != REVIEW_DISABLED:
+                review_meta = dict(outcome.meta)
 
         return PipelineResult(
             task=task.name,
             artifact=merged,
             stage_stats=results,
             session_id=session_id,
+            review_meta=review_meta,
             units_failed=units_failed,
         )
 

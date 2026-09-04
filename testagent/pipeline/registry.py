@@ -50,10 +50,21 @@ class TaskPackage:
         merged = {**self._synthetic_context, **context}
         return self._env.get_template(template_name).render(**merged)
 
-    def system_prompt(self, spec: str) -> str:
-        """Resolve a stage's system_prompt ("file:<path>" | "inline:<text>")."""
+    def system_prompt(self, spec: str, context: dict[str, Any] | None = None) -> str:
+        """Resolve a system_prompt spec ("file:<path>" | "inline:<text>").
+
+        ``file:`` prompts are jinja templates rendered with ``context``
+        (B5.1: the legacy perf/gui system prompts vary with the script
+        format and output language — a static string cannot reproduce
+        that, and the fingerprint gate would catch the drift). Validation
+        renders pass no context and fall back to the synthetic one.
+        Rendered output is stripped: system prompts are logical text, and
+        trailing file newlines must not leak into request fingerprints.
+        """
         if spec.startswith("file:"):
-            return self.render(spec.removeprefix("file:"), {})
+            return self.render(spec.removeprefix("file:"), context or {}).strip()
+        if spec.startswith("inline:"):
+            return spec.removeprefix("inline:")
         return spec
 
     def validate_renderable(self) -> list[str]:
