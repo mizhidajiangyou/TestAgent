@@ -31,8 +31,8 @@ from testagent.engine.llm_client import (
 )
 from testagent.engine.model_profiles import DEEPSEEK_V4, RequestIntent
 from testagent.engine.prompt_builder import PromptBuilder
-from testagent.generators.testcase_generator import TestCaseGenerator
 from testagent.engine.truncation import TruncationPolicy
+from testagent.generators.testcase_generator import TestCaseGenerator
 from tests.test_truncation_engine import MetaMockClient
 
 _EPS = [

@@ -34,12 +34,12 @@ from testagent.config.models import APIEndpoint
 from testagent.engine.llm_client import LLMResponse, ReasoningBudgetExhaustedError
 from testagent.engine.model_profiles import DEEPSEEK_V4, RequestIntent
 from testagent.engine.prompt_builder import PromptBuilder
-from testagent.generators.testcase_generator import TestCaseGenerator
 from testagent.engine.truncation import (
     EngineEvent,
     TruncationEngine,
     TruncationPolicy,
 )
+from testagent.generators.testcase_generator import TestCaseGenerator
 
 FIXTURE_DIR = Path(__file__).parents[1] / "tests" / "fixtures" / "migration" / "engine_events"
 

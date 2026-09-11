@@ -44,6 +44,7 @@ from testagent.engine.prompt_builder import (
 )
 from testagent.engine.review import ReviewLoop
 from testagent.engine.truncation import (
+    EngineContext,
     GenericHooks,
     TruncationEngine,
     TruncationPolicy,
@@ -112,6 +113,13 @@ def _engine_dedup_key(item: dict[str, Any], scope_key: str) -> str:
     except ValueError:
         test_type = TestType.FUNCTIONAL.value
     return f"{title}|{scope_key.lower()}|{test_type}"
+
+
+def _scope_item_key(endpoint: APIEndpoint) -> str:
+    """GenericHooks.scope_item_key adapter (B6a-2): the endpoint's
+    ``full_path`` is the batch scope key — the engine itself never reads
+    scope-item attributes."""
+    return endpoint.full_path
 
 
 class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
@@ -213,6 +221,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 salvage=self._salvage_truncated_json,
                 scope_key=_item_scope_key,
                 dedup_key=_engine_dedup_key,
+                scope_item_key=_scope_item_key,
                 build_reask=self._build_reask_prompt,
                 build_continue_context=self._build_continue_context,
             ),
@@ -950,14 +959,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             return "truncated"
         return "non_parseable"
 
-    def _build_continue_context(
-        self,
-        user_prompt: str,
-        endpoints: list[APIEndpoint],
-        fingerprint: str,
-        label: str,
-        pending: dict[str, int],
-    ) -> str:
+    def _build_continue_context(self, ctx: EngineContext) -> str:
         """Slim continuation context hook (plan v10 §6 / v8 方案 A).
 
         Replaces the legacy full-prompt continuation: endpoint signatures +
@@ -965,17 +967,21 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         region, worked example or historical cases. Falls back to the legacy
         full-prompt continuation when the requirement section cannot be
         extracted from the rendered prompt (nothing to build a summary from).
+
+        Single-context signature (B6a-3): the five scattered legacy arguments
+        arrive via :class:`EngineContext`; ``ctx.scope_items`` are this
+        batch's APIEndpoint objects (opaque to the engine).
         """
         char_budget = self._truncation_policy.slim_continue_max_tokens * 2
-        summary = extract_requirement_summary(user_prompt, char_budget)
+        summary = extract_requirement_summary(ctx.user_prompt, char_budget)
         if summary is None:
-            return build_continue_prompt(user_prompt, fingerprint, label, pending)
+            return build_continue_prompt(ctx.user_prompt, ctx.fingerprint, ctx.label, ctx.pending)
         return self._prompt_builder.build_slim_continue_context(
-            endpoints_signature=endpoints_to_signature(endpoints),
+            endpoints_signature=endpoints_to_signature(ctx.scope_items),
             requirement_summary=summary,
-            fingerprint=fingerprint,
-            label=label,
-            pending=pending,
+            fingerprint=ctx.fingerprint,
+            label=ctx.label,
+            pending=ctx.pending,
             max_tokens_budget=self._truncation_policy.slim_continue_max_tokens,
         )
 

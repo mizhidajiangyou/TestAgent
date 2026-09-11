@@ -1,0 +1,115 @@
+{
+  "scenario": "downgrade_split",
+  "provenance": "observer on unrefactored engine (B6a-0, zero control-flow change) + log cross-check + correctness cross-check (plan-e E3)",
+  "log_signature_coverage": [
+    "budget_exhausted",
+    "done",
+    "downgrade",
+    "fail",
+    "raise_budget",
+    "reask",
+    "split"
+  ],
+  "events": [
+    {
+      "event": "call",
+      "scope": "GET /users,POST /users,DELETE /users/{id}",
+      "label": "baseline",
+      "round": 1,
+      "chars": 0,
+      "pending": 6,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "budget_exhausted",
+      "scope": "GET /users,POST /users,DELETE /users/{id}",
+      "label": "baseline",
+      "round": 1,
+      "chars": 0,
+      "pending": 6,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "downgrade",
+      "scope": "GET /users,POST /users,DELETE /users/{id}",
+      "label": "baseline",
+      "round": 1,
+      "chars": 0,
+      "pending": 6,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "continue",
+      "scope": "GET /users,POST /users,DELETE /users/{id}",
+      "label": "baseline",
+      "round": 1,
+      "chars": 576,
+      "pending": 6,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "call",
+      "scope": "GET /users,POST /users,DELETE /users/{id}",
+      "label": "baseline",
+      "round": 2,
+      "chars": 0,
+      "pending": 6,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "budget_exhausted",
+      "scope": "GET /users,POST /users,DELETE /users/{id}",
+      "label": "baseline",
+      "round": 2,
+      "chars": 0,
+      "pending": 6,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "split",
+      "scope": "GET /users",
+      "label": "baseline",
+      "round": 2,
+      "chars": 0,
+      "pending": 2,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "continue",
+      "scope": "GET /users",
+      "label": "baseline",
+      "round": 2,
+      "chars": 537,
+      "pending": 2,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "call",
+      "scope": "GET /users",
+      "label": "baseline",
+      "round": 3,
+      "chars": 0,
+      "pending": 2,
+      "covered": 0,
+      "budget": 16000
+    },
+    {
+      "event": "done",
+      "scope": "GET /users",
+      "label": "baseline",
+      "round": 3,
+      "chars": 427,
+      "pending": 5,
+      "covered": 1,
+      "budget": 16000
+    }
+  ]
+}

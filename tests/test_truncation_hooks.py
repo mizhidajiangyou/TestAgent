@@ -1,4 +1,4 @@
-"""B6a-1 tests: GenericHooks protocol, generic dict hooks, adapter keys.
+"""B6a-1/B6a-2 tests: GenericHooks protocol, generic dict hooks, adapter keys.
 
 Gate (plan-d B6a-1): EngineEvent golden replay diff = 0 (covered by
 test_engine_event_baseline, unchanged goldens) + correctness + full suite.
@@ -19,14 +19,23 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from testagent.config.models import APIEndpoint
 from testagent.engine.llm_client import LLMResponse
 from testagent.engine.prompt_builder import PromptBuilder
-from testagent.engine.truncation import GenericHooks, TruncationEngine, TruncationPolicy
+from testagent.engine.truncation import (
+    EngineContext,
+    GenericHooks,
+    TruncationEngine,
+    TruncationPolicy,
+    build_continue_prompt,
+)
 from testagent.generators.testcase_generator import (
     TestCaseGenerator,
     _engine_dedup_key,
     _item_scope_key,
+    _scope_item_key,
 )
 from testagent.pipeline.truncation_hooks import (
     dict_dedup_key,
@@ -75,9 +84,7 @@ class TestAdapterKeyEquivalence:
         )
         # Feed ONE item through the frozen converter with an endpoints list
         # whose first entry is the resolved scope (the fallback target).
-        primary = next(
-            (ep for ep in _EPS if ep.full_path == resolved_scope), _EPS[0]
-        )
+        primary = next((ep for ep in _EPS if ep.full_path == resolved_scope), _EPS[0])
         cases = gen._to_test_cases([item], [primary])
         return TestCaseGenerator._case_dedup_key(cases[0])
 
@@ -102,6 +109,12 @@ class TestAdapterKeyEquivalence:
         key = _engine_dedup_key(item, resolved)
         assert key.endswith("|functional")
         assert key == self._legacy_key(item, resolved)
+
+    def test_scope_item_key_adapter_reads_full_path(self) -> None:
+        """B6a-2: the generator's scope-item adapter is exactly the legacy
+        ``ep.full_path`` scope the engine used to read itself."""
+        for ep in _EPS:
+            assert _scope_item_key(ep) == ep.full_path
 
 
 class _NoCallClient:
@@ -129,6 +142,29 @@ class TestGenericReaskEquivalence:
         prompt = generic_reask("BASE", failed, "label", "non_parseable")
         assert "x" * 2000 in prompt
         assert "[truncated]" in prompt
+
+    def test_product_nouns_parameterized(self) -> None:
+        """B6a-3: non-testcase hosts re-word the re-ask through the noun
+        parameters; defaults stay byte-equal to legacy (test above)."""
+        prompt = generic_reask(
+            "BASE",
+            '{"partial":',
+            "batch 1/2",
+            "truncated",
+            product="entries",
+            item="entry",
+            items="entries",
+            compactness_hint="shorter text",
+        )
+        assert "Generate FEWER entries" in prompt
+        assert "Make each entry more compact: shorter text." in prompt
+        assert "test cases" not in prompt
+        empty_prompt = generic_reask("BASE", "", "label", "empty", item="entry", items="entries")
+        assert "Keep each entry compact" in empty_prompt
+        assert "high-value entries" in empty_prompt
+        # non_parseable carries no product nouns (already generic).
+        np_prompt = generic_reask("BASE", "junk", "label", "non_parseable", product="entries")
+        assert "Return ONLY a valid JSON array" in np_prompt
 
 
 # ----------------------------------------------------------------------
@@ -182,13 +218,15 @@ class TestGenericHooksEndToEnd:
     async def test_scopeless_item_attributed_to_primary_scope(self) -> None:
         """The engine's primary-scope rule: an item declaring no scope key
         counts toward the FIRST scope entry, so the quota for it closes
-        and the loop finishes in one call (legacy converter parity)."""
+        and the loop finishes in one call (legacy converter parity).
+        Scope items are plain strings here (B6a-2: opaque to the engine,
+        keys via ``scope_item_key`` — strings are their own key)."""
         llm = _ScriptClient(
             [LLMResponse(text=json.dumps([_item(1, None), _item(2, "GET /users")]))]
         )
         hooks = make_dict_hooks(extract=lambda raw: json.loads(raw), salvage=lambda raw: None)
         engine = TruncationEngine(TruncationPolicy(), False, hooks)
-        produced = await engine.arun(llm, "sys", "user", _EPS, "batch 1/1")
+        produced = await engine.arun(llm, "sys", "user", [ep.full_path for ep in _EPS], "batch 1/1")
         # Quota: 2 per endpoint; the scope-less item lands on GET /users
         # (primary) plus the declared one — 2 there, 0 for POST -> done.
         assert [it["id"] for it in produced] == ["TC-001", "TC-002"]
@@ -198,9 +236,106 @@ class TestGenericHooksEndToEnd:
         llm = _ScriptClient([LLMResponse(text=json.dumps([_item(1, "GET /users")]))])
         hooks = make_dict_hooks(extract=lambda raw: json.loads(raw), salvage=lambda raw: None)
         engine = TruncationEngine(TruncationPolicy(), False, hooks)
-        produced = await engine.arun(llm, "sys", "user", _EPS[:1], "batch 1/1")
+        produced = await engine.arun(llm, "sys", "user", ["GET /users"], "batch 1/1")
         assert all(isinstance(it, dict) for it in produced)
         assert produced[0]["title"] == " Case 1 "
+
+    async def test_explicit_scope_item_key_for_object_items(self) -> None:
+        """B6a-2: non-str/dict scope items need an explicit ``scope_item_key``
+        — here the legacy adapter shape (endpoint objects keyed by
+        ``full_path``), proving the engine drives off the hook alone."""
+        llm = _ScriptClient([LLMResponse(text=json.dumps([_item(1, "GET /users")]))])
+        hooks = make_dict_hooks(
+            extract=lambda raw: json.loads(raw),
+            salvage=lambda raw: None,
+            scope_item_key=lambda ep: ep.full_path,
+        )
+        engine = TruncationEngine(TruncationPolicy(), False, hooks)
+        produced = await engine.arun(llm, "sys", "user", _EPS[:1], "batch 1/1")
+        assert [it["id"] for it in produced] == ["TC-001"]
+        assert llm.calls == 1
+
+    async def test_default_scope_item_key_rejects_unknown_types(self) -> None:
+        hooks = make_dict_hooks(extract=lambda raw: None, salvage=lambda raw: None)
+        with pytest.raises(TypeError, match="scope_item_key"):
+            hooks.scope_item_key(_EPS[0])
+
+
+# ----------------------------------------------------------------------
+# EngineContext convergence (B6a-3)
+# ----------------------------------------------------------------------
+
+
+class _RecordingClient:
+    """Rich-contract double recording every (system, user) prompt pair."""
+
+    def __init__(self, script: list[LLMResponse]) -> None:
+        self._script = list(script)
+        self.prompts: list[tuple[str, str]] = []
+
+    async def achat_with_meta(
+        self, system_prompt: str, user_prompt: str, **kwargs: Any
+    ) -> LLMResponse:
+        self.prompts.append((system_prompt, user_prompt))
+        idx = min(len(self.prompts) - 1, len(self._script) - 1)
+        return self._script[idx]
+
+    async def achat(self, *a: Any, **k: Any) -> str:
+        raise AssertionError("rich client driven via achat_with_meta")
+
+
+class TestEngineContextConvergence:
+    """B6a-3: the slim continuation hook receives ONE EngineContext."""
+
+    async def test_continue_hook_receives_full_context(self) -> None:
+        captured: list[EngineContext] = []
+
+        def _continue(ctx: EngineContext) -> str:
+            captured.append(ctx)
+            return "SLIM-CONTINUATION"
+
+        # Round 1 truncates mid-array but salvages; round 2 completes.
+        partial = json.dumps([_item(1, "GET /users")])[:-1]  # unclosed array
+        full = json.dumps([_item(2, "POST /users")])
+        llm = _RecordingClient(
+            [
+                LLMResponse(text=partial, finish_reason="length"),
+                LLMResponse(text=full),
+            ]
+        )
+        hooks = make_dict_hooks(
+            extract=lambda raw: json.loads(raw) if raw.rstrip().endswith("]") else None,
+            salvage=lambda raw: json.loads(raw + "]") if not raw.endswith("]") else None,
+            scope_item_key=lambda ep: ep.full_path,
+            build_continue_context=_continue,
+        )
+        engine = TruncationEngine(TruncationPolicy(), False, hooks)
+        produced = await engine.arun(llm, "sys", "user", _EPS, "batch 1/1")
+
+        assert [it["id"] for it in produced] == ["TC-001", "TC-002"]
+        assert len(captured) == 1
+        ctx = captured[0]
+        # The five scattered legacy arguments all arrive via the context.
+        assert ctx.user_prompt == "user"
+        assert ctx.label == "batch 1/1"
+        assert ctx.scope_items == _EPS  # opaque pass-through (B6a-2)
+        assert "Case 1" in ctx.fingerprint and "GET /users" in ctx.fingerprint
+        # pending is a point-in-time SNAPSHOT: after round 2 the engine's
+        # live dict moved to {GET: 1, POST: 1}, but the stored ctx keeps
+        # the construction-time values.
+        assert ctx.pending == {"GET /users": 1, "POST /users": 2}
+        # The engine sent the hook's output as the next request.
+        assert llm.prompts[0] == ("sys", "user")
+        assert llm.prompts[1] == ("sys", "SLIM-CONTINUATION")
+
+    def test_legacy_builtin_continuation_still_applies_without_hook(self) -> None:
+        """build_continue_context=None keeps the engine's built-in
+        full-prompt continuation (unchanged five-field content)."""
+        hooks = make_dict_hooks(extract=lambda raw: None, salvage=lambda raw: None)
+        assert hooks.build_continue_context is None
+        prompt = build_continue_prompt("BASE", "- T1 @ GET /users", "batch 1/1", {"GET /users": 1})
+        assert "CONTINUATION for 'batch 1/1'" in prompt
+        assert "GET /users x1" in prompt
 
 
 # ----------------------------------------------------------------------
@@ -230,3 +365,6 @@ class TestEngineDomainFreedom:
         # No domain-typed annotations either.
         assert "TestCase" not in src.replace("``TestCase``", "")
         assert "APIEndpoint" not in src
+        # B6a-2: scope items are opaque — the engine must not read
+        # scope-item attributes (keys come from the scope_item_key hook).
+        assert "full_path" not in src

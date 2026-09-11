@@ -23,8 +23,14 @@ Design notes:
   builder are supplied via hooks; generic dict-level implementations live
   in :mod:`testagent.pipeline.truncation_hooks` (B6b.1 wires them from
   manifest config).
-- Scope handling still reads ``endpoint.full_path`` off the ``endpoints``
-  parameter (duck-typed); B6a-2 generalizes this to scope items + keys.
+- **Scope items are opaque (plan-d B6a-2)**: ``arun`` accepts host-shaped
+  scope items and derives their keys via ``GenericHooks.scope_item_key``;
+  shrink / filter / expected all run on those keys, and the engine never
+  reads scope-item attributes.
+- **Single-context continuation (plan-d B6a-3)**: the slim continuation
+  hook receives one :class:`EngineContext` instead of five scattered
+  arguments; re-ask product nouns are parameterized on the host side
+  (:mod:`testagent.pipeline.truncation_hooks`).
 """
 
 import asyncio
@@ -60,6 +66,7 @@ from testagent.engine.model_profiles import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "EngineContext",
     "GenericHooks",
     "TruncationEngine",
     "TruncationPolicy",
@@ -203,17 +210,21 @@ def filter_to_scope(
     items: list[dict[str, Any]],
     batch_set: set[str],
     expected: dict[str, int],
+    scope_key: Callable[[dict[str, Any]], str],
 ) -> list[dict[str, Any]]:
-    """Single filtering entry: drop items whose endpoint is outside this batch
-    (avoiding the downstream ``fallback_ep`` remap pollution) and cap each
-    endpoint at its expected quota. Operates on RAW items before conversion.
+    """Single filtering entry: drop items whose DECLARED scope key (the
+    item's own declaration via ``scope_key``, NOT the resolved key) is
+    outside this batch (avoiding the downstream ``fallback_ep`` remap
+    pollution) and cap each scope key at its expected quota. Operates on
+    RAW items before conversion. Items declaring no key (``""``) are kept
+    unconditionally (legacy converter-fallback parity).
     """
     kept: list[dict[str, Any]] = []
     count: dict[str, int] = defaultdict(int)
     for it in items:
-        ep = str(it.get("endpoint", "") or "")
+        ep = scope_key(it)
         if not ep:
-            # No endpoint declared: keep it and let the downstream converter's
+            # No scope declared: keep it and let the downstream converter's
             # fallback mapping assign one (v2 parity for review responses and
             # models that omit the field).
             kept.append(it)
@@ -366,6 +377,31 @@ class _SyncPreferredAdapter:
         return getattr(self._inner, name)
 
 
+@dataclass(frozen=True)
+class EngineContext:
+    """The single input of the continuation-context hook (plan-d B6a-3).
+
+    Converges the five scattered ``build_continue_context`` arguments
+    (user_prompt / scope_items / fingerprint / label / pending) into one
+    immutable object, so extending what a continuation sees never changes
+    the hook signature again. ``scope_items`` stay opaque (B6a-2): the host
+    renders them (e.g. endpoint signatures for the legacy testcase host).
+    """
+
+    #: The batch's original user prompt (full-prompt fallback source).
+    user_prompt: str
+    #: The run's opaque scope items (endpoints for the legacy host).
+    scope_items: list[Any]
+    #: Compressed ``- <title> @ <scope key>`` fingerprint of produced items.
+    fingerprint: str
+    #: The batch's logical label (e.g. "Req REQ-001/3").
+    label: str
+    #: Remaining quota per scope key AT CONSTRUCTION TIME — the engine
+    #: passes a snapshot copy, so a stored context never mutates under
+    #: the host's feet (keys > 0 are what continuation needs).
+    pending: dict[str, int]
+
+
 @dataclass
 class GenericHooks:
     """The engine's data capabilities, supplied by the host (plan-d R4).
@@ -386,20 +422,27 @@ class GenericHooks:
     - ``dedup_key``: ``(item, resolved_scope_key) -> str`` — the resolved
       scope key is passed in so hosts that fold it into the identity get
       the same attribution the coverage accounting uses.
+    - ``scope_item_key``: scope item -> its scope key (B6a-2). ``arun``
+      accepts OPAQUE scope items (endpoints for the legacy host, any
+      host-shaped item elsewhere); this hook derives the keys that drive
+      the scope/batch-set/expected/shrink machinery — the engine itself
+      never inspects scope-item attributes.
     - ``build_reask``: targeted re-ask prompt.
     - ``build_continue_context``: optional slim continuation context
       (plan v10 §6 / v8 方案 A); ``None`` -> the engine's legacy
-      full-prompt continuation (:func:`build_continue_prompt`).
+      full-prompt continuation (:func:`build_continue_prompt`). Receives a
+      single :class:`EngineContext` (B6a-3) carrying the original prompt,
+      the opaque scope items, the produced-items fingerprint, the label and
+      the pending quota — hosts render what they need from it.
     """
 
     extract: Callable[[str], list[Any] | None]
     salvage: Callable[[str], list[Any] | None]
     scope_key: Callable[[dict[str, Any]], str]
     dedup_key: Callable[[dict[str, Any], str], str]
+    scope_item_key: Callable[[Any], str]
     build_reask: Callable[[str, str, str, str], str]
-    build_continue_context: (
-        Callable[[str, list[Any], str, str, dict[str, int]], str] | None
-    ) = None
+    build_continue_context: Callable[[EngineContext], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -462,7 +505,7 @@ class TruncationEngine:
         llm: LLMClient,
         system_prompt: str,
         user_prompt: str,
-        endpoints: list[Any],
+        scope_items: list[Any],
         label: str,
     ) -> list[dict[str, Any]]:
         """Run the loop synchronously.
@@ -476,10 +519,10 @@ class TruncationEngine:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self.arun(wrapped, system_prompt, user_prompt, endpoints, label))
+            return asyncio.run(self.arun(wrapped, system_prompt, user_prompt, scope_items, label))
         with ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(
-                asyncio.run, self.arun(wrapped, system_prompt, user_prompt, endpoints, label)
+                asyncio.run, self.arun(wrapped, system_prompt, user_prompt, scope_items, label)
             ).result()
 
     # -- async-native loop -------------------------------------------------
@@ -526,13 +569,17 @@ class TruncationEngine:
         llm: LLMClient,
         system_prompt: str,
         user_prompt: str,
-        endpoints: list[Any],
+        scope_items: list[Any],
         label: str,
     ) -> list[dict[str, Any]]:
         """Run the v6/v10 truncation-aware loop (plan v6 §4 + v10 §5).
 
-        Returns the produced items as plain dicts (B6a-1): the host adapter
-        converts them to domain types after the call.
+        ``scope_items`` are OPAQUE to the engine (B6a-2): their keys come
+        from ``GenericHooks.scope_item_key`` and drive the scope/batch-set/
+        expected/shrink machinery; the items themselves are only passed
+        through to ``build_continue_context``. Returns the produced items
+        as plain dicts (B6a-1): the host adapter converts them to domain
+        types after the call.
         """
         policy = self._policy
         hooks = self._hooks
@@ -556,9 +603,11 @@ class TruncationEngine:
         intent_capable = bool(getattr(llm, "intent_capable", False))
         downgrade_possible = cont_effort is not None and intent_capable
 
-        scope = [ep.full_path for ep in endpoints]
+        # B6a-2: scope keys derive from the opaque scope items through the
+        # host hook — the engine never inspects scope-item attributes.
+        scope = [str(hooks.scope_item_key(it)) for it in scope_items]
         batch_set = set(scope)
-        expected = {ep.full_path: policy.default_expected_cases_per_endpoint for ep in endpoints}
+        expected = {key: policy.default_expected_cases_per_endpoint for key in scope}
         # B6a-1: the run's PRIMARY scope key — items that declare no scope
         # key are attributed to it (legacy converter parity: the host's
         # converter used to remap scope-less items to the first endpoint).
@@ -634,10 +683,12 @@ class TruncationEngine:
                 items = hooks.extract(raw)
             if items is None:
                 return 0
-            # With no endpoint context (requirements-only batches) the scope
+            # With no scope context (requirements-only batches) the scope
             # filter is bypassed: there is no batch set to clip against and
             # the behaviour matches the legacy v2 loop (accept everything).
-            filtered = filter_to_scope(items, batch_set, expected) if batch_set else items
+            filtered = (
+                filter_to_scope(items, batch_set, expected, hooks.scope_key) if batch_set else items
+            )
             added = _merge(filtered)
             recompute_covered_pending(expected, produced, covered, pending, _scope_of)
             return added
@@ -722,8 +773,8 @@ class TruncationEngine:
             )
             _emit("fail", chars=len(last_raw))
             return self._salvage_and_return(
-                    produced, last_raw, batch_set, expected, seen_keys, _emit, _scope_of
-                )
+                produced, last_raw, batch_set, expected, seen_keys, _emit, _scope_of
+            )
 
         while True:
             # ---- global budget guards ----
@@ -753,8 +804,15 @@ class TruncationEngine:
                     # Slim continuation context (plan v10 §6 / v8 方案 A):
                     # endpoint signatures + requirement summary instead of
                     # re-sending the full prompt with the 9KB Rules region.
+                    # Single-context call (B6a-3); scope items stay opaque.
                     prompt = hooks.build_continue_context(
-                        user_prompt, endpoints, fingerprint, label, pending
+                        EngineContext(
+                            user_prompt=user_prompt,
+                            scope_items=scope_items,
+                            fingerprint=fingerprint,
+                            label=label,
+                            pending=pending,
+                        )
                     )
                 else:
                     prompt = build_continue_prompt(user_prompt, fingerprint, label, pending)
@@ -864,7 +922,12 @@ class TruncationEngine:
                             )
                             _emit("fail", chars=len(raw_response))
                             return self._salvage_and_return(
-                                produced, raw_response, batch_set, expected, seen_keys, _emit,
+                                produced,
+                                raw_response,
+                                batch_set,
+                                expected,
+                                seen_keys,
+                                _emit,
                                 _scope_of,
                             )
                     else:
@@ -971,7 +1034,11 @@ class TruncationEngine:
         items = self._hooks.salvage(raw)
         if not items:
             return produced
-        filtered = filter_to_scope(items, batch_set, expected) if batch_set else items
+        filtered = (
+            filter_to_scope(items, batch_set, expected, self._hooks.scope_key)
+            if batch_set
+            else items
+        )
         merged = list(produced)
         keys = set(seen_keys)
         added = 0

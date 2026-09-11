@@ -15,10 +15,9 @@ import json
 from typing import Any
 from unittest.mock import MagicMock
 
-from testagent.config.models import APIEndpoint, TestCase
+from testagent.config.models import APIEndpoint
 from testagent.engine.llm_client import LLMOutputTooLongError, LLMResponse
 from testagent.engine.prompt_builder import PromptBuilder
-from testagent.generators.testcase_generator import TestCaseGenerator
 from testagent.engine.truncation import (
     TruncationPolicy,
     build_continue_prompt,
@@ -27,6 +26,8 @@ from testagent.engine.truncation import (
     is_truncated,
     shrink_scope,
 )
+from testagent.generators.testcase_generator import TestCaseGenerator
+from testagent.pipeline.truncation_hooks import dict_scope_key
 
 _EPS = [
     APIEndpoint(method="GET", path="/users", summary="list"),
@@ -155,7 +156,8 @@ class TestFilterToScope:
         ]
         batch = {"GET /users", "POST /users"}
         expected = {"GET /users": 2, "POST /users": 2}
-        kept = filter_to_scope(items, batch, expected)
+        # B6a-2: the DECLARED scope-key function is injected by the caller.
+        kept = filter_to_scope(items, batch, expected, dict_scope_key)
         eps = [str(it["endpoint"]) for it in kept]
         assert eps == ["GET /users", "GET /users", "POST /users"]
 

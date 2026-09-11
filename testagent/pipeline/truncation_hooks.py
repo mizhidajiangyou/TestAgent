@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from testagent.engine.truncation import GenericHooks
+from testagent.engine.truncation import EngineContext, GenericHooks
 
 __all__ = ["dict_dedup_key", "dict_scope_key", "generic_reask", "make_dict_hooks"]
 
@@ -66,13 +66,24 @@ def generic_reask(
     failed_output: str,
     label: str,
     error_type: str = "non_parseable",
+    *,
+    product: str = "test cases",
+    item: str = "case",
+    items: str = "cases",
+    compactness_hint: str = "shorter descriptions, fewer steps, concise expected_results",
 ) -> str:
     """Targeted re-ask prompt (generic port of the legacy builder).
 
     Tells the LLM its previous output was not usable, shows the failed
-    output, and asks for a fix. The wording mirrors the legacy testcase
-    generator's ``_build_reask_prompt`` byte-for-byte (the product-noun
-    parameterization lands with B6a-3).
+    output, and asks for a fix. With the default nouns the wording mirrors
+    the legacy testcase generator's ``_build_reask_prompt`` byte-for-byte
+    (pinned by TestGenericReaskEquivalence); non-testcase hosts override
+    the product nouns (B6a-3):
+
+    - ``product``: plural product name ("Generate FEWER {product} ...");
+    - ``item`` / ``items``: singular/plural item nouns;
+    - ``compactness_hint``: per-item shrink advice (testcase defaults name
+      the 10-column fields; other artifacts supply their own).
     """
     truncated = failed_output[:2000]
     if len(failed_output) > 2000:
@@ -85,8 +96,8 @@ def generic_reask(
         )
         fixes = (
             "Regenerate the COMPLETE valid JSON array from scratch in a single "
-            "block. Do not stop early or split the output. Keep each case compact "
-            "and produce only the high-value cases so the response stays complete "
+            f"block. Do not stop early or split the output. Keep each {item} compact "
+            f"and produce only the high-value {items} so the response stays complete "
             "and within limits."
         )
     elif error_type == "truncated":
@@ -95,9 +106,9 @@ def generic_reask(
             "array/object was started but never closed, so it could not be parsed."
         )
         fixes = (
-            "Generate FEWER test cases so the output fits within the token limit. "
-            "Make each case more compact: shorter descriptions, fewer steps, "
-            "concise expected_results. Ensure every object and array is properly closed."
+            f"Generate FEWER {product} so the output fits within the token limit. "
+            f"Make each {item} more compact: {compactness_hint}. "
+            "Ensure every object and array is properly closed."
         )
     else:
         diagnosis = (
@@ -128,8 +139,9 @@ def make_dict_hooks(
     scope_field: str = "endpoint",
     dedup_fields: Sequence[str] = ("title", "endpoint", "test_type"),
     dedup_lower: bool = True,
+    scope_item_key: Callable[[Any], str] | None = None,
     build_reask: Callable[[str, str, str, str], str] | None = None,
-    build_continue_context: Callable[[str, list[Any], str, str, dict[str, int]], str] | None = None,
+    build_continue_context: Callable[[EngineContext], str] | None = None,
 ) -> GenericHooks:
     """Assemble dict-level :class:`GenericHooks` (B6b.1's building block —
     wired from manifest ``TruncationSpec`` config there).
@@ -137,7 +149,28 @@ def make_dict_hooks(
     ``extract`` / ``salvage`` are host-supplied on purpose: parsing
     semantics are host-specific and reusing the host's battle-tested
     parser beats shipping a second one here.
+
+    ``scope_item_key`` derives scope keys from the run's opaque scope
+    items (B6a-2). When omitted, plain ``str`` items are their own key
+    and ``dict`` items read ``scope_field``; any other item type requires
+    an explicit ``scope_item_key``.
     """
+    if scope_item_key is None:
+
+        def _default_scope_item_key(item: Any) -> str:
+            if isinstance(item, str):
+                return item
+            if isinstance(item, dict):
+                return dict_scope_key(item, scope_field)
+            raise TypeError(
+                f"cannot derive a scope key from {type(item).__name__}; "
+                "pass scope_item_key explicitly"
+            )
+
+        resolved_scope_item_key: Callable[[Any], str] = _default_scope_item_key
+    else:
+        resolved_scope_item_key = scope_item_key
+
     return GenericHooks(
         extract=extract,
         salvage=salvage,
@@ -145,6 +178,7 @@ def make_dict_hooks(
         dedup_key=lambda item, scope_key: dict_dedup_key(
             item, scope_key, dedup_fields, dedup_lower
         ),
+        scope_item_key=resolved_scope_item_key,
         build_reask=build_reask or generic_reask,
         build_continue_context=build_continue_context,
     )
