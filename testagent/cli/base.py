@@ -16,6 +16,7 @@ from rich.console import Console
 
 from testagent.cli.examples import EXAMPLES_TEXT
 from testagent.config.logging import setup_logging
+from testagent.config.settings import get_settings
 from testagent.container import Container
 
 #: Shared rich console used by all CLI commands for colored output.
@@ -97,11 +98,18 @@ class TestAgentCommand(_ExamplesHelpMixin, click.Command):
 
 
 @click.group(cls=TestAgentGroup, examples_text=EXAMPLES_TEXT)
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Force DEBUG log level for this run (overrides LOG_LEVEL in config).",
+)
 @click.pass_context
 def main(ctx: click.Context, verbose: bool) -> None:
     """TestAgent - AI-powered test case and performance script generator."""
     ctx.ensure_object(dict)
-    level = "DEBUG" if verbose else "INFO"
+    # The config file (LOG_LEVEL in .env) is the source of truth; ``-v``
+    # overrides it to DEBUG for a one-off verbose run.
+    level = "DEBUG" if verbose else get_settings().log_level
     setup_logging(level)
     ctx.obj["container"] = Container()

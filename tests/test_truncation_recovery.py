@@ -479,10 +479,10 @@ class TestObservability:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Reasoning-token streaming is observable: a oneshot 'is thinking'
-        notice and the final response log (with the reasoning char count) at
-        INFO; throttled progress lines at DEBUG (downgraded from INFO in the
-        prompt-engineering pass to cut log noise — the one-shot notice and
-        the completion summary carry the signal)."""
+        notice plus throttled progress AND the final response log (with the
+        reasoning char count) all at INFO (2026-09-13: the throttled lines were
+        promoted from DEBUG — at the default level a multi-minute thinking
+        phase was log-silent, which is indistinguishable from a hang)."""
         monkeypatch.setattr("testagent.engine.llm_client.THINKING_LOG_INTERVAL", 0.0)
 
         def _rchunk(text: str) -> MagicMock:
@@ -505,8 +505,7 @@ class TestObservability:
             assert client.chat("sys", "usr") == "hello"
 
         info_messages = [rec.message for rec in caplog.records if rec.levelno >= logging.INFO]
-        all_messages = [rec.message for rec in caplog.records]
         assert any("is thinking" in m for m in info_messages)
         assert any("reasoning=11000 chars" in m for m in info_messages)
-        assert any("thinking: 5000 chars so far" in m for m in all_messages)
-        assert any("thinking: 11000 chars so far" in m for m in all_messages)
+        assert any("still thinking" in m and "5000 chars of reasoning" in m for m in info_messages)
+        assert any("still thinking" in m and "11000 chars of reasoning" in m for m in info_messages)

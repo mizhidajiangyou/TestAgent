@@ -1,8 +1,13 @@
 """Engine-hardening tests (plan-c Step 1): B1.1 blocking timeout semantics,
 B1.2 abandoned-worker resource model, B2.1 streaming de-stickiness, B2.2
-hard-timeout landing with the v10 boundary (timeout ≠ budget exhaustion)."""
+hard-timeout landing with the v10 boundary (timeout ≠ budget exhaustion).
+
+2026-09-13 additions: streaming wall-clock cap, unknown-model guards
+(thinking-cap escape hatch + budget-exhausted short-circuit)."""
 
 import threading
+import time
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -12,7 +17,9 @@ from openai import APIConnectionError, BadRequestError
 from testagent.engine.llm_client import (
     DEFAULT_BLOCKING_HARD_TIMEOUT_SECONDS,
     LLMCallTimeoutError,
+    LLMOutputTooLongError,
     OpenAIClient,
+    _parse_extra_body,
 )
 
 # ----------------------------------------------------------------------
@@ -103,14 +110,99 @@ class TestHardTimeout:
         blocker = threading.Event()
         sdk.chat.completions.create.side_effect = lambda **kw: blocker.wait(10)
         client = OpenAIClient(client=sdk, model="m", timeout=0.05, blocking_hard_timeout=0.06)
-        # Force the blocking channel: the hard timeout only guards blocking
-        # calls (streaming has its own SDK-level timeout).
+        # Force the blocking channel: this test targets the blocking timeout
+        # budget specifically (the streaming channel has its own cap, covered
+        # by TestStreamingHardTimeout).
         client.set_stream_enabled(False)
         with pytest.raises(LLMCallTimeoutError):
             client.chat("sys", "usr")
         # 3 attempts allowed by MAX_RETRIES but the timeout budget caps at 2.
         assert sdk.chat.completions.create.call_count <= 2
         blocker.set()
+
+
+# ----------------------------------------------------------------------
+# 2026-09-13 — streaming wall-clock cap (Phase 2 "frozen for minutes")
+# ----------------------------------------------------------------------
+
+
+def _stream_chunk(
+    content: str | None = None,
+    reasoning: str | None = None,
+    finish_reason: str | None = None,
+    usage: MagicMock | None = None,
+) -> MagicMock:
+    """Build one streaming chunk carrying visible content and/or reasoning."""
+    chunk = MagicMock()
+    chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content=content or "", reasoning_content=reasoning),
+            finish_reason=finish_reason,
+        )
+    ]
+    chunk.usage = usage
+    return chunk
+
+
+def _slow_stream(seconds: float, chunk_sleep: float = 0.02) -> Any:
+    """Generator that keeps emitting content for ~``seconds`` (never finishes in time)."""
+
+    def _gen() -> Any:
+        end = time.time() + seconds
+        while time.time() < end:
+            time.sleep(chunk_sleep)
+            yield _stream_chunk(content="x")
+
+    return _gen()
+
+
+class TestStreamingHardTimeout:
+    """A stream that keeps trickling chunks never trips the transport read
+    timeout, so before this cap a single call was bounded only by the
+    provider's own budget."""
+
+    def test_unset_uses_max_of_timeout_x2_and_default(self) -> None:
+        assert _client(timeout=1.0).stream_hard_timeout == DEFAULT_BLOCKING_HARD_TIMEOUT_SECONDS
+        assert _client(timeout=400.0).stream_hard_timeout == 800.0  # timeout*2 wins
+
+    def test_explicit_value_is_honoured_verbatim(self) -> None:
+        assert _client(stream_hard_timeout=60.0).stream_hard_timeout == 60.0
+
+    def test_explicit_below_request_timeout_fails_construction(self) -> None:
+        with pytest.raises(ValueError, match="must be >="):
+            _client(timeout=300.0, stream_hard_timeout=60.0)
+
+    def test_stream_exceeding_cap_raises_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("testagent.engine.llm_client.WAITING_LOG_INTERVAL", 0.02)
+        sdk = MagicMock()
+        sdk.chat.completions.create.side_effect = lambda **kw: _slow_stream(5.0)
+        client = OpenAIClient(
+            client=sdk, model="m", timeout=0.05, max_output_tokens=100, stream_hard_timeout=0.1
+        )
+        started = time.time()
+        with pytest.raises(LLMCallTimeoutError):
+            client._stream_completion({"model": "m"}, sid="t")
+        # Aborted near the cap, nowhere near the 5s the stream wanted.
+        assert time.time() - started < 2.0
+
+    def test_the_cap_is_the_streaming_channel_not_blocking(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cap must fire on the streaming channel (where the old code had
+        no guard at all), independent of blocking_hard_timeout."""
+        monkeypatch.setattr("testagent.engine.llm_client.WAITING_LOG_INTERVAL", 0.02)
+        sdk = MagicMock()
+        sdk.chat.completions.create.side_effect = lambda **kw: _slow_stream(5.0)
+        client = OpenAIClient(
+            client=sdk,
+            model="m",
+            timeout=0.05,
+            max_output_tokens=100,
+            blocking_hard_timeout=30.0,  # generous: irrelevant on this channel
+            stream_hard_timeout=0.1,
+        )
+        with pytest.raises(LLMCallTimeoutError):
+            client._stream_completion({"model": "m"}, sid="t")
 
 
 # ----------------------------------------------------------------------
@@ -274,3 +366,183 @@ class TestStreamDestickiness:
         with patch.object(client, "_stream_completion", return_value=("ok", "stop", None, 0)):
             client._complete({}, sid="t")
         assert client._stream_fail_streak == 0
+
+
+# ----------------------------------------------------------------------
+# 2026-09-13 — unknown-model guards (no thinking cap, no short-circuit)
+# ----------------------------------------------------------------------
+
+
+class TestUnknownModelThinkingCap:
+    """A model absent from the profile registry gets NO thinking control: the
+    registry translates the OPENAI_REASONING_EFFORT intent into family dialects,
+    so for an unregistered model the effort tier is silently dropped and the
+    model thinks unbounded (Phase 1 of the 2026-09-13 report: 32k/45k/103k chars
+    of reasoning vs ~13k with the cap active)."""
+
+    @pytest.fixture(autouse=True)
+    def _fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No backoff sleeps, no watchdog-join stall (suite stays snappy)."""
+        monkeypatch.setattr("testagent.engine.llm_client.RETRY_BACKOFF_SECONDS", 0.0)
+        monkeypatch.setattr("testagent.engine.llm_client.WAITING_LOG_INTERVAL", 0.01)
+
+    def test_unregistered_model_receives_no_thinking_parameter(self) -> None:
+        sdk = MagicMock()
+        sdk.chat.completions.create.return_value = [_stream_chunk("ok", finish_reason="stop")]
+        client = OpenAIClient(
+            client=sdk,
+            model="kimi-k2.7-code",
+            timeout=1.0,
+            max_output_tokens=100,
+            reasoning_effort="low",
+        )
+        client.chat("sys", "usr")
+        kwargs = sdk.chat.completions.create.call_args.kwargs
+        assert "extra_body" not in kwargs
+        assert "reasoning_effort" not in kwargs
+
+    def test_registered_model_does_receive_the_cap(self) -> None:
+        """Contrast case: the same effort tier IS translated for known families."""
+        sdk = MagicMock()
+        sdk.chat.completions.create.return_value = [_stream_chunk("ok", finish_reason="stop")]
+        client = OpenAIClient(
+            client=sdk,
+            model="qwen3.8-max",
+            timeout=1.0,
+            max_output_tokens=100,
+            reasoning_effort="low",
+        )
+        client.chat("sys", "usr")
+        kwargs = sdk.chat.completions.create.call_args.kwargs
+        assert kwargs["extra_body"] == {"thinking_budget": 4096}
+
+    def test_extra_body_override_reaches_the_request(self) -> None:
+        """The escape hatch: the operator supplies the provider's own fragment."""
+        sdk = MagicMock()
+        sdk.chat.completions.create.return_value = [_stream_chunk("ok", finish_reason="stop")]
+        client = OpenAIClient(
+            client=sdk,
+            model="kimi-k2.7-code",
+            timeout=1.0,
+            max_output_tokens=100,
+            extra_body={"enable_thinking": False},
+        )
+        client.chat("sys", "usr")
+        kwargs = sdk.chat.completions.create.call_args.kwargs
+        assert kwargs["extra_body"] == {"enable_thinking": False}
+
+    def test_extra_body_override_wins_over_profile_fragment(self) -> None:
+        sdk = MagicMock()
+        sdk.chat.completions.create.return_value = [_stream_chunk("ok", finish_reason="stop")]
+        client = OpenAIClient(
+            client=sdk,
+            model="qwen3.8-max",
+            timeout=1.0,
+            max_output_tokens=100,
+            reasoning_effort="low",
+            extra_body={"thinking_budget": 1024},
+        )
+        client.chat("sys", "usr")
+        kwargs = sdk.chat.completions.create.call_args.kwargs
+        assert kwargs["extra_body"] == {"thinking_budget": 1024}
+
+
+class TestExtraBodyParsing:
+    """Configuration errors fail at startup, never silently drop the intent."""
+
+    def test_empty_is_disabled(self) -> None:
+        assert _parse_extra_body("") == {}
+        assert _parse_extra_body("   ") == {}
+
+    def test_valid_object_is_parsed(self) -> None:
+        assert _parse_extra_body('{"enable_thinking": false}') == {"enable_thinking": False}
+
+    def test_invalid_json_raises(self) -> None:
+        with pytest.raises(ValueError, match="not valid JSON"):
+            _parse_extra_body("{not json}")
+
+    def test_non_object_json_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be a JSON object"):
+            _parse_extra_body("[1, 2, 3]")
+
+
+class TestBudgetExhaustedGuardForUnregisteredModel:
+    """Unregistered models cannot classify BUDGET_EXHAUSTED (no shared-budget
+    knowledge), so the v10 short-circuit never applied and an empty body burned
+    MAX_RETRIES identical multi-minute reasoning passes."""
+
+    @pytest.fixture(autouse=True)
+    def _fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No backoff sleeps, no watchdog-join stall (suite stays snappy)."""
+        monkeypatch.setattr("testagent.engine.llm_client.RETRY_BACKOFF_SECONDS", 0.0)
+        monkeypatch.setattr("testagent.engine.llm_client.WAITING_LOG_INTERVAL", 0.01)
+
+    @staticmethod
+    def _exhausted_stream() -> list[MagicMock]:
+        """Reasoning only, then finish_reason=length with an EMPTY visible body."""
+        return [
+            _stream_chunk(reasoning="t" * 200),
+            _stream_chunk(finish_reason="length"),
+        ]
+
+    def test_fails_fast_instead_of_retrying(self) -> None:
+        sdk = MagicMock()
+        sdk.chat.completions.create.side_effect = lambda **kw: list(self._exhausted_stream())
+        client = OpenAIClient(
+            client=sdk, model="kimi-k2.7-code", timeout=1.0, max_output_tokens=100
+        )
+        with pytest.raises(LLMOutputTooLongError, match="consumed the whole output budget"):
+            client.chat("sys", "usr")
+        assert sdk.chat.completions.create.call_count == 1
+
+    def test_transient_empty_still_retries(self) -> None:
+        """REGRESSION GUARD: the fast-fail must NOT touch the classic transient
+        empty path (finish_reason=stop/None) whose stream -> blocking recovery
+        is a documented fix — see the empty-stream recovery notes."""
+        sdk = MagicMock()
+
+        def _dispatch(**kw: Any) -> Any:
+            if kw.get("stream"):
+                return [_stream_chunk(content="", finish_reason=None)]
+            resp = MagicMock()
+            resp.choices = [
+                MagicMock(
+                    message=MagicMock(content="", reasoning_content=None), finish_reason="stop"
+                )
+            ]
+            resp.usage = None
+            return resp
+
+        sdk.chat.completions.create.side_effect = _dispatch
+        client = OpenAIClient(
+            client=sdk, model="kimi-k2.7-code", timeout=1.0, max_output_tokens=100
+        )
+        with pytest.raises(LLMOutputTooLongError):
+            client.chat("sys", "usr")
+        assert sdk.chat.completions.create.call_count == 3  # stream + 2 blocking
+
+    def test_empty_length_without_reasoning_still_retries(self) -> None:
+        """The fast-fail is gated on observed reasoning: an empty length body
+        with NO reasoning (nothing consumed the budget) stays on the transient
+        path."""
+        sdk = MagicMock()
+
+        def _dispatch(**kw: Any) -> Any:
+            if kw.get("stream"):
+                return [_stream_chunk(content="", finish_reason="length")]
+            resp = MagicMock()
+            resp.choices = [
+                MagicMock(
+                    message=MagicMock(content="", reasoning_content=None), finish_reason="length"
+                )
+            ]
+            resp.usage = None
+            return resp
+
+        sdk.chat.completions.create.side_effect = _dispatch
+        client = OpenAIClient(
+            client=sdk, model="kimi-k2.7-code", timeout=1.0, max_output_tokens=100
+        )
+        with pytest.raises(LLMOutputTooLongError):
+            client.chat("sys", "usr")
+        assert sdk.chat.completions.create.call_count == 3

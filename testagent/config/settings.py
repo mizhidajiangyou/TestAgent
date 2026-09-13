@@ -7,8 +7,12 @@ Priority: environment variables > .env file > defaults.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Valid logging levels accepted by ``LOG_LEVEL``. Kept as the single source
+#: of truth so both pydantic validation and ``setup_logging`` agree.
+VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
 class LLMSettings(BaseSettings):
@@ -86,6 +90,26 @@ class LLMSettings(BaseSettings):
     # into a bounded retry path instead of waiting forever on a wedged
     # provider. Default 0 = unset.
     blocking_hard_timeout: int = Field(default=0, alias="OPENAI_BLOCKING_HARD_TIMEOUT")
+    # Hard wall-clock limit (seconds) for a single STREAMING call. The blocking
+    # path has had a hard timeout since plan-c B1.1, but a stream that keeps
+    # emitting chunks (reasoning-heavy models stream thinking tokens
+    # continuously) never trips the transport read timeout and had NO cap at
+    # all — a single call could therefore occupy the wall clock far beyond
+    # OPENAI_TIMEOUT with zero visible progress. Exceeding this limit raises
+    # LLMCallTimeoutError into the same bounded retry path as the blocking
+    # case. Unset means max(OPENAI_TIMEOUT * 2, 600); an explicit value must
+    # be >= OPENAI_TIMEOUT (validated at client construction).
+    stream_hard_timeout: int = Field(default=0, alias="OPENAI_STREAM_HARD_TIMEOUT")
+    # Escape hatch for models that are NOT in the profile registry: a raw
+    # ``extra_body`` JSON object merged into every request. The registry
+    # translates the ``OPENAI_REASONING_EFFORT`` intent into each family's
+    # dialect, so an unregistered model silently receives NO thinking control
+    # at all (its effort tier is dropped). Rather than guessing a vendor's
+    # dialect, the operator supplies the exact fragment their provider
+    # documents, e.g. '{"enable_thinking": false}' or
+    # '{"thinking_budget": 4096}'. Empty = disabled.
+    # Example: OPENAI_EXTRA_BODY_JSON='{"enable_thinking": false}'
+    extra_body_json: str = Field(default="", alias="OPENAI_EXTRA_BODY_JSON")
 
     @property
     def models(self) -> list[str]:
@@ -155,7 +179,25 @@ class Settings(BaseSettings):
     perf: PerfSettings = Field(default_factory=PerfSettings)
 
     output_dir: str = Field(default="./output", alias="OUTPUT_DIR")
+    # Root log level for the ``testagent`` logger. Drives ``setup_logging``
+    # (case-insensitive). The CLI ``-v/--verbose`` flag overrides this to
+    # DEBUG for a one-off run. Invalid values fail fast at startup.
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
+    @field_validator("log_level")
+    @classmethod
+    def _validate_log_level(cls, v: str) -> str:
+        """Normalize and validate the log level early.
+
+        Rejects typos / unknown levels at startup (clearer than a silent
+        fallback to INFO) and makes the value case-insensitive so
+        ``LOG_LEVEL=debug`` works as expected in ``.env``.
+        """
+        normalized = (v or "").strip().upper()
+        if normalized not in VALID_LOG_LEVELS:
+            raise ValueError(f"Invalid LOG_LEVEL={v!r}; expected one of {sorted(VALID_LOG_LEVELS)}")
+        return normalized
+
     script_format: Literal["k6", "jmeter"] = Field(default="k6", alias="SCRIPT_FORMAT")
     #: Directory scanned for task packages (manifest.json + templates), each
     #: subdirectory becoming a ``testagent run <name>`` command (plan-c B4.1).

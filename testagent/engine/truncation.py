@@ -811,7 +811,10 @@ class TruncationEngine:
                             scope_items=scope_items,
                             fingerprint=fingerprint,
                             label=label,
-                            pending=pending,
+                            # Snapshot copy (EngineContext contract): the live
+                            # ``pending`` dict is mutated in place by later
+                            # absorb rounds; a stored context must not see them.
+                            pending=dict(pending),
                         )
                     )
                 else:

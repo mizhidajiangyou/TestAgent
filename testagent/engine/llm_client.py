@@ -10,6 +10,7 @@ Features:
 """
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -339,6 +340,8 @@ class OpenAIClient:
         reasoning_effort: str | None = None,
         continuation_intent: str | None = None,
         blocking_hard_timeout: float | None = None,
+        stream_hard_timeout: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         self._client = client
         self._model = model
@@ -346,6 +349,12 @@ class OpenAIClient:
         self._max_output_tokens = max_output_tokens
         self._profile = profile if profile is not None else resolve_profile(model)
         self._continuation_intent_override = continuation_intent
+        # Raw passthrough fragment for models the registry does not know (see
+        # LLMSettings.extra_body_json). The registry translates the effort
+        # INTENT into family dialects, so an unregistered model gets no
+        # thinking control at all; this lets the operator supply the exact
+        # fragment their provider documents instead of us guessing it.
+        self._extra_body: dict[str, Any] = dict(extra_body) if extra_body else {}
         self._default_intent = RequestIntent(
             budget=max_output_tokens,
             effort=reasoning_effort or None,
@@ -366,6 +375,21 @@ class OpenAIClient:
             self._blocking_hard_timeout = float(blocking_hard_timeout)
         else:
             self._blocking_hard_timeout = max(timeout * 2, DEFAULT_BLOCKING_HARD_TIMEOUT_SECONDS)
+        # Same contract for the STREAMING channel. A stream that keeps
+        # delivering reasoning chunks never trips the transport read timeout,
+        # so without this cap the only bound on a single call was the
+        # provider's own budget. Symmetry with the blocking path is
+        # deliberate: identical default and identical validation.
+        if stream_hard_timeout is not None:
+            if stream_hard_timeout < timeout:
+                raise ValueError(
+                    f"stream_hard_timeout ({stream_hard_timeout}s) must be >= "
+                    f"the request timeout ({timeout}s); a hard timeout below the "
+                    "per-request timeout would abort every call."
+                )
+            self._stream_hard_timeout = float(stream_hard_timeout)
+        else:
+            self._stream_hard_timeout = max(timeout * 2, DEFAULT_BLOCKING_HARD_TIMEOUT_SECONDS)
         self.usage = TokenUsage()
         # Guards ``usage`` which may be mutated from multiple worker threads
         # when batches run concurrently via the async shim.
@@ -422,6 +446,11 @@ class OpenAIClient:
     def max_output_cap(self) -> int | None:
         """Return the model's real output cap (None = unknown)."""
         return self._profile.max_output_cap
+
+    @property
+    def stream_hard_timeout(self) -> float:
+        """Return the wall-clock cap (seconds) for a single streaming call."""
+        return self._stream_hard_timeout
 
     def set_session_id(self, session_id: str) -> None:
         """Attach a session id used to tag every log line for this run."""
@@ -581,6 +610,13 @@ class OpenAIClient:
                         response_format=response_format,
                     )
                 )
+                if self._extra_body:
+                    # Operator-supplied fragment for a model the registry does
+                    # not know (OPENAI_EXTRA_BODY_JSON). The profile's own
+                    # fragment is the base; the operator's keys win.
+                    merged_extra = dict(create_kwargs.get("extra_body") or {})
+                    merged_extra.update(self._extra_body)
+                    create_kwargs["extra_body"] = merged_extra
                 if "response_format" in create_kwargs:
                     # The OpenAI SDK types ``response_format`` as a strict
                     # TypedDict (ResponseFormatJSONObject); ``cast`` is a
@@ -675,6 +711,49 @@ class OpenAIClient:
                         completion_tokens=completion_tokens,
                     )
 
+                if (
+                    not content_str.strip()
+                    and reasoning_chars > 0
+                    and finish_reason == "length"
+                    and not self._profile.budget_shared
+                ):
+                    # Unknown-model blind spot (2026-09-13): the response is
+                    # empty because reasoning consumed the whole budget, but
+                    # the profile has no budget-sharing knowledge, so
+                    # classify_response can never return BUDGET_EXHAUSTED and
+                    # the v10 short-circuit does not apply.
+                    #
+                    # Gate on IN-BAND evidence (empty + length + reasoning was
+                    # actually streamed) instead of the profile flag: that
+                    # combination is the same signal v10 keys on. The transient
+                    # empty-stream recovery (stream -> blocking) is untouched —
+                    # it targets stop/None empties, which fall through below.
+                    logger.warning(
+                        "[%s] Model '%s' returned NO visible output after %d chars "
+                        "of reasoning (finish_reason=length, budget=%d). Profile "
+                        "'%s' does not declare a shared budget, so the "
+                        "budget-exhausted short-circuit is unavailable; failing "
+                        "fast instead of re-running the same reasoning. Cap the "
+                        "thinking with OPENAI_EXTRA_BODY_JSON (e.g. "
+                        "'{\"enable_thinking\": false}') or switch to a model in "
+                        "the profile registry (listed in the resolution warning "
+                        "at startup), where OPENAI_REASONING_EFFORT translates "
+                        "to a real bound.",
+                        sid,
+                        self._model,
+                        reasoning_chars,
+                        intent.budget,
+                        self._profile.name,
+                    )
+                    raise LLMOutputTooLongError(
+                        f"Model '{self._model}' produced {reasoning_chars} chars of "
+                        f"reasoning and NO visible output (finish_reason=length, "
+                        f"budget={intent.budget}). The reasoning consumed the whole "
+                        f"output budget. Retrying the identical request would "
+                        f"re-run the same reasoning, so this fails fast into the "
+                        f"engine recovery (split / smaller scope)."
+                    )
+
                 if not content_str.strip():
                     # TRANSIENT_EMPTY: the profile says this empty body cannot
                     # be reasoning starvation (non-shared budget or a
@@ -722,14 +801,17 @@ class OpenAIClient:
                 # Bounded timeout budget (plan-c B2.2): a wedged provider may
                 # time out every attempt; cap how many this loop spends before
                 # surfacing to the engine (transient path — retry + model
-                # fallback, NEVER a v10 downgrade trigger).
+                # fallback, NEVER a v10 downgrade trigger). Both channels raise
+                # this type now: the blocking one via blocking_hard_timeout,
+                # the streaming one via stream_hard_timeout.
                 timeout_attempts += 1
                 last_error = str(exc)
                 logger.warning(
-                    "[%s] Attempt %d/%d hit the blocking hard timeout.",
+                    "[%s] Attempt %d/%d hit the hard timeout (channel=%s).",
                     sid,
                     attempt,
                     MAX_RETRIES,
+                    channel,
                 )
                 if timeout_attempts > MAX_TIMEOUT_RETRIES_PER_CALL or attempt >= MAX_RETRIES:
                     raise
@@ -1061,6 +1143,10 @@ class OpenAIClient:
         thinking_logged = False
         last_log = time.time()
         last_think_log = time.time()
+        # Wall-clock deadline for THIS call. Checked on every chunk so a stream
+        # that keeps trickling reasoning tokens (which keeps the transport
+        # read timeout from ever firing) is still bounded.
+        started = time.monotonic()
 
         def _watchdog() -> None:
             while not state["stop"]:
@@ -1076,10 +1162,23 @@ class OpenAIClient:
 
         watcher = threading.Thread(target=_watchdog, daemon=True)
         watcher.start()
+        stream: Any = None
         try:
             stream = self._client.chat.completions.create(**kwargs)
             for chunk in stream:
                 state["last_chunk"] = time.time()
+                elapsed = time.monotonic() - started
+                if elapsed >= self._stream_hard_timeout:
+                    # Hand the connection back before unwinding: the caller
+                    # regains control NOW (LLMCallTimeoutError goes into the
+                    # bounded timeout-retry path in _chat_core) instead of
+                    # waiting on a provider that may never finish.
+                    raise LLMCallTimeoutError(
+                        f"Streaming LLM call for model '{self._model}' exceeded the "
+                        f"{self._stream_hard_timeout:.0f}s hard timeout "
+                        f"(streamed={streamed_chars} chars, thinking={reasoning_chars} "
+                        f"chars); abandoning this attempt."
+                    )
                 if not chunk.choices:
                     if getattr(chunk, "usage", None) is not None:
                         usage = chunk.usage
@@ -1090,13 +1189,16 @@ class OpenAIClient:
                     if delta.content:
                         content_parts.append(delta.content)
                         streamed_chars += len(delta.content)
-                    # Thinking models (qwen / deepseek) stream reasoning tokens
-                    # on a separate field BEFORE any visible content. They do
-                    # NOT count as output, but their progress IS logged —
-                    # otherwise the whole thinking phase is log silence.
+                    # Thinking models (qwen / deepseek / kimi / glm) stream
+                    # reasoning tokens on a separate field BEFORE any visible
+                    # content. They do NOT count as output, but their progress
+                    # IS logged at INFO — otherwise the whole thinking phase is
+                    # log silence (DEBUG is hidden at the default level and the
+                    # stall watchdog stays suppressed while chunks arrive),
+                    # which is indistinguishable from a hang. This is the
+                    # 2026-09-13 "Phase 2 frozen for minutes" report.
                     reasoning = getattr(delta, "reasoning_content", None)
                     if reasoning:
-                        reasoning_chars += len(reasoning)
                         if not thinking_logged:
                             thinking_logged = True
                             logger.info(
@@ -1105,13 +1207,16 @@ class OpenAIClient:
                                 sid,
                                 self._model,
                             )
+                        reasoning_chars += len(reasoning)
                         now = time.time()
                         if now - last_think_log >= THINKING_LOG_INTERVAL:
                             last_think_log = now
-                            logger.debug(
-                                "[%s] %s thinking: %d chars so far...",
+                            logger.info(
+                                "[%s] %s still thinking (%ds elapsed, %d chars of "
+                                "reasoning, no visible output yet) ...",
                                 sid,
                                 self._model,
+                                int(elapsed),
                                 reasoning_chars,
                             )
                 if choice.finish_reason:
@@ -1131,6 +1236,13 @@ class OpenAIClient:
         finally:
             state["stop"] = True
             watcher.join(timeout=1.0)
+            # Release the HTTP connection when we bail out early (hard
+            # timeout); on the normal path the iterator is already exhausted.
+            if stream is not None and hasattr(stream, "close"):
+                try:
+                    stream.close()
+                except Exception:  # pragma: no cover - best-effort cleanup
+                    logger.debug("[%s] stream close failed (ignored)", sid)
 
 
 class MultiModelLLMClient:
@@ -1491,6 +1603,48 @@ def _resolve_profile_for(
     return profile
 
 
+def _parse_extra_body(raw: str) -> dict[str, Any]:
+    """Parse ``OPENAI_EXTRA_BODY_JSON`` into a request fragment.
+
+    The profile registry translates the effort INTENT into each model family's
+    dialect, so a model it does not recognise gets NO thinking control at all.
+    Rather than guessing a vendor's parameter names, the operator supplies the
+    exact fragment their provider documents.
+
+    Args:
+        raw: Raw JSON string (empty = feature disabled).
+
+    Returns:
+        The parsed object (empty dict when unset).
+
+    Raises:
+        ValueError: When the value is not a JSON object — configuration errors
+            must fail at startup, not silently drop the operator's intent.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"OPENAI_EXTRA_BODY_JSON is not valid JSON ({exc}). Expected a JSON "
+            "object, e.g. '{\"enable_thinking\": false}'."
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            "OPENAI_EXTRA_BODY_JSON must be a JSON object, e.g. "
+            "'{\"enable_thinking\": false}'; got "
+            f"{type(parsed).__name__}."
+        )
+    logger.warning(
+        "OPENAI_EXTRA_BODY_JSON override is active; every request will carry "
+        "extra_body=%s (keys win over the profile fragment).",
+        parsed,
+    )
+    return parsed
+
+
 def create_llm_client(settings: Settings) -> MultiModelLLMClient:
     """Factory function to create a multi-model LLM client.
 
@@ -1521,6 +1675,13 @@ def create_llm_client(settings: Settings) -> MultiModelLLMClient:
     blocking_hard_timeout: float | None = (
         float(settings.llm.blocking_hard_timeout) if settings.llm.blocking_hard_timeout else None
     )
+    # Same knob for the streaming channel (2026-09-13): a stream that keeps
+    # delivering reasoning chunks never trips the transport read timeout, so
+    # without an explicit cap a single call was unbounded.
+    stream_hard_timeout: float | None = (
+        float(settings.llm.stream_hard_timeout) if settings.llm.stream_hard_timeout else None
+    )
+    extra_body = _parse_extra_body(settings.llm.extra_body_json)
 
     def _build(model_name: str, sdk_client: OpenAI | AzureOpenAI) -> OpenAIClient:
         profile = _resolve_profile_for(model_name, settings)
@@ -1542,6 +1703,8 @@ def create_llm_client(settings: Settings) -> MultiModelLLMClient:
             reasoning_effort=reasoning_effort,
             continuation_intent=continuation_intent,
             blocking_hard_timeout=blocking_hard_timeout,
+            stream_hard_timeout=stream_hard_timeout,
+            extra_body=extra_body,
         )
 
     if settings.azure_llm.enabled:
