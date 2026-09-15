@@ -12,6 +12,7 @@ Covers (plan v6 §七):
 """
 
 import json
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -157,9 +158,76 @@ class TestFilterToScope:
         batch = {"GET /users", "POST /users"}
         expected = {"GET /users": 2, "POST /users": 2}
         # B6a-2: the DECLARED scope-key function is injected by the caller.
-        kept = filter_to_scope(items, batch, expected, dict_scope_key)
+        # T2: the filter also returns a dropped_report (T2 visibility).
+        kept, dropped = filter_to_scope(items, batch, expected, dict_scope_key)
         eps = [str(it["endpoint"]) for it in kept]
         assert eps == ["GET /users", "GET /users", "POST /users"]
+        assert {(d["endpoint"], d["reason"]) for d in dropped} == {
+            ("GET /users", "quota"),
+            ("PUT /other", "out_of_scope"),
+        }
+        assert sum(d["count"] for d in dropped) == len(items) - len(kept)
+
+    def test_every_drop_group_is_warning_logged(self, caplog) -> None:
+        items = [
+            _case(1, "GET /users"),
+            _case(2, "PUT /other"),
+            _case(3, "PUT /other"),
+            "garbage",  # malformed channel (non-dict item)
+        ]
+        batch = {"GET /users"}
+        expected = {"GET /users": 5}
+        with caplog.at_level(logging.WARNING, logger="testagent.engine.truncation"):
+            kept, dropped = filter_to_scope(items, batch, expected, dict_scope_key)
+        assert [it["id"] for it in kept if isinstance(it, dict)] == ["TC-001"]
+        assert {(d["endpoint"], d["reason"], d["count"]) for d in dropped} == {
+            ("PUT /other", "out_of_scope", 2),
+            ("", "malformed", 1),
+        }
+        # Every report entry has a WARNING carrying endpoint/reason/count.
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == len(dropped)
+        for entry in dropped:
+            assert any(
+                entry["reason"] in r.getMessage()
+                and str(entry["count"]) in r.getMessage()
+                and entry["endpoint"] in r.getMessage()
+                for r in warnings
+            ), f"no WARNING for {entry}"
+
+    def test_na_placeholder_kept_and_marked_out_of_spec(self) -> None:
+        items = [
+            _case(1, "N/A"),
+            _case(2, "n/a"),
+            _case(3, "NA"),
+            _case(4, "GET /users"),
+            _case(5, "GET /users"),  # over quota (1) — N/A must not be clipped
+        ]
+        batch = {"GET /users"}
+        expected = {"GET /users": 1}
+        kept, dropped = filter_to_scope(items, batch, expected, dict_scope_key)
+        assert [it["id"] for it in kept] == ["TC-001", "TC-002", "TC-003", "TC-004"]
+        for it in kept[:3]:
+            assert it["out_of_spec"] is True
+        assert kept[3].get("out_of_spec") is None
+        # D3: N/A items are never quota-clipped and never in the drop report.
+        assert dropped == [{"endpoint": "GET /users", "reason": "quota", "count": 1}]
+
+    def test_empty_endpoint_kept_unmarked(self) -> None:
+        items = [_case(1, ""), _case(2, "N/A"), _case(3, "GET /users")]
+        batch = {"GET /users"}
+        expected = {"GET /users": 1}
+        kept, dropped = filter_to_scope(items, batch, expected, dict_scope_key)
+        assert len(kept) == 3
+        assert "out_of_spec" not in kept[0]  # undeclared: fallback parity
+        assert kept[1]["out_of_spec"] is True
+        assert dropped == []
+
+    def test_na_case_insensitive_with_whitespace(self) -> None:
+        items = [_case(1, "  n/a  ")]
+        kept, dropped = filter_to_scope(items, {"GET /users"}, {}, dict_scope_key)
+        assert len(kept) == 1 and kept[0]["out_of_spec"] is True
+        assert dropped == []
 
 
 class TestShrinkScope:

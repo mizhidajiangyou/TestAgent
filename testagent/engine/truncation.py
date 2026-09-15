@@ -206,36 +206,66 @@ def is_truncated(result: LLMResponse, policy: TruncationPolicy) -> bool:
     return False
 
 
+OUT_OF_SPEC_PLACEHOLDERS = frozenset({"N/A", "NA"})
+
+
 def filter_to_scope(
     items: list[dict[str, Any]],
     batch_set: set[str],
     expected: dict[str, int],
     scope_key: Callable[[dict[str, Any]], str],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Single filtering entry: drop items whose DECLARED scope key (the
     item's own declaration via ``scope_key``, NOT the resolved key) is
     outside this batch (avoiding the downstream ``fallback_ep`` remap
     pollution) and cap each scope key at its expected quota. Operates on
     RAW items before conversion. Items declaring no key (``""``) are kept
     unconditionally (legacy converter-fallback parity).
+
+    Visibility contract (T2 / fix-plan D3): every drop is logged as a
+    WARNING (endpoint, reason ``out_of_scope | quota | malformed``, count)
+    and returned in ``dropped_report`` — aggregated ``{"endpoint", "reason",
+    "count"}`` entries whose counts always sum to ``len(items) - len(kept)``.
+    Items whose DECLARED key is the prompt's "N/A" placeholder (no API
+    applies) are KEPT and marked ``out_of_spec=True`` on the raw dict
+    (D3: never silently dropped, never quota-clipped, never counted against
+    in-spec coverage). Items with NO declared key stay unmarked: the
+    downstream converter's fallback attributes them as in-spec cases.
     """
     kept: list[dict[str, Any]] = []
+    dropped: dict[tuple[str, str], int] = defaultdict(int)
     count: dict[str, int] = defaultdict(int)
     for it in items:
+        if not isinstance(it, dict):
+            dropped[("", "malformed")] += 1
+            continue
         ep = scope_key(it)
         if not ep:
             # No scope declared: keep it and let the downstream converter's
             # fallback mapping assign one (v2 parity for review responses and
-            # models that omit the field).
+            # models that omit the field). Deliberately NOT marked
+            # out_of_spec — fallback attribution is in-spec behavior.
+            kept.append(it)
+            continue
+        if ep.strip().upper() in OUT_OF_SPEC_PLACEHOLDERS:
+            # Prompt contract '(use "N/A" if no API spec)' (D3): the model
+            # declared no endpoint exists — keep honestly, skip batch/quota.
+            it["out_of_spec"] = True
             kept.append(it)
             continue
         if ep not in batch_set:
+            dropped[(ep, "out_of_scope")] += 1
             continue
         if count[ep] >= expected.get(ep, 0):
+            dropped[(ep, "quota")] += 1
             continue
         count[ep] += 1
         kept.append(it)
-    return kept
+    report: list[dict[str, Any]] = []
+    for (ep, reason), n in dropped.items():
+        logger.warning("Scope filter dropped %d item(s) for endpoint %r: %s", n, ep, reason)
+        report.append({"endpoint": ep, "reason": reason, "count": n})
+    return kept, report
 
 
 def recompute_covered_pending(
@@ -686,9 +716,12 @@ class TruncationEngine:
             # With no scope context (requirements-only batches) the scope
             # filter is bypassed: there is no batch set to clip against and
             # the behaviour matches the legacy v2 loop (accept everything).
-            filtered = (
-                filter_to_scope(items, batch_set, expected, hooks.scope_key) if batch_set else items
-            )
+            # Drops inside the filter are WARNING-logged there (T2); the
+            # structured report is consumed by the budget task (T7).
+            if batch_set:
+                filtered, _dropped = filter_to_scope(items, batch_set, expected, hooks.scope_key)
+            else:
+                filtered = items
             added = _merge(filtered)
             recompute_covered_pending(expected, produced, covered, pending, _scope_of)
             return added
@@ -1037,11 +1070,10 @@ class TruncationEngine:
         items = self._hooks.salvage(raw)
         if not items:
             return produced
-        filtered = (
-            filter_to_scope(items, batch_set, expected, self._hooks.scope_key)
-            if batch_set
-            else items
-        )
+        if batch_set:
+            filtered, _dropped = filter_to_scope(items, batch_set, expected, self._hooks.scope_key)
+        else:
+            filtered = items
         merged = list(produced)
         keys = set(seen_keys)
         added = 0
