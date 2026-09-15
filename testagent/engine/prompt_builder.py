@@ -806,6 +806,92 @@ def extract_requirement_summary(user_prompt: str, max_chars: int) -> str | None:
     return text
 
 
+def _format_param_rich(name: str, schema: Any, required: bool) -> str:
+    """Format one parameter as ``name(type,req|opt[,min=..][,max=..][,default=..][,enum:..])``.
+
+    Rich variant of :func:`_format_param` (T3, fix-plan RC-4): adds the
+    numeric bounds / default constraints that boundary and pagination cases
+    need. Kept SEPARATE from the frozen ``_format_param`` so existing
+    signature output (the perf parity fingerprint surface and the truncation
+    continuation prompts) stays byte-identical.
+    """
+    schema = schema if isinstance(schema, dict) else {}
+    t = schema.get("type", "?")
+    extra = ""
+    for key, label in (("minimum", "min"), ("maximum", "max"), ("default", "default")):
+        if schema.get(key) is not None:
+            extra += f",{label}={schema[key]}"
+    if schema.get("enum"):
+        extra += ",enum:" + "|".join(str(e) for e in schema["enum"])
+    return f"{name}({t},{'req' if required else 'opt'}{extra})"
+
+
+def _render_response_schemas(ep: APIEndpoint) -> str:
+    """Render documented response schemas, or the undefined-schema marker.
+
+    With schemas: ``responses:[200:object{data(array),total(integer)},404:object{message(string)}]``.
+    Without any: the explicit honesty marker from fix-plan RC-4 so the model
+    never invents envelope / pagination shapes.
+    """
+    schemas = ep.response_schemas or {}
+    if not schemas:
+        return " (response schema undefined - do not assume envelope shape)"
+    chunks: list[str] = []
+    for status in sorted(schemas, key=str):
+        schema = schemas[status] if isinstance(schemas[status], dict) else {}
+        top_type = schema.get("type", "?")
+        props = schema.get("properties")
+        if not isinstance(props, dict) or not props:
+            chunks.append(f"{status}:{top_type}")
+            continue
+        req_set = set(schema.get("required", []) or [])
+        rparts = [_format_param_rich(k, v or {}, k in req_set) for k, v in props.items()]
+        chunks.append(f"{status}:{top_type}{{{', '.join(sorted(rparts))}}}")
+    return f" responses:[{', '.join(chunks)}]"
+
+
+def endpoints_to_rich_signature(endpoints: list[APIEndpoint]) -> str:
+    """Rich endpoint signature for the main generation chain (T3, fix-plan RC-4).
+
+    Extends the compact signature idea with parameter bounds/defaults
+    (``age(integer,req,min=0)``, ``limit(integer,opt,min=1,max=100,default=20)``)
+    and the documented response schemas keyed by status code. Endpoints that
+    document no response schema carry the explicit marker
+    ``response schema undefined - do not assume envelope shape``.
+
+    ADDITIVE on purpose: :func:`endpoints_to_signature` output is a frozen
+    fingerprint surface (perf generator + truncation continuation prompts)
+    and must never change; the main testcase chain switches to THIS function.
+    """
+    lines: list[str] = []
+    for ep in endpoints:
+        parts: list[str] = []
+        for p in ep.parameters or []:
+            if not isinstance(p, dict):
+                continue
+            schema = p.get("schema")
+            if not isinstance(schema, dict):
+                # Swagger 2.0 params carry type/enum/bounds at the top level.
+                schema = {
+                    k: p[k] for k in ("type", "enum", "minimum", "maximum", "default") if k in p
+                }
+            parts.append(
+                _format_param_rich(str(p.get("name", "")), schema, bool(p.get("required", False)))
+            )
+        line = f"- {ep.method} {ep.path}"
+        if parts:
+            line += f" params:[{', '.join(sorted(parts))}]"
+        body = ep.request_body or {}
+        props = (body.get("schema") or {}).get("properties", {}) if isinstance(body, dict) else {}
+        if isinstance(props, dict) and props:
+            req_set = set((body.get("schema") or {}).get("required", []))
+            bparts = [_format_param_rich(k, v or {}, k in req_set) for k, v in props.items()]
+            line += f" body:[{', '.join(sorted(bparts))}]"
+        line += _render_response_schemas(ep)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _truncate_marker(text: str, limit: int) -> str:
     if limit <= 0:
         return ""

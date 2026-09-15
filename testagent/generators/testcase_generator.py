@@ -39,6 +39,7 @@ from testagent.engine.concurrency import gather_with_concurrency
 from testagent.engine.llm_client import JSON_OBJECT_FORMAT, LLMClient
 from testagent.engine.prompt_builder import (
     PromptBuilder,
+    endpoints_to_rich_signature,
     endpoints_to_signature,
     extract_requirement_summary,
 )
@@ -53,7 +54,6 @@ from testagent.engine.truncation import (
 )
 from testagent.generators.base import BaseGenerator
 from testagent.parsers.requirement_parser import RequirementParser
-from testagent.parsers.swagger_parser import SwaggerParser
 
 logger = logging.getLogger(__name__)
 
@@ -495,7 +495,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         (intermittent concurrent-stream drop) are retried sequentially by
         :meth:`_fan_out_recover`.
         """
-        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        endpoints_text = endpoints_to_rich_signature(endpoints) if endpoints else ""
         historical_text = (
             self._historical_cases_to_text(historical_cases) if historical_cases else ""
         )
@@ -538,7 +538,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         def make_coro(i: int, batch: list[APIEndpoint]) -> Awaitable[list[TestCase]]:
             async def _one() -> list[TestCase]:
-                ep_text = SwaggerParser.endpoints_to_text(batch)
+                ep_text = endpoints_to_rich_signature(batch)
                 system_prompt, user_prompt = self._prompt_builder.build_api_prompt(
                     endpoints_text=ep_text,
                     requirements_text=req_text,
@@ -568,7 +568,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         def make_coro(i: int, batch: list[APIEndpoint]) -> Awaitable[list[TestCase]]:
             async def _one() -> list[TestCase]:
-                ep_text = SwaggerParser.endpoints_to_text(batch)
+                ep_text = endpoints_to_rich_signature(batch)
                 system_prompt, user_prompt = self._prompt_builder.build_testcase_prompt(
                     endpoints_text=ep_text,
                     requirements_text=requirements_text or "No specific requirements.",
@@ -744,7 +744,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         coverage is injected into the prompt so the LLM generates only
         net-new or updated cases (avoiding duplicates).
         """
-        endpoints_text = SwaggerParser.endpoints_to_text(endpoints) if endpoints else ""
+        endpoints_text = endpoints_to_rich_signature(endpoints) if endpoints else ""
         historical_text = (
             self._historical_cases_to_text(historical_cases) if historical_cases else ""
         )
@@ -793,7 +793,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         all_cases: list[TestCase] = []
 
         for i, batch in enumerate(batches, 1):
-            ep_text = SwaggerParser.endpoints_to_text(batch)
+            ep_text = endpoints_to_rich_signature(batch)
             system_prompt, user_prompt = self._prompt_builder.build_api_prompt(
                 endpoints_text=ep_text,
                 requirements_text=req_text,
@@ -822,7 +822,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         all_cases: list[TestCase] = []
 
         for i, batch in enumerate(batches, 1):
-            ep_text = SwaggerParser.endpoints_to_text(batch)
+            ep_text = endpoints_to_rich_signature(batch)
             system_prompt, user_prompt = self._prompt_builder.build_testcase_prompt(
                 endpoints_text=ep_text,
                 requirements_text=requirements_text or "No specific requirements.",

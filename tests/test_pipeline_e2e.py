@@ -86,10 +86,12 @@ class TestArchitectureGate:
     # assertions (v3 ruling: no separate test class outside this gate).
     # ------------------------------------------------------------------
 
-    #: Planned shared dataclass fields per owner (plan-k §4.1). Empty until
-    #: T3 (response_schemas) / T8 (five identity fields) / T10 (binds,
-    #: executability) / S1a (path_id, source_stage) land theirs.
-    _SHARED_MODEL_FIELDS: ClassVar[dict[str, tuple[str, ...]]] = {}
+    #: Planned shared dataclass fields per owner (plan-k §4.1). T3 landed
+    #: response_schemas; T8 (five identity fields) / T10 (binds,
+    #: executability) / S1a (path_id, source_stage) extend as they land.
+    _SHARED_MODEL_FIELDS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "APIEndpoint": ("response_schemas",),
+    }
     #: Planned shared Settings keys; T1 lands the first (AUDIT_DUMP_ENABLED).
     _SHARED_SETTINGS_KEYS: tuple[str, ...] = ("audit_dump_enabled",)
     #: Baseline field order snapshots — shared-model field slips must append,

@@ -43,6 +43,11 @@ class APIEndpoint:
     request_body: dict[str, Any] | None = None
     responses: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    # --- quality: T3 (fix-plan RC-4; plan-l L-1 field slip) ---
+    #: Documented response schemas keyed by status code, ``$ref``-resolved:
+    #: ``{"200": {...}, "404": {...}}``. Swagger 2.0 specs degrade to ``{}``
+    #: (explicit honest blindness, never guessed shapes). Owner: T3.
+    response_schemas: dict[str, Any] = field(default_factory=dict)
 
     @property
     def full_path(self) -> str:
