@@ -235,3 +235,6 @@ cankao/
 .workbuddy/
 # Local AI tool dir (same class as .idea)
 .trae/
+
+# Task context files are LOCAL ONLY (user ruling 2026-09-16, never commit)
+task-history-migration.md
