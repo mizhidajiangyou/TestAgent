@@ -1,0 +1,463 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Evidence Notarization API",
+    "version": "1.0.0",
+    "description": "存证系统示例 API（账户/实名认证、存证创建、查询下载、区块链锚定、验证、出证、审计），用于 TestAgent 测试用例生成"
+  },
+  "servers": [
+    {"url": "https://api.notary.example.com/v1"}
+  ],
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "summary": "Register a new account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/RegisterRequest"}
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registered",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/User"}
+              }
+            }
+          },
+          "400": {"description": "Validation error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "409": {"description": "Email already exists", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "summary": "Login and obtain JWT tokens",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/LoginRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/LoginResponse"}
+              }
+            }
+          },
+          "400": {"description": "Validation error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "401": {"description": "Invalid credentials", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "423": {"description": "Account locked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/auth/verify-identity": {
+      "post": {
+        "summary": "Submit real-name (KYC) verification",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/IdentityVerifyRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/User"}}}
+          },
+          "400": {"description": "Validation error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "409": {"description": "Already verified", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "summary": "Get current user profile",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/User"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["auth"]
+      }
+    },
+    "/evidence": {
+      "post": {
+        "summary": "Create evidence (file upload or text)",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "evidenceType", "text"],
+                "properties": {
+                  "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                  "evidenceType": {"type": "string", "enum": ["document", "contract", "image", "audio", "video", "other"]},
+                  "text": {"type": "string", "minLength": 1}
+                }
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "evidenceType", "file"],
+                "properties": {
+                  "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                  "evidenceType": {"type": "string", "enum": ["document", "contract", "image", "audio", "video", "other"]},
+                  "file": {"type": "string", "format": "binary"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Evidence"}}}
+          },
+          "400": {"description": "Validation error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "403": {"description": "Identity not verified", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "409": {"description": "Duplicate content hash", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["evidence"]
+      },
+      "get": {
+        "summary": "List current user's evidence",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1, "default": 1}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}},
+          {"name": "status", "in": "query", "schema": {"type": "string", "enum": ["pending", "anchored", "revoked"]}},
+          {"name": "evidenceType", "in": "query", "schema": {"type": "string", "enum": ["document", "contract", "image", "audio", "video", "other"]}},
+          {"name": "keyword", "in": "query", "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EvidenceList"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["evidence"]
+      }
+    },
+    "/evidence/{evidenceId}": {
+      "get": {
+        "summary": "Get evidence detail (owner or admin)",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "evidenceId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"}}
+        ],
+        "responses": {
+          "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Evidence"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "403": {"description": "Forbidden", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "404": {"description": "Not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["evidence"]
+      }
+    },
+    "/evidence/{evidenceId}/file": {
+      "get": {
+        "summary": "Download evidence original file (owner or admin)",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "evidenceId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"}}
+        ],
+        "responses": {
+          "200": {"description": "File stream", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "403": {"description": "Forbidden", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "404": {"description": "Not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["evidence"]
+      }
+    },
+    "/evidence/{evidenceId}/anchor": {
+      "post": {
+        "summary": "Anchor evidence onto blockchain (owner only)",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "evidenceId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Anchored",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AnchorInfo"}}}
+          },
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "403": {"description": "Forbidden (not owner)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "404": {"description": "Not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "409": {"description": "Already anchored", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["evidence"]
+      },
+      "get": {
+        "summary": "Get on-chain anchor status (public)",
+        "parameters": [
+          {"name": "evidenceId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"}}
+        ],
+        "responses": {
+          "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AnchorInfo"}}}},
+          "404": {"description": "Not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["evidence"]
+      }
+    },
+    "/verify/hash": {
+      "post": {
+        "summary": "Verify content by file or hash (public)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "contentHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+                }
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {"type": "string", "format": "binary"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VerifyHashResult"}}}},
+          "400": {"description": "Invalid hash format", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["verify"]
+      }
+    },
+    "/verify/{evidenceId}": {
+      "get": {
+        "summary": "Verify evidence authenticity by id (public)",
+        "parameters": [
+          {"name": "evidenceId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"}}
+        ],
+        "responses": {
+          "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/VerifyEvidenceResult"}}}},
+          "404": {"description": "Not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["verify"]
+      }
+    },
+    "/evidence/{evidenceId}/certificate": {
+      "post": {
+        "summary": "Issue evidence certificate (anchored only)",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "evidenceId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"}},
+          {"name": "format", "in": "query", "schema": {"type": "string", "enum": ["pdf", "json"], "default": "pdf"}}
+        ],
+        "responses": {
+          "201": {
+            "description": "Issued",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Certificate"}}}
+          },
+          "200": {"description": "Already issued (returns existing)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Certificate"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "403": {"description": "Forbidden", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "404": {"description": "Not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "409": {"description": "Not anchored", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["evidence"]
+      },
+      "get": {
+        "summary": "Download evidence certificate (owner or admin)",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "evidenceId", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"}}
+        ],
+        "responses": {
+          "200": {"description": "File stream", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "403": {"description": "Forbidden", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "404": {"description": "Not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["evidence"]
+      }
+    },
+    "/audit/logs": {
+      "get": {
+        "summary": "Query audit logs (admin only)",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1, "default": 1}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}},
+          {"name": "action", "in": "query", "schema": {"type": "string", "enum": ["create", "anchor", "verify", "download", "certify", "revoke"]}},
+          {"name": "actorId", "in": "query", "schema": {"type": "string"}},
+          {"name": "startAt", "in": "query", "schema": {"type": "string", "format": "date-time"}},
+          {"name": "endAt", "in": "query", "schema": {"type": "string", "format": "date-time"}}
+        ],
+        "responses": {
+          "200": {"description": "Success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditLogList"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "403": {"description": "Forbidden (not admin)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        },
+        "tags": ["audit"]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "code": {"type": "string"},
+          "message": {"type": "string"},
+          "details": {"type": "object", "nullable": true}
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "email": {"type": "string", "format": "email"},
+          "name": {"type": "string"},
+          "role": {"type": "string", "enum": ["user", "auditor", "admin"]},
+          "verified": {"type": "boolean"},
+          "createdAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": ["email", "password", "name"],
+        "properties": {
+          "email": {"type": "string", "format": "email"},
+          "password": {"type": "string", "minLength": 8, "maxLength": 64, "pattern": "^(?=.*[A-Za-z])(?=.*\\d).+$"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 100}
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": {"type": "string", "format": "email"},
+          "password": {"type": "string"}
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": {"type": "string"},
+          "refreshToken": {"type": "string"},
+          "tokenType": {"type": "string", "enum": ["Bearer"]},
+          "expiresIn": {"type": "integer", "description": "seconds"}
+        }
+      },
+      "IdentityVerifyRequest": {
+        "type": "object",
+        "required": ["realName", "idType", "idNumber"],
+        "properties": {
+          "realName": {"type": "string", "minLength": 1, "maxLength": 100},
+          "idType": {"type": "string", "enum": ["id_card", "passport", "business_license"]},
+          "idNumber": {"type": "string", "minLength": 6, "maxLength": 32}
+        }
+      },
+      "Evidence": {
+        "type": "object",
+        "properties": {
+          "evidenceId": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"},
+          "title": {"type": "string", "maxLength": 200},
+          "evidenceType": {"type": "string", "enum": ["document", "contract", "image", "audio", "video", "other"]},
+          "contentHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "status": {"type": "string", "enum": ["pending", "anchored", "revoked"]},
+          "ownerId": {"type": "string"},
+          "fileName": {"type": "string", "nullable": true},
+          "fileSize": {"type": "integer", "minimum": 0, "nullable": true},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "anchoredAt": {"type": "string", "format": "date-time", "nullable": true}
+        }
+      },
+      "EvidenceList": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/Evidence"}},
+          "total": {"type": "integer"},
+          "page": {"type": "integer"},
+          "limit": {"type": "integer"}
+        }
+      },
+      "AnchorInfo": {
+        "type": "object",
+        "properties": {
+          "txHash": {"type": "string", "pattern": "^0x[a-fA-F0-9]{64}$"},
+          "blockHeight": {"type": "integer", "minimum": 0},
+          "chainName": {"type": "string"},
+          "anchoredAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "Certificate": {
+        "type": "object",
+        "properties": {
+          "certificateId": {"type": "string", "pattern": "^CERT-[A-Z0-9]{12}$"},
+          "evidenceId": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"},
+          "format": {"type": "string", "enum": ["pdf", "json"]},
+          "issuedAt": {"type": "string", "format": "date-time"},
+          "downloadUrl": {"type": "string", "format": "uri"}
+        }
+      },
+      "VerifyHashResult": {
+        "type": "object",
+        "properties": {
+          "matched": {"type": "boolean"},
+          "evidenceId": {"type": "string", "nullable": true},
+          "contentHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "status": {"type": "string", "enum": ["pending", "anchored", "revoked"], "nullable": true}
+        }
+      },
+      "VerifyEvidenceResult": {
+        "type": "object",
+        "properties": {
+          "evidenceId": {"type": "string", "pattern": "^EVD-[A-Z0-9]{12}$"},
+          "title": {"type": "string"},
+          "contentHash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "status": {"type": "string", "enum": ["pending", "anchored", "revoked"]},
+          "anchor": {"$ref": "#/components/schemas/AnchorInfo"},
+          "verified": {"type": "boolean"}
+        }
+      },
+      "AuditLog": {
+        "type": "object",
+        "properties": {
+          "logId": {"type": "string"},
+          "action": {"type": "string", "enum": ["create", "anchor", "verify", "download", "certify", "revoke"]},
+          "actorId": {"type": "string"},
+          "evidenceId": {"type": "string", "nullable": true},
+          "ip": {"type": "string"},
+          "createdAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "AuditLogList": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/AuditLog"}},
+          "total": {"type": "integer"},
+          "page": {"type": "integer"},
+          "limit": {"type": "integer"}
+        }
+      }
+    }
+  }
+}
