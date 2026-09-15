@@ -217,8 +217,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# TestAgent output
-output/
+# TestAgent output (keep runtime artifacts ignored, but gate archives are tracked)
+output/*
+!output/gates/
 *.jtl
 
 task.md
