@@ -49,12 +49,17 @@ class RawResponseDumper:
         self._raw_calls = 0
 
     def sink(self, record: dict[str, Any]) -> None:
-        """Consume one engine record (``kind`` = ``raw`` | ``merge``)."""
+        """Consume one engine record (``kind`` = ``raw`` | ``merge`` | ``drop``)."""
         kind = record.get("kind")
         if kind == "raw":
             self._dump_raw(record)
         elif kind == "merge":
             self._record_merge(record)
+        elif kind == "drop":
+            # T2/T7: structured scope-filter drop report (consumed via the
+            # session journal; the WARNING log is the human channel).
+            with self._lock:
+                self._append_meta(record)
         else:
             raise ValueError(f"unknown raw-dump record kind: {kind!r}")
 

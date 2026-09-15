@@ -62,6 +62,11 @@ from testagent.pipeline.consistency import (
     render_authoritative_table,
     render_gap_report,
 )
+from testagent.pipeline.obligations import (
+    BindingBasis,
+    ObligationRegistry,
+    register_spec_obligations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +156,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         audit_dump_enabled: bool = False,
         audit_dump_dir: str | None = None,
         conflict_policy: str = "strict",
+        cases_budget: int = 60,
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
@@ -236,6 +242,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 scope_item_key=_scope_item_key,
                 build_reask=self._build_reask_prompt,
                 build_continue_context=self._build_continue_context,
+                expected_for=self._expected_for,
             ),
             raw_sink=self._emit_raw_record,
         )
@@ -250,6 +257,15 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self._conflict_policy = conflict_policy
         self._conflict_table = ""
         self._conflict_findings: list[Finding] = []
+        # T7 (fix-plan §3.5): obligation-driven floor + session cap. The
+        # registry holds the coverage state; the floor feeds the engine's
+        # ``expected_for`` hook and the cap trims surplus cases WITH per-item
+        # accounting (never a silent drop).
+        self._cases_budget = cases_budget
+        self._obligation_registry: ObligationRegistry | None = None
+        self._case_obligations: dict[str, list[str]] = {}
+        self._session_case_count = 0
+        self._budget_trim_report = ""
 
     def _emit_raw_record(self, record: dict[str, Any]) -> None:
         """Engine ``raw_sink`` adapter: route records to the active dump."""
@@ -332,6 +348,87 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             extra["authoritative_table"] = self._conflict_table
         return extra or None
 
+    def _start_obligation_context(
+        self, requirements: list[RequirementItem], endpoints: list[APIEndpoint]
+    ) -> None:
+        """T5/T7: register requirement-AC and spec obligations for this
+        session; the uncovered ones drive the per-endpoint quota floor."""
+        registry = ObligationRegistry()
+        for req in requirements:
+            if req.acceptance_criteria:
+                registry.register_requirement_acs(
+                    req.id or "REQ",
+                    list(req.acceptance_criteria),
+                    binding_basis=BindingBasis.KEYWORD,
+                )
+        registry.register_many(register_spec_obligations(endpoints))
+        self._obligation_registry = registry
+
+    def _expected_for(self, scope: list[str]) -> dict[str, int]:
+        """GenericHooks.expected_for: obligation floor + session budget cap.
+
+        Floor per endpoint = uncovered obligations bound to it (each needs at
+        least one case); endpoints without obligations fall back to the
+        policy default. The session cap (``CASES_BUDGET``) clamps the total:
+        ``0`` disables the cap entirely (legacy behaviour).
+        """
+        default = self._truncation_policy.default_expected_cases_per_endpoint
+        registry = self._obligation_registry
+        floor: dict[str, int] = {key: default for key in scope}
+        if registry is not None:
+            per_endpoint: dict[str, int] = {}
+            for state in registry.uncovered():
+                for binding in state.obligation.endpoint_bindings:
+                    per_endpoint[binding] = per_endpoint.get(binding, 0) + 1
+            for key in scope:
+                bound = per_endpoint.get(key, 0)
+                if bound:
+                    floor[key] = bound
+        budget = self._cases_budget
+        if budget > 0:
+            remaining = budget - self._session_case_count
+            if remaining <= 0:
+                return {key: 0 for key in scope}
+            total = sum(floor.values())
+            while total > remaining:
+                # Trim the largest quota first (deterministic tie-break by key).
+                key = max(sorted(floor), key=lambda k: floor[k])
+                if floor[key] <= 0:
+                    break
+                floor[key] -= 1
+                total -= 1
+        return floor
+
+    def _enforce_cases_budget(self, cases: list[TestCase]) -> list[TestCase]:
+        """T7: session cap on total cases with per-item trim accounting.
+
+        Value ordering keeps obligation-covering cases first (the floor
+        contract), then original generation order; every trimmed case is
+        logged and reported (never a silent drop). ``CASES_BUDGET=0``
+        disables the cap.
+        """
+        budget = self._cases_budget
+        if budget <= 0 or len(cases) <= budget:
+            return cases
+        covering = [c for c in cases if self._case_obligations.get(c.id)]
+        plain = [c for c in cases if not self._case_obligations.get(c.id)]
+        kept = (covering + plain)[:budget]
+        trimmed = (covering + plain)[budget:]
+        lines = [
+            "# Budget trim report",
+            "",
+            f"CASES_BUDGET={budget}, produced={len(cases)}, kept={len(kept)}, trimmed={len(trimmed)}",
+            "",
+        ]
+        for case in trimmed:
+            reason = "surplus beyond CASES_BUDGET"
+            if self._case_obligations.get(case.id):
+                reason = "surplus beyond CASES_BUDGET (obligation-covering kept preferentially)"
+            lines.append(f"- {case.id} {case.title!r}: {reason}")
+            logger.warning("Budget trim: dropped %s %r (%s)", case.id, case.title, reason)
+        self._budget_trim_report = "\n".join(lines) + "\n"
+        return kept
+
     def set_review_enabled(self, enabled: bool) -> None:
         """Runtime override of the review switch (CLI ``--review/--no-review``).
 
@@ -372,6 +469,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         logger.info("Session %s started", self._session_id)
         self._start_raw_audit()
         self._start_conflict_context(requirements, endpoints)
+        self._start_obligation_context(requirements, endpoints)
 
         all_cases: list[TestCase] = []
         phase1_cases: list[TestCase] = []
@@ -416,6 +514,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             merged = self._merge_historical_cases(historical_cases, all_cases)
             all_cases = merged
 
+        # T7: session-wide CASES_BUDGET cap with per-item trim accounting.
+        all_cases = self._enforce_cases_budget(all_cases)
+
         # Re-number sequentially
         for idx, tc in enumerate(all_cases, 1):
             tc.id = f"TC-{idx:03d}"
@@ -457,6 +558,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         logger.info("Session %s started", self._session_id)
         self._start_raw_audit()
         self._start_conflict_context(requirements, endpoints)
+        self._start_obligation_context(requirements, endpoints)
 
         all_cases: list[TestCase] = []
         phase1_cases: list[TestCase] = []
@@ -493,6 +595,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         if historical_cases:
             merged = self._merge_historical_cases(historical_cases, all_cases)
             all_cases = merged
+
+        # T7: session-wide CASES_BUDGET cap with per-item trim accounting.
+        all_cases = self._enforce_cases_budget(all_cases)
 
         for idx, tc in enumerate(all_cases, 1):
             tc.id = f"TC-{idx:03d}"
@@ -1594,20 +1699,29 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             except ValueError:
                 priority = TestPriority.MEDIUM
 
-            test_cases.append(
-                TestCase(
-                    id=item.get("id", f"TC-{idx:03d}"),
-                    title=item.get("title", ""),
-                    description=item.get("description", ""),
-                    endpoint=endpoint,
-                    test_type=test_type,
-                    priority=priority,
-                    preconditions=item.get("preconditions", []),
-                    steps=item.get("steps", []),
-                    expected_results=item.get("expected_results", []),
-                    tags=item.get("tags", []),
-                )
+            case = TestCase(
+                id=str(item.get("id", f"TC-{idx:03d}")),
+                title=item.get("title", ""),
+                description=item.get("description", ""),
+                endpoint=endpoint,
+                test_type=test_type,
+                priority=priority,
+                preconditions=item.get("preconditions", []),
+                steps=item.get("steps", []),
+                expected_results=item.get("expected_results", []),
+                tags=item.get("tags", []),
             )
+            test_cases.append(case)
+            # T5/T7: account the case against its declared obligations.
+            covers = item.get("covers_obligations") or []
+            if covers and self._obligation_registry is not None:
+                try:
+                    self._obligation_registry.cover_many(case.id, [str(c) for c in covers])
+                except KeyError as exc:
+                    logger.warning("Case %s declares unknown obligation: %s", case.id, exc)
+                else:
+                    self._case_obligations[case.id] = [str(c) for c in covers]
+        self._session_case_count += len(test_cases)
         return test_cases
 
     @staticmethod

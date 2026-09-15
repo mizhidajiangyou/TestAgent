@@ -237,6 +237,12 @@ class Settings(BaseSettings):
         default="strict", alias="CONFLICT_POLICY"
     )
 
+    # --- quality: T7 (fix-plan §3.5; plan-l L-1 physical-write protocol) ---
+    #: Session-wide cap on generated test cases (obligation floor comes from
+    #: the T5 registry; this caps the total). ``0`` restores the legacy
+    #: per-endpoint-quota-only behavior (no cap).
+    cases_budget: int = Field(default=60, alias="CASES_BUDGET")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

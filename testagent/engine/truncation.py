@@ -735,6 +735,7 @@ class TruncationEngine:
             # the behaviour matches the legacy v2 loop (accept everything).
             # Drops inside the filter are WARNING-logged there (T2); the
             # structured report is consumed by the budget task (T7).
+            _dropped: list[dict[str, Any]] = []
             if batch_set:
                 filtered, _dropped = filter_to_scope(items, batch_set, expected, hooks.scope_key)
             else:
@@ -743,6 +744,10 @@ class TruncationEngine:
             recompute_covered_pending(expected, produced, covered, pending, _scope_of)
             if self._raw_sink is not None:
                 self._raw_sink({"kind": "merge", "label": label, "added": added})
+                if _dropped:
+                    # T7: the budget task consumes the T2 dropped report —
+                    # every silent-era drop is now a structured record.
+                    self._raw_sink({"kind": "drop", "label": label, "report": _dropped})
             return added
 
         def _handle_budget_exhausted() -> list[dict[str, Any]] | None:
@@ -1132,6 +1137,14 @@ class TruncationEngine:
                 self._raw_sink(
                     {"kind": "merge", "label": label or "(final-salvage)", "added": added}
                 )
+                if _dropped:
+                    self._raw_sink(
+                        {
+                            "kind": "drop",
+                            "label": label or "(final-salvage)",
+                            "report": _dropped,
+                        }
+                    )
             logger.info("Final salvage merged %d additional cases", added)
             if emit is not None:
                 emit("salvage", chars=len(raw))
