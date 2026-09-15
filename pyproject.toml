@@ -73,6 +73,9 @@ ignore = ["E501"]
 # UI text (fullwidth punctuation). The ambiguous-character rules are
 # false-positives there, so disable RUF001/002/003 for that module.
 "testagent/web/app.py" = ["RUF001", "RUF002", "RUF003"]
+# Consistency-check tests embed realistic CJK requirement fixtures
+# (fullwidth punctuation is the honest input shape).
+"tests/test_consistency.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.14"
