@@ -101,6 +101,7 @@ class Container(containers.DeclarativeContainer):
         truncation_policy=truncation_policy,
         audit_dump_enabled=settings.provided.audit_dump_enabled,
         audit_dump_dir=settings.provided.output_dir,
+        conflict_policy=settings.provided.conflict_policy,
     )
 
     gui_generator = providers.Singleton(

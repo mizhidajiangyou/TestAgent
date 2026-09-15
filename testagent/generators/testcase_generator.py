@@ -54,6 +54,14 @@ from testagent.engine.truncation import (
 )
 from testagent.generators.base import BaseGenerator
 from testagent.parsers.requirement_parser import RequirementParser
+from testagent.pipeline.consistency import (
+    ConflictPolicy,
+    Finding,
+    RequirementRef,
+    classify_findings,
+    render_authoritative_table,
+    render_gap_report,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +150,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         truncation_policy: TruncationPolicy | None = None,
         audit_dump_enabled: bool = False,
         audit_dump_dir: str | None = None,
+        conflict_policy: str = "strict",
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
@@ -236,6 +245,11 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self._audit_dump_enabled = audit_dump_enabled
         self._audit_dump_dir = audit_dump_dir
         self._raw_dumper: RawResponseDumper | None = None
+        # T9 (fix-plan §3.3): conflict adjudication policy + per-session
+        # authoritative value table shared by generation AND review prompts.
+        self._conflict_policy = conflict_policy
+        self._conflict_table = ""
+        self._conflict_findings: list[Finding] = []
 
     def _emit_raw_record(self, record: dict[str, Any]) -> None:
         """Engine ``raw_sink`` adapter: route records to the active dump."""
@@ -256,14 +270,67 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         else:
             self._raw_dumper = None
 
+    def _start_conflict_context(
+        self, requirements: list[RequirementItem], endpoints: list[APIEndpoint]
+    ) -> None:
+        """T4/T9: run the deterministic consistency checks once per session,
+        adjudicate by ``CONFLICT_POLICY`` and share the authoritative value
+        table with generation AND review prompts. The gap report lands in
+        the session audit directory (when dumping is on) and its summary in
+        the log — findings never silently disappear.
+        """
+        try:
+            policy = ConflictPolicy(self._conflict_policy)
+        except ValueError:
+            raise ValueError(
+                f"invalid CONFLICT_POLICY: {self._conflict_policy!r} "
+                "(expected strict | spec_first | requirement_first)"
+            ) from None
+        refs = [
+            RequirementRef(
+                id=req.id or f"REQ-{i}",
+                text=RequirementParser.requirements_to_text([req]),
+            )
+            for i, req in enumerate(requirements, 1)
+        ]
+        self._conflict_findings = classify_findings(refs, endpoints)
+        self._conflict_table = (
+            render_authoritative_table(self._conflict_findings, policy)
+            if self._conflict_findings
+            else ""
+        )
+        if self._conflict_findings:
+            logger.warning(
+                "Consistency check: %d finding(s) under policy=%s",
+                len(self._conflict_findings),
+                policy.value,
+            )
+            if self._raw_dumper is not None:
+                self._raw_dumper.write_report(
+                    "consistency_report.md", render_gap_report(self._conflict_findings)
+                )
+
     def _finish_raw_audit(self, artifacts: list[TestCase]) -> None:
-        """Write the session reconciliation table (T1) if auditing is on."""
+        """Session teardown: write the T1 reconciliation table (when
+        auditing is on) and clear the T4/T9 conflict context."""
+        self._conflict_table = ""
+        self._conflict_findings = []
         dumper = self._raw_dumper
         if dumper is None:
             return
         self._raw_dumper = None
         path = dumper.write_reconciliation(len(artifacts))
         logger.info("Raw audit dump written: %s", path)
+
+    def _prompt_extra(self, historical_text: str = "") -> dict[str, str] | None:
+        """extra_context for prompt builders: historical baseline + the
+        authoritative value table (empty pieces stay absent)."""
+        extra: dict[str, str] = {}
+        if historical_text:
+            extra["historical_cases"] = historical_text
+        if self._conflict_table:
+            extra["authoritative_table"] = self._conflict_table
+        return extra or None
 
     def set_review_enabled(self, enabled: bool) -> None:
         """Runtime override of the review switch (CLI ``--review/--no-review``).
@@ -304,6 +371,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self._llm.set_session_id(self._session_id)
         logger.info("Session %s started", self._session_id)
         self._start_raw_audit()
+        self._start_conflict_context(requirements, endpoints)
 
         all_cases: list[TestCase] = []
         phase1_cases: list[TestCase] = []
@@ -388,6 +456,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self._llm.set_session_id(self._session_id)
         logger.info("Session %s started", self._session_id)
         self._start_raw_audit()
+        self._start_conflict_context(requirements, endpoints)
 
         all_cases: list[TestCase] = []
         phase1_cases: list[TestCase] = []
@@ -507,9 +576,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     endpoints_text=endpoints_text,
                     requirements_text=req_text,
                     output_language=self._output_language,
-                    extra_context={"historical_cases": historical_text}
-                    if historical_text
-                    else None,
+                    extra_context=self._prompt_extra(historical_text),
                     json_mode=self._json_mode,
                 )
                 logger.info(
@@ -545,6 +612,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     output_language=self._output_language,
                     json_mode=self._json_mode,
                     already_covered=already_covered,
+                    authoritative_table=self._conflict_table,
                 )
                 logger.info(
                     "Phase 2 - Batch %d/%d (%d endpoints, API-specific)...",
@@ -573,6 +641,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     endpoints_text=ep_text,
                     requirements_text=requirements_text or "No specific requirements.",
                     output_language=self._output_language,
+                    extra_context=self._prompt_extra(),
                     json_mode=self._json_mode,
                 )
                 logger.info(
@@ -757,7 +826,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 endpoints_text=endpoints_text,
                 requirements_text=req_text,
                 output_language=self._output_language,
-                extra_context={"historical_cases": historical_text} if historical_text else None,
+                extra_context=self._prompt_extra(historical_text),
                 json_mode=self._json_mode,
             )
             logger.info(
@@ -800,6 +869,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 output_language=self._output_language,
                 json_mode=self._json_mode,
                 already_covered=already_covered,
+                authoritative_table=self._conflict_table,
             )
             logger.info(
                 "Phase 2 - Batch %d/%d (%d endpoints, API-specific)...",
@@ -827,6 +897,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 endpoints_text=ep_text,
                 requirements_text=requirements_text or "No specific requirements.",
                 output_language=self._output_language,
+                extra_context=self._prompt_extra(),
                 json_mode=self._json_mode,
             )
             logger.info(
@@ -1126,6 +1197,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 test_cases_json=current_json,
                 output_language=self._output_language,
                 json_mode=self._json_mode,
+                authoritative_table=self._conflict_table,
             )
 
         def call_llm(

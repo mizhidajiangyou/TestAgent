@@ -80,6 +80,16 @@ class RawResponseDumper:
         with self._calls_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(meta, ensure_ascii=False, sort_keys=True) + "\n")
 
+    def write_report(self, filename: str, content: str) -> Path:
+        """Write an auxiliary markdown report (e.g. the T4/T9 consistency
+        gap report) into the session directory and return its path."""
+        if not re.fullmatch(r"[A-Za-z0-9_.\-]+", filename):
+            raise ValueError(f"unsafe report filename: {filename!r}")
+        path = self._dir / filename
+        with self._lock:
+            path.write_text(content, encoding="utf-8")
+        return path
+
     def write_reconciliation(self, artifact_count: int) -> Path:
         """Write ``reconciliation.json`` and return its path.
 

@@ -228,6 +228,15 @@ class Settings(BaseSettings):
     #: ``false`` restores the pre-T1 silent behavior (rollback switch).
     audit_dump_enabled: bool = Field(default=True, alias="AUDIT_DUMP_ENABLED")
 
+    # --- quality: T9 (fix-plan §3.3; plan-l L-1 physical-write protocol) ---
+    #: Adjudication policy for spec-vs-requirement status-code conflicts
+    #: found by the T4 consistency checks. ``strict`` (default) never picks
+    #: a side: conflicting cases are marked ``conflict_unresolved`` and the
+    #: conflict list is reported prominently.
+    conflict_policy: Literal["strict", "spec_first", "requirement_first"] = Field(
+        default="strict", alias="CONFLICT_POLICY"
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

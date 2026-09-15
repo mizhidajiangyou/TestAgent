@@ -32,8 +32,10 @@ JSON_MODE_TEST_CASES_INSTRUCTION = (
 #: prevents Phase 1 and Phase 2 from inventing two different, contradictory
 #: status-code / error-code conventions (the "spec inconsistency" defect).
 ERROR_CONTRACT = (
-    " ERROR CONTRACT — use EXACTLY these status codes and error.code values for "
-    "EVERY case (both phases and review must agree): "
+    " ERROR CONTRACT (FALLBACK - applies ONLY where the requirement text or the "
+    "Authoritative Value Table of this run already specifies the status code; "
+    "spec and requirements always win over these defaults; both phases and "
+    "review must agree): "
     "2xx = 200 OK / 201 Created / 204 No Content. "
     "400 BAD_REQUEST for ALL client-input errors, with error.code: "
     "'VALIDATION_ERROR' + error.details.<field> for body validation (e.g. password "
@@ -144,7 +146,25 @@ class PromptBuilder:
                 json_mode=json_mode,
             )
 
-        return system_prompt, user_prompt
+        table = str((extra_context or {}).get("authoritative_table", "") or "")
+        return system_prompt, self._append_authoritative_table(user_prompt, table)
+
+    @staticmethod
+    def _append_authoritative_table(user_prompt: str, table: str) -> str:
+        """T9: attach the run's authoritative value table to the user prompt.
+
+        Empty tables (no findings / feature not wired) leave the prompt
+        byte-identical, keeping construction sites without the table on the
+        legacy behavior.
+        """
+        if not table.strip():
+            return user_prompt
+        return (
+            f"{user_prompt}\n\n---\n"
+            "AUTHORITATIVE VALUE TABLE (this run - these decisions override the "
+            "generic error contract below; rows marked conflict_unresolved must "
+            f"stay explicitly unresolved in the cases):\n{table.rstrip()}\n"
+        )
 
     def build_api_prompt(
         self,
@@ -153,6 +173,7 @@ class PromptBuilder:
         output_language: str = "english",
         json_mode: bool = False,
         already_covered: str = "",
+        authoritative_table: str = "",
     ) -> tuple[str, str]:
         """Build prompts for API-specific test case generation.
 
@@ -191,7 +212,7 @@ class PromptBuilder:
                 already_covered=already_covered,
             )
 
-        return system_prompt, user_prompt
+        return system_prompt, self._append_authoritative_table(user_prompt, authoritative_table)
 
     def build_slim_continue_context(
         self,
@@ -255,6 +276,7 @@ class PromptBuilder:
         test_cases_json: str,
         output_language: str = "english",
         json_mode: bool = False,
+        authoritative_table: str = "",
     ) -> tuple[str, str]:
         """Build prompts for reviewing/refining generated test cases.
 
@@ -292,7 +314,7 @@ class PromptBuilder:
                 json_mode=json_mode,
             )
 
-        return system_prompt, user_prompt
+        return system_prompt, self._append_authoritative_table(user_prompt, authoritative_table)
 
     def build_script_review_prompt(
         self,
