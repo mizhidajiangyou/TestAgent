@@ -99,6 +99,8 @@ class Container(containers.DeclarativeContainer):
         max_concurrency=settings.provided.llm.max_concurrency,
         verify_model=settings.provided.llm.verify_model,
         truncation_policy=truncation_policy,
+        audit_dump_enabled=settings.provided.audit_dump_enabled,
+        audit_dump_dir=settings.provided.output_dir,
     )
 
     gui_generator = providers.Singleton(

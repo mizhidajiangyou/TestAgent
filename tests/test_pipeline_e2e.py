@@ -11,7 +11,7 @@ the gate is CI-constant, not a human grep.
 import ast
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from click.testing import CliRunner
@@ -77,6 +77,91 @@ class TestArchitectureGate:
                 src = py.read_text(encoding="utf-8")
                 for seam in seams:
                     assert seam not in src, f"{py.relative_to(REPO)} references legacy seam {seam}"
+
+    # ------------------------------------------------------------------
+    # plan-l L-1 — shared-model uniqueness machine checks (skeleton by T1,
+    # the first settings.py writer). Owners extend the tracked sets as
+    # their fields land via [shared-model] commits; LINK-S1a delivers the
+    # full version. These methods are the ONLY home for the uniqueness
+    # assertions (v3 ruling: no separate test class outside this gate).
+    # ------------------------------------------------------------------
+
+    #: Planned shared dataclass fields per owner (plan-k §4.1). Empty until
+    #: T3 (response_schemas) / T8 (five identity fields) / T10 (binds,
+    #: executability) / S1a (path_id, source_stage) land theirs.
+    _SHARED_MODEL_FIELDS: ClassVar[dict[str, tuple[str, ...]]] = {}
+    #: Planned shared Settings keys; T1 lands the first (AUDIT_DUMP_ENABLED).
+    _SHARED_SETTINGS_KEYS: tuple[str, ...] = ("audit_dump_enabled",)
+    #: Baseline field order snapshots — shared-model field slips must append,
+    #: never reorder (plan-l L-1 hard constraint).
+    _TESTCASE_BASELINE_FIELDS = (
+        "id",
+        "title",
+        "description",
+        "endpoint",
+        "test_type",
+        "priority",
+        "preconditions",
+        "steps",
+        "expected_results",
+        "tags",
+    )
+    _APIENDPOINT_BASELINE_FIELDS = (
+        "method",
+        "path",
+        "summary",
+        "description",
+        "parameters",
+        "request_body",
+        "responses",
+        "tags",
+    )
+
+    @staticmethod
+    def _class_field_order(path: Path, class_name: str) -> list[str]:
+        """Ordered top-level annotated fields of one class (AST-level)."""
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                return [
+                    t.target.id
+                    for t in node.body
+                    if isinstance(t, ast.AnnAssign) and isinstance(t.target, ast.Name)
+                ]
+        return []
+
+    def test_shared_fields_declared_once(self) -> None:
+        """Every planned shared field is declared exactly once in models.py."""
+        models = REPO / "testagent" / "config" / "models.py"
+        declared: dict[str, list[str]] = {}
+        for class_name in self._SHARED_MODEL_FIELDS:
+            declared[class_name] = self._class_field_order(models, class_name)
+        for class_name, fields in self._SHARED_MODEL_FIELDS.items():
+            in_class = declared[class_name]
+            for field in fields:
+                assert in_class.count(field) == 1, (
+                    f"{class_name}.{field} declared {in_class.count(field)} times"
+                )
+
+    def test_settings_keys_declared_once(self) -> None:
+        """Every planned shared settings key is declared exactly once."""
+        settings = REPO / "testagent" / "config" / "settings.py"
+        keys = self._class_field_order(settings, "Settings")
+        for key in self._SHARED_SETTINGS_KEYS:
+            assert keys.count(key) == 1, f"Settings.{key} declared {keys.count(key)} times"
+
+    def test_baseline_field_order_unchanged(self) -> None:
+        """TestCase/APIEndpoint baseline fields keep their original order
+        and stay at the front of the dataclass (append-only field slips)."""
+        models = REPO / "testagent" / "config" / "models.py"
+        testcase = self._class_field_order(models, "TestCase")
+        apiendpoint = self._class_field_order(models, "APIEndpoint")
+        assert tuple(testcase[: len(self._TESTCASE_BASELINE_FIELDS)]) == (
+            self._TESTCASE_BASELINE_FIELDS
+        )
+        assert tuple(apiendpoint[: len(self._APIENDPOINT_BASELINE_FIELDS)]) == (
+            self._APIENDPOINT_BASELINE_FIELDS
+        )
 
 
 # ----------------------------------------------------------------------

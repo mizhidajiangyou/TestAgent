@@ -42,6 +42,7 @@ from testagent.engine.prompt_builder import (
     endpoints_to_signature,
     extract_requirement_summary,
 )
+from testagent.engine.raw_dump import RawResponseDumper
 from testagent.engine.review import ReviewLoop
 from testagent.engine.truncation import (
     EngineContext,
@@ -139,6 +140,8 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         max_concurrency: int | None = None,
         verify_model: bool = True,
         truncation_policy: TruncationPolicy | None = None,
+        audit_dump_enabled: bool = False,
+        audit_dump_dir: str | None = None,
     ) -> None:
         self._llm = llm_client
         self._prompt_builder = prompt_builder
@@ -225,7 +228,42 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 build_reask=self._build_reask_prompt,
                 build_continue_context=self._build_continue_context,
             ),
+            raw_sink=self._emit_raw_record,
         )
+        # T1 (fix-plan §3.6): raw-response audit. ``audit_dump_dir`` comes
+        # from the container (settings.output_dir); direct constructions in
+        # tests omit it, so dumping stays off there by default.
+        self._audit_dump_enabled = audit_dump_enabled
+        self._audit_dump_dir = audit_dump_dir
+        self._raw_dumper: RawResponseDumper | None = None
+
+    def _emit_raw_record(self, record: dict[str, Any]) -> None:
+        """Engine ``raw_sink`` adapter: route records to the active dump."""
+        dumper = self._raw_dumper
+        if dumper is not None:
+            dumper.sink(record)
+
+    def _start_raw_audit(self) -> None:
+        """Create the per-session dumper when T1 auditing is on.
+
+        Session layout follows the fix-plan convention
+        ``<audit_dump_dir>/sessions/<sid>/``.
+        """
+        base = self._audit_dump_dir
+        sid = self._session_id
+        if self._audit_dump_enabled and base and sid:
+            self._raw_dumper = RawResponseDumper(Path(base) / "sessions", sid)
+        else:
+            self._raw_dumper = None
+
+    def _finish_raw_audit(self, artifacts: list[TestCase]) -> None:
+        """Write the session reconciliation table (T1) if auditing is on."""
+        dumper = self._raw_dumper
+        if dumper is None:
+            return
+        self._raw_dumper = None
+        path = dumper.write_reconciliation(len(artifacts))
+        logger.info("Raw audit dump written: %s", path)
 
     def set_review_enabled(self, enabled: bool) -> None:
         """Runtime override of the review switch (CLI ``--review/--no-review``).
@@ -265,6 +303,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self._session_id = session_id or uuid.uuid4().hex[:12]
         self._llm.set_session_id(self._session_id)
         logger.info("Session %s started", self._session_id)
+        self._start_raw_audit()
 
         all_cases: list[TestCase] = []
         phase1_cases: list[TestCase] = []
@@ -286,6 +325,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             all_cases.extend(phase1_cases)
         else:
             logger.warning("No requirements or endpoints provided; nothing to generate.")
+            self._finish_raw_audit(all_cases)
             return []
 
         # --- Phase 2: API-specific enhancement (only if both req + endpoints) ---
@@ -318,6 +358,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             all_cases = self._review_and_refine(all_cases, endpoints, requirements)
             all_cases = self._normalize_cases(all_cases)
 
+        self._finish_raw_audit(all_cases)
         return all_cases
 
     # ------------------------------------------------------------------
@@ -346,6 +387,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self._session_id = session_id or uuid.uuid4().hex[:12]
         self._llm.set_session_id(self._session_id)
         logger.info("Session %s started", self._session_id)
+        self._start_raw_audit()
 
         all_cases: list[TestCase] = []
         phase1_cases: list[TestCase] = []
@@ -364,6 +406,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             all_cases.extend(phase1_cases)
         else:
             logger.warning("No requirements or endpoints provided; nothing to generate.")
+            self._finish_raw_audit(all_cases)
             return []
 
         if requirements and endpoints:
@@ -391,6 +434,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             all_cases = await self._areview_and_refine(all_cases, endpoints, requirements)
             all_cases = self._normalize_cases(all_cases)
 
+        self._finish_raw_audit(all_cases)
         return all_cases
 
     async def _fan_out_recover(

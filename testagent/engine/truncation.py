@@ -498,6 +498,13 @@ class EngineEvent:
 #: Observer contract: receives every EngineEvent of one ``arun`` batch.
 EngineObserver = Callable[[EngineEvent], None]
 
+#: T1 raw-audit sink (fix-plan §3.6): receives plain-dict records —
+#: ``{"kind": "raw", "label", "round", "text", "finish_reason",
+#: "completion_tokens"}`` per LLM response and ``{"kind": "merge", "label",
+#: "added"}`` per merge into ``produced``. Pure observation; merge rows sum
+#: to the artifact count (session reconciliation contract).
+RawSink = Callable[[dict[str, Any]], None]
+
 
 class TruncationEngine:
     """Drives the truncation-aware generation loop for one batch.
@@ -514,6 +521,7 @@ class TruncationEngine:
         json_mode: bool,
         hooks: GenericHooks,
         observer: EngineObserver | None = None,
+        raw_sink: RawSink | None = None,
     ) -> None:
         self._policy = policy
         self._json_mode = json_mode
@@ -522,6 +530,9 @@ class TruncationEngine:
         # every existing construction site) behaviour is bit-for-bit
         # unchanged; the full suite proves the zero-control-flow-change.
         self._observer = observer
+        # T1 (fix-plan §3.6): raw-response audit hook — same pure-observation
+        # discipline as ``observer``; None (default) changes nothing.
+        self._raw_sink = raw_sink
 
     # -- sync entry point ------------------------------------------------
 
@@ -719,6 +730,8 @@ class TruncationEngine:
                 filtered = items
             added = _merge(filtered)
             recompute_covered_pending(expected, produced, covered, pending, _scope_of)
+            if self._raw_sink is not None:
+                self._raw_sink({"kind": "merge", "label": label, "added": added})
             return added
 
         def _handle_budget_exhausted() -> list[dict[str, Any]] | None:
@@ -801,7 +814,7 @@ class TruncationEngine:
             )
             _emit("fail", chars=len(last_raw))
             return self._salvage_and_return(
-                produced, last_raw, batch_set, expected, seen_keys, _emit, _scope_of
+                produced, last_raw, batch_set, expected, seen_keys, _emit, _scope_of, label=label
             )
 
         while True:
@@ -899,7 +912,14 @@ class TruncationEngine:
                 if scope_floor_reached:
                     _emit("fail", chars=len(last_raw))
                     return self._salvage_and_return(
-                        produced, last_raw, batch_set, expected, seen_keys, _emit, _scope_of
+                        produced,
+                        last_raw,
+                        batch_set,
+                        expected,
+                        seen_keys,
+                        _emit,
+                        _scope_of,
+                        label=label,
                     )
                 scope, batch_set, pending, scope_floor_reached = shrink_scope(
                     scope, expected, covered, policy
@@ -933,6 +953,19 @@ class TruncationEngine:
             empty_return = not (raw_response and raw_response.strip())
             truncated = is_truncated(result, policy)
 
+            if self._raw_sink is not None:
+                # T1 audit: one record per LLM response (raw text + metadata).
+                self._raw_sink(
+                    {
+                        "kind": "raw",
+                        "label": label,
+                        "round": calls,
+                        "text": raw_response or "",
+                        "finish_reason": result.finish_reason,
+                        "completion_tokens": result.completion_tokens,
+                    }
+                )
+
             # ---- truncated with partial content: salvage + continue ----
             if truncated and not empty_return:
                 added = _absorb(raw_response, salvage=True)
@@ -960,6 +993,7 @@ class TruncationEngine:
                                 seen_keys,
                                 _emit,
                                 _scope_of,
+                                label=label,
                             )
                     else:
                         scope, batch_set, pending, scope_floor_reached = shrink_scope(
@@ -1047,6 +1081,7 @@ class TruncationEngine:
         seen_keys: set[str],
         emit: Callable[..., None] | None = None,
         scope_of: Callable[[dict[str, Any]], str] | None = None,
+        label: str = "",
     ) -> list[dict[str, Any]]:
         """Best-effort final salvage of the last raw response, then return.
 
@@ -1082,6 +1117,10 @@ class TruncationEngine:
             merged.append(it)
             added += 1
         if added:
+            if self._raw_sink is not None:
+                self._raw_sink(
+                    {"kind": "merge", "label": label or "(final-salvage)", "added": added}
+                )
             logger.info("Final salvage merged %d additional cases", added)
             if emit is not None:
                 emit("salvage", chars=len(raw))

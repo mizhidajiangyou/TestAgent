@@ -221,6 +221,13 @@ class Settings(BaseSettings):
     #: in-process only (lost on restart). Default ``"file"``.
     session_store: Literal["file", "memory"] = Field(default="file", alias="SESSION_STORE")
 
+    # --- quality: T1 (fix-plan §3.6; plan-l L-1 physical-write protocol) ---
+    #: Dump every raw LLM response of the generation chain to
+    #: ``<output_dir>/sessions/<sid>/*.raw.txt`` plus a reconciliation table
+    #: (``reconciliation.json``) whose merge rows sum to the artifact count.
+    #: ``false`` restores the pre-T1 silent behavior (rollback switch).
+    audit_dump_enabled: bool = Field(default=True, alias="AUDIT_DUMP_ENABLED")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
