@@ -91,7 +91,15 @@ class TestArchitectureGate:
     #: executability) / S1a (path_id, source_stage) extend as they land.
     _SHARED_MODEL_FIELDS: ClassVar[dict[str, tuple[str, ...]]] = {
         "APIEndpoint": ("response_schemas",),
-        "TestCase": ("binds", "executability"),
+        "TestCase": (
+            "binds",
+            "executability",
+            "scenario_operation",
+            "scenario_scene",
+            "scenario_variant",
+            "equivalence_class",
+            "covers_obligations",
+        ),
     }
     #: Planned shared Settings keys; T1 lands the first (AUDIT_DUMP_ENABLED).
     _SHARED_SETTINGS_KEYS: tuple[str, ...] = ("audit_dump_enabled",)

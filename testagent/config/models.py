@@ -76,6 +76,15 @@ class TestCase:
     #: Executability grade + gate outcomes, written post-generation by the
     #: T10 gates (never silently deleted).
     executability: dict[str, Any] = field(default_factory=dict)
+    # --- quality: T8 (fix-plan §3.2; plan-l L-1 field slip) ---
+    #: Declared scenario identity (dedup key = operation+scene+variant).
+    scenario_operation: str = ""
+    scenario_scene: str = ""
+    scenario_variant: str = ""
+    #: positive | negative | boundary | security | integration.
+    equivalence_class: str = ""
+    #: Obligation ids this case covers (T5 accounting).
+    covers_obligations: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -68,6 +68,7 @@ from testagent.pipeline.obligations import (
     ObligationRegistry,
     register_spec_obligations,
 )
+from testagent.pipeline.scenario import dedup_cases, render_dedup_report
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +268,8 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         self._case_obligations: dict[str, list[str]] = {}
         self._session_case_count = 0
         self._budget_trim_report = ""
+        self._dedup_removed: list[dict[str, Any]] = []
+        self._dedup_missing: list[str] = []
 
     def _emit_raw_record(self, record: dict[str, Any]) -> None:
         """Engine ``raw_sink`` adapter: route records to the active dump."""
@@ -328,14 +331,29 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 )
 
     def _finish_raw_audit(self, artifacts: list[TestCase]) -> None:
-        """Session teardown: write the T1 reconciliation table (when
-        auditing is on) and clear the T4/T9 conflict context."""
+        """Session teardown: write the T1 reconciliation table, the T5
+        obligation report, the T7 budget-trim report and the T8 dedup
+        report (when auditing is on), then clear session contexts."""
         self._conflict_table = ""
         self._conflict_findings = []
         dumper = self._raw_dumper
         if dumper is None:
             return
         self._raw_dumper = None
+        if self._obligation_registry is not None:
+            dumper.write_report("obligation_report.md", self._obligation_registry.render_report())
+            logger.info("Obligation coverage: %s", self._obligation_registry.summary())
+            self._obligation_registry = None
+        if self._budget_trim_report:
+            dumper.write_report("budget_report.md", self._budget_trim_report)
+            self._budget_trim_report = ""
+        if self._dedup_removed or self._dedup_missing:
+            dumper.write_report(
+                "dedup_report.md",
+                render_dedup_report(self._dedup_removed, self._dedup_missing),
+            )
+            self._dedup_removed = []
+            self._dedup_missing = []
         path = dumper.write_reconciliation(len(artifacts))
         logger.info("Raw audit dump written: %s", path)
 
@@ -399,6 +417,37 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 floor[key] -= 1
                 total -= 1
         return floor
+
+    @staticmethod
+    def _covered_identities(cases: list[TestCase]) -> list[dict[str, str]]:
+        return [
+            {
+                "operation": tc.scenario_operation,
+                "scene": tc.scenario_scene,
+                "variant": tc.scenario_variant,
+            }
+            for tc in cases
+            if tc.scenario_operation and tc.scenario_scene
+        ]
+
+    def _global_identity_dedup(self, cases: list[TestCase]) -> list[TestCase]:
+        """T8 wiring 3/3: final global identity dedup over merged cases."""
+        raw = [
+            {
+                "id": tc.id,
+                "scenario_operation": tc.scenario_operation,
+                "scenario_scene": tc.scenario_scene,
+                "scenario_variant": tc.scenario_variant,
+                "expected_results": tc.expected_results,
+            }
+            for tc in cases
+        ]
+        kept, removed = dedup_cases(raw, phase="global")
+        if not removed:
+            return cases
+        self._dedup_removed.extend(removed)
+        kept_ids = {str(c["id"]) for c in kept}
+        return [tc for tc in cases if tc.id in kept_ids]
 
     def _run_executability_gates(self, cases: list[TestCase], endpoints: list[APIEndpoint]) -> None:
         """T10: run Gate-A/Gate-B post-generation, write grades onto the
@@ -526,6 +575,15 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             # Feed Phase 1 coverage into Phase 2 so it does NOT regenerate the
             # same scenarios (kills cross-phase duplication / inconsistency).
             covered_text = self._historical_cases_to_text(phase1_cases)
+            # T8 wiring 2/3: STRUCTURED covered-identity list (not a text
+            # summary) so Phase 2 avoids regenerating the same identity.
+            covered_identities = self._covered_identities(phase1_cases)
+            if covered_identities:
+                covered_text = (
+                    f"{covered_text}\n\nAlready-covered scenario identities "
+                    "(do NOT regenerate these operation+scene+variant combinations):\n"
+                    + json.dumps(covered_identities, ensure_ascii=False)
+                )
             api_cases = self._generate_api_specific(
                 endpoints, requirements, already_covered=covered_text
             )
@@ -540,6 +598,14 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         if historical_cases:
             merged = self._merge_historical_cases(historical_cases, all_cases)
             all_cases = merged
+
+        # T8 wiring 3/3: global identity dedup before the budget cap.
+        all_cases = self._global_identity_dedup(all_cases)
+        self._dedup_missing = [
+            tc.id
+            for tc in all_cases
+            if not (tc.scenario_operation and tc.scenario_scene and tc.scenario_variant)
+        ]
 
         # T7: session-wide CASES_BUDGET cap with per-item trim accounting.
         all_cases = self._enforce_cases_budget(all_cases)
@@ -612,6 +678,13 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         if requirements and endpoints:
             covered_text = self._historical_cases_to_text(phase1_cases)
+            covered_identities = self._covered_identities(phase1_cases)
+            if covered_identities:
+                covered_text = (
+                    f"{covered_text}\n\nAlready-covered scenario identities "
+                    "(do NOT regenerate these operation+scene+variant combinations):\n"
+                    + json.dumps(covered_identities, ensure_ascii=False)
+                )
             api_cases = await self._agenerate_api_specific(
                 endpoints, requirements, already_covered=covered_text
             )
@@ -625,6 +698,14 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         if historical_cases:
             merged = self._merge_historical_cases(historical_cases, all_cases)
             all_cases = merged
+
+        # T8 wiring 3/3: global identity dedup before the budget cap.
+        all_cases = self._global_identity_dedup(all_cases)
+        self._dedup_missing = [
+            tc.id
+            for tc in all_cases
+            if not (tc.scenario_operation and tc.scenario_scene and tc.scenario_variant)
+        ]
 
         # T7: session-wide CASES_BUDGET cap with per-item trim accounting.
         all_cases = self._enforce_cases_budget(all_cases)
@@ -1713,6 +1794,18 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
     def _to_test_cases(self, items: list[Any], endpoints: list[APIEndpoint]) -> list[TestCase]:
         """Convert parsed JSON items into TestCase objects."""
+        # T8 wiring 1/3: per-batch identity dedup (kept/removed both logged).
+        items, removed = dedup_cases([it for it in items if isinstance(it, dict)])
+        if removed:
+            self._dedup_removed.extend(removed)
+            for entry in removed:
+                logger.info(
+                    "Scenario dedup: removed %s (key=%s) kept %s [%s]",
+                    entry["removed_id"],
+                    entry["key"],
+                    entry["kept_id"],
+                    entry["reason"],
+                )
         endpoint_map = {ep.full_path: ep for ep in endpoints}
         # Fallback endpoint for requirement-only cases (no API spec)
         fallback_ep = endpoints[0] if endpoints else APIEndpoint(method="N/A", path="N/A")
@@ -1744,6 +1837,11 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 expected_results=item.get("expected_results", []),
                 tags=item.get("tags", []),
                 binds=item.get("binds") or {},
+                scenario_operation=str(item.get("scenario_operation", "") or ""),
+                scenario_scene=str(item.get("scenario_scene", "") or ""),
+                scenario_variant=str(item.get("scenario_variant", "") or ""),
+                equivalence_class=str(item.get("equivalence_class", "") or ""),
+                covers_obligations=[str(c) for c in item.get("covers_obligations") or []],
             )
             test_cases.append(case)
             # T5/T7: account the case against its declared obligations.
