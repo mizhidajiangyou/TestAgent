@@ -224,3 +224,12 @@ output/*
 
 task.md
 uv.lock
+
+# OS metadata (plan-k FH1.5)
+.DS_Store
+
+# Local reference / workspace dirs (plan-k FH1.5; .workbuddy must not be deleted)
+cankao/
+.idea/
+.v7parts/
+.workbuddy/
