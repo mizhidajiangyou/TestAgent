@@ -69,6 +69,13 @@ class TestCase:
     steps: list[str] = field(default_factory=list)
     expected_results: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    # --- quality: T10 (fix-plan §3.4; plan-l L-1 field slip) ---
+    #: Placeholder binding declarations: ``{"USER_ID": {"producer": ...,
+    #: "consumer": ...}}`` (Gate-B contract). Owner: T10.
+    binds: dict[str, Any] = field(default_factory=dict)
+    #: Executability grade + gate outcomes, written post-generation by the
+    #: T10 gates (never silently deleted).
+    executability: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -62,6 +62,7 @@ from testagent.pipeline.consistency import (
     render_authoritative_table,
     render_gap_report,
 )
+from testagent.pipeline.executability import grade_case, placeholder_closure_metrics
 from testagent.pipeline.obligations import (
     BindingBasis,
     ObligationRegistry,
@@ -399,6 +400,32 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 total -= 1
         return floor
 
+    def _run_executability_gates(self, cases: list[TestCase], endpoints: list[APIEndpoint]) -> None:
+        """T10: run Gate-A/Gate-B post-generation, write grades onto the
+        artifacts and the metrics into the session report."""
+        raw_cases = [self._testcase_to_dict(tc) for tc in cases]
+        metrics = placeholder_closure_metrics(raw_cases, endpoints)
+        for tc, raw in zip(cases, raw_cases, strict=False):
+            result = grade_case(raw, endpoints)
+            tc.executability = result.to_meta()
+        grades: dict[str, int] = {}
+        for tc in cases:
+            grade = str(tc.executability.get("grade", "DRAFT"))
+            grades[grade] = grades.get(grade, 0) + 1
+        logger.info("Executability grades: %s | metrics: %s", grades, metrics)
+        if self._raw_dumper is not None:
+            lines = [
+                "# Executability report",
+                "",
+                f"Grades: {grades}",
+                f"Metrics: {metrics}",
+                "",
+            ]
+            for tc in cases:
+                if tc.executability.get("grade") != "INTEGRATION":
+                    lines.append(f"- {tc.id}: {tc.executability}")
+            self._raw_dumper.write_report("executability_report.md", "\n".join(lines) + "\n")
+
     def _enforce_cases_budget(self, cases: list[TestCase]) -> list[TestCase]:
         """T7: session cap on total cases with per-item trim accounting.
 
@@ -517,6 +544,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         # T7: session-wide CASES_BUDGET cap with per-item trim accounting.
         all_cases = self._enforce_cases_budget(all_cases)
 
+        # T10: executability gates (grades land on the artifacts).
+        self._run_executability_gates(all_cases, endpoints)
+
         # Re-number sequentially
         for idx, tc in enumerate(all_cases, 1):
             tc.id = f"TC-{idx:03d}"
@@ -598,6 +628,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         # T7: session-wide CASES_BUDGET cap with per-item trim accounting.
         all_cases = self._enforce_cases_budget(all_cases)
+
+        # T10: executability gates (grades land on the artifacts).
+        self._run_executability_gates(all_cases, endpoints)
 
         for idx, tc in enumerate(all_cases, 1):
             tc.id = f"TC-{idx:03d}"
@@ -1710,6 +1743,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 steps=item.get("steps", []),
                 expected_results=item.get("expected_results", []),
                 tags=item.get("tags", []),
+                binds=item.get("binds") or {},
             )
             test_cases.append(case)
             # T5/T7: account the case against its declared obligations.
