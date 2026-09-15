@@ -27,6 +27,14 @@ CSV_COLUMNS = [
     "steps",
     "expected_results",
     "tags",
+    # T8/T10 quality contracts (fix-plan §3.2/§3.4)
+    "scenario_operation",
+    "scenario_scene",
+    "scenario_variant",
+    "equivalence_class",
+    "covers_obligations",
+    "binds",
+    "executability",
 ]
 
 

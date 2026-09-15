@@ -63,6 +63,7 @@ from testagent.pipeline.consistency import (
     render_gap_report,
 )
 from testagent.pipeline.executability import grade_case, placeholder_closure_metrics
+from testagent.pipeline.normalization import needs_reask, normalize_case, semantic_validation
 from testagent.pipeline.obligations import (
     BindingBasis,
     ObligationRegistry,
@@ -105,6 +106,14 @@ CSV_COLUMNS = [
     "steps",
     "expected_results",
     "tags",
+    # T8/T10 quality contracts (fix-plan §3.2/§3.4)
+    "scenario_operation",
+    "scenario_scene",
+    "scenario_variant",
+    "equivalence_class",
+    "covers_obligations",
+    "binds",
+    "executability",
 ]
 
 
@@ -619,6 +628,17 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
         logger.info("Total: %d test cases", len(all_cases))
 
+        # T13: review is no longer the sole owner of dedup/conflict resolution
+        # (T8/T9 do it deterministically) - still, flag the combination where
+        # a semantic second pass adds value and the user opted out.
+        if not self._review_enabled and requirements and len(requirements) > 1 and endpoints:
+            logger.info(
+                "Hint: multi-requirement + multi-endpoint two-phase generation "
+                "ran WITHOUT review; deterministic gates (dedup/consistency/"
+                "executability) already applied. Enable --review for an extra "
+                "semantic-enhancement pass."
+            )
+
         if self._review_enabled and all_cases:
             all_cases = self._review_and_refine(all_cases, endpoints, requirements)
             all_cases = self._normalize_cases(all_cases)
@@ -717,6 +737,12 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             tc.id = f"TC-{idx:03d}"
 
         logger.info("Total: %d test cases", len(all_cases))
+
+        if not self._review_enabled and requirements and len(requirements) > 1 and endpoints:
+            logger.info(
+                "Hint: multi-requirement + multi-endpoint two-phase generation "
+                "ran WITHOUT review; deterministic gates already applied."
+            )
 
         if self._review_enabled and all_cases:
             all_cases = await self._areview_and_refine(all_cases, endpoints, requirements)
@@ -1592,6 +1618,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 row = self._testcase_to_dict(tc)
                 for key in ("preconditions", "steps", "expected_results", "tags"):
                     row[key] = "; ".join(str(v) for v in row[key])
+                row["covers_obligations"] = "; ".join(row["covers_obligations"])
+                row["binds"] = json.dumps(row["binds"], ensure_ascii=False)
+                row["executability"] = json.dumps(row["executability"], ensure_ascii=False)
                 writer.writerow(row)
         logger.info("Saved %d test cases to %s (csv)", len(output), output_path)
         return output_path
@@ -1806,6 +1835,8 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     entry["kept_id"],
                     entry["reason"],
                 )
+        # T11a: deterministic normalization (never calls the LLM).
+        items = [normalize_case(it) if isinstance(it, dict) else it for it in items]
         endpoint_map = {ep.full_path: ep for ep in endpoints}
         # Fallback endpoint for requirement-only cases (no API spec)
         fallback_ep = endpoints[0] if endpoints else APIEndpoint(method="N/A", path="N/A")
@@ -1854,6 +1885,17 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 else:
                     self._case_obligations[case.id] = [str(c) for c in covers]
         self._session_case_count += len(test_cases)
+        # T11b: semantic validation (structural issues already normalized).
+        known: set[str] | None = None
+        if self._obligation_registry is not None:
+            known = {st.obligation.id for st in self._obligation_registry.states()}
+        for case in test_cases:
+            raw = self._testcase_to_dict(case)
+            gaps = semantic_validation(raw, known_obligations=known)
+            if gaps and needs_reask(gaps):
+                logger.warning("Case %s semantic gaps (re-ask eligible): %s", case.id, gaps)
+            elif gaps:
+                logger.info("Case %s semantic notes: %s", case.id, gaps)
         return test_cases
 
     @staticmethod
@@ -1865,6 +1907,13 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             "description": tc.description,
             "endpoint": tc.endpoint.full_path,
             "test_type": tc.test_type.value,
+            "scenario_operation": tc.scenario_operation,
+            "scenario_scene": tc.scenario_scene,
+            "scenario_variant": tc.scenario_variant,
+            "equivalence_class": tc.equivalence_class,
+            "covers_obligations": tc.covers_obligations,
+            "binds": tc.binds,
+            "executability": tc.executability,
             "priority": tc.priority.value,
             "preconditions": tc.preconditions,
             "steps": tc.steps,
