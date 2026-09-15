@@ -468,6 +468,11 @@ class GenericHooks:
     scope_item_key: Callable[[Any], str]
     build_reask: Callable[[str, str, str, str], str]
     build_continue_context: Callable[[EngineContext], str] | None = None
+    # T5/T7 (fix-plan §3.1/§3.5): obligation-driven quota floor. Receives the
+    # batch scope keys, returns the expected-cases map. ``None`` (default and
+    # every legacy host) keeps the ``default_expected_cases_per_endpoint``
+    # quota — byte-identical legacy behaviour.
+    expected_for: Callable[[list[str]], dict[str, int]] | None = None
 
 
 @dataclass(frozen=True)
@@ -643,7 +648,13 @@ class TruncationEngine:
         # host hook — the engine never inspects scope-item attributes.
         scope = [str(hooks.scope_item_key(it)) for it in scope_items]
         batch_set = set(scope)
-        expected = {key: policy.default_expected_cases_per_endpoint for key in scope}
+        if hooks.expected_for is not None:
+            # T5/T7: obligation-driven quota floor supplied by the host.
+            expected = dict(hooks.expected_for(scope))
+            for key in scope:
+                expected.setdefault(key, policy.default_expected_cases_per_endpoint)
+        else:
+            expected = {key: policy.default_expected_cases_per_endpoint for key in scope}
         # B6a-1: the run's PRIMARY scope key — items that declare no scope
         # key are attributed to it (legacy converter parity: the host's
         # converter used to remap scope-less items to the first endpoint).
