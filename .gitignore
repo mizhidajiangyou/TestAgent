@@ -233,3 +233,5 @@ cankao/
 .idea/
 .v7parts/
 .workbuddy/
+# Local AI tool dir (same class as .idea)
+.trae/
