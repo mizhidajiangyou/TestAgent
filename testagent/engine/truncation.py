@@ -222,15 +222,16 @@ def filter_to_scope(
     RAW items before conversion. Items declaring no key (``""``) are kept
     unconditionally (legacy converter-fallback parity).
 
-    Visibility contract (T2 / fix-plan D3): every drop is logged as a
-    WARNING (endpoint, reason ``out_of_scope | quota | malformed``, count)
-    and returned in ``dropped_report`` — aggregated ``{"endpoint", "reason",
-    "count"}`` entries whose counts always sum to ``len(items) - len(kept)``.
-    Items whose DECLARED key is the prompt's "N/A" placeholder (no API
-    applies) are KEPT and marked ``out_of_spec=True`` on the raw dict
-    (D3: never silently dropped, never quota-clipped, never counted against
-    in-spec coverage). Items with NO declared key stay unmarked: the
-    downstream converter's fallback attributes them as in-spec cases.
+    Visibility contract (T2 / fix-plan D3, extended by user ruling
+    2026-09-15): every drop is logged as a WARNING (endpoint, reason
+    ``out_of_scope | quota | malformed``, count) and returned in
+    ``dropped_report`` — aggregated ``{"endpoint", "reason", "count"}``
+    entries whose counts always sum to ``len(items) - len(kept)``.
+    Items with NO declared key AND items whose DECLARED key is the prompt's
+    "N/A" placeholder are KEPT and marked ``out_of_spec=True`` on the raw
+    dict (D3: never silently dropped, never quota-clipped; the marker makes
+    "not endpoint-grounded" visible to downstream accounting while the
+    converter's fallback attribution stays in charge of placement).
     """
     kept: list[dict[str, Any]] = []
     dropped: dict[tuple[str, str], int] = defaultdict(int)
@@ -240,16 +241,10 @@ def filter_to_scope(
             dropped[("", "malformed")] += 1
             continue
         ep = scope_key(it)
-        if not ep:
-            # No scope declared: keep it and let the downstream converter's
-            # fallback mapping assign one (v2 parity for review responses and
-            # models that omit the field). Deliberately NOT marked
-            # out_of_spec — fallback attribution is in-spec behavior.
-            kept.append(it)
-            continue
-        if ep.strip().upper() in OUT_OF_SPEC_PLACEHOLDERS:
-            # Prompt contract '(use "N/A" if no API spec)' (D3): the model
-            # declared no endpoint exists — keep honestly, skip batch/quota.
+        if not ep or ep.strip().upper() in OUT_OF_SPEC_PLACEHOLDERS:
+            # Undeclared key or the prompt contract '(use "N/A" if no API
+            # spec)' (D3): keep honestly, skip batch/quota. The converter's
+            # fallback still attributes placement for undeclared keys.
             it["out_of_spec"] = True
             kept.append(it)
             continue

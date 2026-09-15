@@ -213,14 +213,18 @@ class TestFilterToScope:
         # D3: N/A items are never quota-clipped and never in the drop report.
         assert dropped == [{"endpoint": "GET /users", "reason": "quota", "count": 1}]
 
-    def test_empty_endpoint_kept_unmarked(self) -> None:
+    def test_empty_endpoint_kept_and_marked(self) -> None:
+        """User ruling 2026-09-15: undeclared scope keys are marked too —
+        both the no-key and the N/A channels carry ``out_of_spec=True``
+        while the converter's fallback keeps handling placement."""
         items = [_case(1, ""), _case(2, "N/A"), _case(3, "GET /users")]
         batch = {"GET /users"}
         expected = {"GET /users": 1}
         kept, dropped = filter_to_scope(items, batch, expected, dict_scope_key)
         assert len(kept) == 3
-        assert "out_of_spec" not in kept[0]  # undeclared: fallback parity
+        assert kept[0]["out_of_spec"] is True
         assert kept[1]["out_of_spec"] is True
+        assert kept[2].get("out_of_spec") is None  # in-spec declared key
         assert dropped == []
 
     def test_na_case_insensitive_with_whitespace(self) -> None:
