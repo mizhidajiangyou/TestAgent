@@ -88,3 +88,71 @@ class TestClusters:
                 assert "POST /users" in cluster
                 assert "DELETE /users/{id}" in cluster
                 break
+
+
+class TestS5aAssembly:
+    def _plan_two_module(self):
+        from testagent.config.models import APIEndpoint
+        from testagent.pipeline.links_graph import build_graph
+        from testagent.pipeline.pathplanner import plan_paths
+
+        spec = [
+            APIEndpoint(
+                method="POST",
+                path="/users",
+                tags=["users"],
+                response_schemas={
+                    "201": {"type": "object", "properties": {"id": {"type": "integer"}}}
+                },
+            ),
+            APIEndpoint(
+                method="POST",
+                path="/orders",
+                tags=["orders"],
+                request_body={
+                    "media_type": "application/json",
+                    "schema": {"type": "object", "properties": {"id": {"type": "integer"}}},
+                },
+            ),
+            APIEndpoint(method="GET", path="/orders", tags=["orders"]),
+            APIEndpoint(method="GET", path="/users", tags=["users"]),
+        ]
+        graph = build_graph(spec)
+        return plan_paths(graph, spec, max_planned=8, l3b_budget=3), spec
+
+    def test_l2_skeleton_and_contract(self) -> None:
+        planning, spec = self._plan_two_module()
+        builder = ContextBuilder(spec)
+        contract = planning["candidate"][0]
+        l2 = builder.build_l2(contract)
+        assert "[L2 path skeleton]" in l2
+        assert all(f"- {e}" in l2 for e in contract.endpoints)
+        assert "[L2 binding contract]" in l2
+        assert "EXACT" in l2
+
+    def test_l2_limit_recorded_not_sliced(self) -> None:
+        planning, spec = self._plan_two_module()
+        builder = ContextBuilder(spec)
+        contract = planning["candidate"][0]
+        # Simulate a >8-endpoint path: rebuild contract endpoints via object
+        long_contract = type(contract)(
+            path_id=contract.path_id,
+            payload=contract.payload,
+            canonical_bytes=contract.canonical_bytes,
+            endpoints=tuple(f"POST /x{i}" for i in range(10)),
+            business_hops=contract.business_hops,
+            priority=contract.priority,
+        )
+        assert builder.build_l2(long_contract).startswith("context_shape_limit")
+
+    def test_l3b_bundles_from_same_planning(self) -> None:
+        from testagent.pipeline.context_builder import assemble_l3b_prompts
+
+        planning, spec = self._plan_two_module()
+        builder = ContextBuilder(spec)
+        bundles = assemble_l3b_prompts(planning, builder)
+        assert len(bundles) == len(planning["selected"])
+        for bundle in bundles:
+            assert bundle["path_id"]
+            assert bundle["l0"]
+            assert "L2 path skeleton" in bundle["l2"]

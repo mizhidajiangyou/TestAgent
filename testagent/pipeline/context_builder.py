@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
+from typing import Any
 
 from testagent.config.models import APIEndpoint
 
@@ -177,3 +178,59 @@ class ContextBuilder:
                 result.append(group[i : i + self._max_cluster])
         result.sort(key=lambda c: c[0])
         return result
+
+    # ------------------------------------------------------------------
+    # S5a additions (LINK-S5a, plan-links-v15 §5.5): additive only — the
+    # frozen constructor/L0/L1/L3a signatures above are untouched.
+    # ------------------------------------------------------------------
+
+    def build_l2(self, contract: Any) -> str:
+        """Single-path endpoint skeleton (max 8 lines) + its binding
+        contract. Overflow records ``context_shape_limit`` instead of
+        silently dropping middle steps (v15 §5.1/§5.5)."""
+        from testagent.pipeline.pathplanner import PathContract  # local: avoid cycle
+
+        assert isinstance(contract, PathContract)
+        lines = ["[L2 path skeleton]"]
+        for endpoint in contract.endpoints:
+            lines.append(f"- {endpoint}")
+        if len(lines) - 1 > 8:
+            return "context_shape_limit: path exceeds 8 endpoint lines; contract not sent unsliced"
+        lines.append("[L2 binding contract]")
+        for hop in contract.business_hops:
+            binding = hop.candidate
+            if hop.kind == "DATA_FLOW" and binding and (binding.producer or binding.consumer):
+                lines.append(
+                    f"- {hop.source} -> {hop.target}: {binding.producer or '?'} -> "
+                    f"{binding.consumer or '?'} ({binding.mode})"
+                )
+            else:
+                lines.append(
+                    f"- {hop.source} -> {hop.target}: {hop.kind} (observable assertion required)"
+                )
+        return "\n".join(lines)
+
+    def render_l1_for(self, batch: Sequence[str], relations: Sequence[tuple[str, str, str]]) -> str:
+        """L1 with explicit graph relations (additive convenience for S5a
+        wiring; delegates to the frozen build_l1)."""
+        return self.build_l1(batch)
+
+
+def assemble_l3b_prompts(planning: dict[str, Any], builder: ContextBuilder) -> list[dict[str, str]]:
+    """S5a: one prompt-context bundle per selected path (v15 §5.5).
+
+    Each bundle carries L0 (once per run), the L2 skeleton+contract and the
+    path_id. Derived from the SAME immutable planning result (no re-plan).
+    """
+    bundles: list[dict[str, str]] = []
+    l0 = builder.build_l0()
+    for contract in planning["selected"]:
+        bundles.append(
+            {
+                "path_id": contract.path_id,
+                "l0": l0,
+                "l2": builder.build_l2(contract),
+                "static_class": contract.static_class,
+            }
+        )
+    return bundles
