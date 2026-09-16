@@ -85,6 +85,12 @@ class TestCase:
     equivalence_class: str = ""
     #: Obligation ids this case covers (T5 accounting).
     covers_obligations: list[str] = field(default_factory=list)
+    # --- links: LINK-S1a (plan-links-v15 §3.1; plan-l L-1 physical window) ---
+    #: Planned-path identity, program-stamped (v15 §5.2). Empty for
+    #: non-L3b cases; the model never owns this field.
+    path_id: str = ""
+    #: Pipeline stage that produced the case: "" / phase1 / phase2 / l3b.
+    source_stage: str = ""
 
 
 @dataclass

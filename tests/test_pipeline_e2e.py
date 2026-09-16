@@ -99,6 +99,8 @@ class TestArchitectureGate:
             "scenario_variant",
             "equivalence_class",
             "covers_obligations",
+            "path_id",
+            "source_stage",
         ),
     }
     #: Planned shared Settings keys; T1 lands the first (AUDIT_DUMP_ENABLED).

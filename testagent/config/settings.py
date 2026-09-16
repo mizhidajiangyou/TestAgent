@@ -184,6 +184,28 @@ class Settings(BaseSettings):
     # DEBUG for a one-off run. Invalid values fail fast at startup.
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
+    @field_validator(
+        "links_max_neighbors",
+        "links_neighbor_chars",
+        "links_cluster_size",
+        "links_max_planned_paths",
+        "links_max_hops",
+        "links_l3b_max_calls",
+        "links_l0_max_chars",
+    )
+    @classmethod
+    def _validate_links_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("links_* numeric settings must be >= 1 (l3b budget cannot be 0)")
+        return v
+
+    @field_validator("links_r6_min_score")
+    @classmethod
+    def _validate_links_r6_score(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("links_r6_min_score must be > 0")
+        return v
+
     @field_validator("log_level")
     @classmethod
     def _validate_log_level(cls, v: str) -> str:
@@ -242,6 +264,31 @@ class Settings(BaseSettings):
     #: the T5 registry; this caps the total). ``0`` restores the legacy
     #: per-endpoint-quota-only behavior (no cap).
     cases_budget: int = Field(default=60, alias="CASES_BUDGET")
+
+    # --- cross-module links pipeline (plan-links-v15 §3.2; LINK-S1a) ---
+    #: Master switch for the links pipeline. ``false`` restores the
+    #: pre-links behaviour bit-for-bit (frozen baseline branch).
+    links_enabled: bool = Field(default=True, alias="LINKS_ENABLED")
+    #: R6 prose-relation switch only (R1-R4 / L3a unaffected).
+    links_prose_enabled: bool = Field(default=True, alias="LINKS_PROSE_ENABLED")
+    #: Minimum accumulated R6 clause score for a module recall.
+    links_r6_min_score: float = Field(default=1.0, alias="LINKS_R6_MIN_SCORE")
+    #: L1: maximum neighbours per batch.
+    links_max_neighbors: int = Field(default=4, alias="LINKS_MAX_NEIGHBORS")
+    #: L1: neighbour summary character budget.
+    links_neighbor_chars: int = Field(default=1200, alias="LINKS_NEIGHBOR_CHARS")
+    #: L3a: maximum endpoints per lifecycle cluster.
+    links_cluster_size: int = Field(default=6, alias="LINKS_CLUSTER_SIZE")
+    #: Candidate contract pool size (NOT a call budget).
+    links_max_planned_paths: int = Field(default=8, alias="LINKS_MAX_PLANNED_PATHS")
+    #: Cross-module business hop upper bound per path.
+    links_max_hops: int = Field(default=3, alias="LINKS_MAX_HOPS")
+    #: L3b unit budget per run (logical paths; never 0).
+    links_l3b_max_calls: int = Field(default=3, alias="LINKS_L3B_MAX_CALLS")
+    #: L3b selection order: priority seeding or plain rank order.
+    links_seeding: Literal["priority", "all"] = Field(default="priority", alias="LINKS_SEEDING")
+    #: L0 character budget (rendered length is the only degradation trigger).
+    links_l0_max_chars: int = Field(default=8000, alias="LINKS_L0_MAX_CHARS")
 
 
 @lru_cache(maxsize=1)
