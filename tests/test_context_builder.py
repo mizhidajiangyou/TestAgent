@@ -27,6 +27,7 @@ class TestL0:
         """The RENDERED character count (not endpoint count) is the only
         degradation criterion. The rich renderer is injected (layering),
         so the test supplies a verbose one to force the overflow."""
+
         def verbose(eps):
             return "\n".join(f"- {ep.method} {ep.path} " + "x" * 120 for ep in eps)
 

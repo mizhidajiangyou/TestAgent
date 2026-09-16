@@ -163,6 +163,41 @@ class TestArchitectureGate:
         for key in self._SHARED_SETTINGS_KEYS:
             assert keys.count(key) == 1, f"Settings.{key} declared {keys.count(key)} times"
 
+    #: Shared model fields the links domain must never read via raw
+    #: getattr-with-default (plan-links-v15 §3.1 / plan-k §4.2). Delivered
+    #: by LINK-S1b; S2 modules and later links code are covered.
+    _LINKS_SHARED_FIELDS = ("response_schemas", "binds", "executability", "path_id", "source_stage")
+    _LINKS_MODULES = (
+        "links.py",
+        "pathplanner.py",
+        "linkcheck.py",
+        "context_builder.py",
+        "links_fields.py",
+    )
+
+    def test_links_domain_no_raw_getattr_shared_fields(self) -> None:
+        """AST scan of the links domain: no three-argument getattr whose
+        attribute name is a shared field (silent-fallback ban)."""
+        pipeline_dir = REPO / "testagent" / "pipeline"
+        violations: list[str] = []
+        for name in self._LINKS_MODULES:
+            path = pipeline_dir / name
+            if not path.exists():
+                continue  # not yet delivered stages stay skipped
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "getattr"
+                    and len(node.args) >= 3
+                    and isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)
+                    and node.args[1].value in self._LINKS_SHARED_FIELDS
+                ):
+                    violations.append(f"{name}:{node.lineno}")
+        assert not violations, f"raw getattr on shared fields: {violations}"
+
     def test_baseline_field_order_unchanged(self) -> None:
         """TestCase/APIEndpoint baseline fields keep their original order
         and stay at the front of the dataclass (append-only field slips)."""
