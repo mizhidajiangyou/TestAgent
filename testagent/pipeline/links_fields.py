@@ -167,8 +167,9 @@ def response_fields(endpoint: Any) -> list[FieldView]:
     for status in sorted(schemas, key=str):
         schema = schemas[status] if isinstance(schemas[status], dict) else {}
         views.extend(_expand_object(schema, str(status), "", "response"))
+        raw_props = schema.get("properties")
+        props: dict[str, Any] = raw_props if isinstance(raw_props, dict) else {}
         for envelope in _ENVELOPE_KEYS:
-            props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
             inner = props.get(envelope)
             if isinstance(inner, dict) and inner.get("type") == "object":
                 views.extend(_expand_object(inner, str(status), envelope, "response"))

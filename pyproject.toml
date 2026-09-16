@@ -75,8 +75,13 @@ ignore = ["E501"]
 "testagent/web/app.py" = ["RUF001", "RUF002", "RUF003"]
 # Consistency-check tests embed realistic CJK requirement fixtures
 # (fullwidth punctuation is the honest input shape).
+"testagent/pipeline/module_aliases.py" = ["RUF001", "RUF002", "RUF003"]
+# R6 clause splitter and direction templates match CJK sentence punctuation
+# and connector words verbatim - fullwidth characters ARE the input domain.
+"testagent/pipeline/links_r6.py" = ["RUF001", "RUF002"]
 "tests/test_consistency.py" = ["RUF001"]
 "tests/test_binding.py" = ["RUF001"]
+"tests/test_links_r6.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.14"
