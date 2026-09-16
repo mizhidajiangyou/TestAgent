@@ -25,7 +25,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from testagent.pipeline.links_fields import CaseView, FieldAddress, request_fields, response_fields
+from testagent.pipeline.links_fields import CaseView, FieldAddress, request_fields
+from testagent.pipeline.links_graph import BindingCandidate
 from testagent.pipeline.pathplanner import PathContract
 
 __all__ = [
@@ -96,7 +97,7 @@ class GateOutcome:
 
 def _strip_wrappers(token: str) -> str:
     token = token.strip()
-    prev = None
+    prev: str | None = None
     while prev != token:
         prev = token
         # paired wrappers first (e.g. ("/orders")); braces are NOT wrappers
@@ -104,7 +105,8 @@ def _strip_wrappers(token: str) -> str:
         for pair in (("(", ")"), ("[", "]"), ('"', '"'), ("'", "'")):
             if token.startswith(pair[0]) and token.endswith(pair[1]) and len(token) > 1:
                 token = token[1:-1]
-        token = token.strip("，。、）】》」』；；，,.;:)\"'`()[]")
+        for ch in "，。、）】》」』；；，,.;:)\"'`()[]":
+            token = token.strip(ch)
     return token
 
 
@@ -146,9 +148,6 @@ def gate1_closure(case: CaseView) -> dict[str, Any]:
     steps = list(case.steps)
     # binds-declared producer endpoints override text attribution when legal.
     bind_producer_step: dict[str, int] = {}
-    for index, step in enumerate(steps):
-        for m in _ENDPOINT_TOKEN_RE.finditer(step):
-            pass  # endpoint extraction per step done in Gate2
     for name, spec in case.binds.items():
         if isinstance(spec, dict) and isinstance(spec.get("producer"), str):
             bind_producer_step[str(name)] = -1  # resolved after source-call scan
@@ -336,7 +335,10 @@ def gate3_binds(case: CaseView, endpoints: Sequence[Any]) -> list[dict[str, str]
 
 
 def _known_response_fields(endpoint: Any) -> tuple[set[str], bool]:
-    schemas = getattr(endpoint, "response_schemas", None) or {}
+    raw_schemas = None
+    if hasattr(endpoint, "response_schemas"):
+        raw_schemas = endpoint.response_schemas
+    schemas = raw_schemas or {}
     if not schemas:
         return set(), False
     fields: set[str] = set()
@@ -368,7 +370,7 @@ def check_contract_cases(
     endpoints: Sequence[Any],
     *,
     attempted: Sequence[str] = (),
-) -> "RunReport":
+) -> RunReport:
     """Run Gate1+Gate3 per case, Gate2 per contract, and aggregate the
     run report (denominators = candidate contracts)."""
     outcomes: dict[str, GateOutcome] = {}
@@ -489,12 +491,11 @@ def _gate2_case(
         hop = contract.business_hops[pair["pair_key"][1]]
         if hop.kind == "DATA_FLOW" and hop.candidate:
             binding = hop.candidate
-            if binding.consumer:
-                if not _consumes_value(case, binding, index):
-                    violations.append(
-                        f"binding_not_fulfilled:{binding.consumer} (required by {contract.path_id})"
-                    )
-                    outcome.missing_bind_declarations.append(binding.consumer)
+            if binding.consumer and not _consumes_value(case, binding, index):
+                violations.append(
+                    f"binding_not_fulfilled:{binding.consumer} (required by {contract.path_id})"
+                )
+                outcome.missing_bind_declarations.append(binding.consumer)
         else:
             # non-value relation: target step needs an observable assertion
             if not _target_step_has_assertion(case, hop.target, spec_paths):

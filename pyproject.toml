@@ -79,6 +79,8 @@ ignore = ["E501"]
 # R6 clause splitter and direction templates match CJK sentence punctuation
 # and connector words verbatim - fullwidth characters ARE the input domain.
 "testagent/pipeline/links_r6.py" = ["RUF001", "RUF002"]
+# linkcheck's DECLARED_LEGEND is the v15 contract text verbatim (Chinese).
+"testagent/pipeline/linkcheck.py" = ["RUF001"]
 "tests/test_consistency.py" = ["RUF001"]
 "tests/test_binding.py" = ["RUF001"]
 "tests/test_links_r6.py" = ["RUF001"]

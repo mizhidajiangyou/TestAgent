@@ -8,7 +8,7 @@ from testagent.pipeline.linkcheck import (
     match_endpoint,
 )
 from testagent.pipeline.links_fields import case_view_from_dict
-from testagent.pipeline.links_graph import BindingCandidate, Edge, build_graph
+from testagent.pipeline.links_graph import build_graph
 from testagent.pipeline.pathplanner import plan_paths
 
 
