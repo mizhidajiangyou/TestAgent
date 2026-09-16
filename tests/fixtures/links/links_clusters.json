@@ -1,0 +1,32 @@
+{
+  "provenance": {
+    "recorded_utc": "2026-09-16T16:59:56.520679+00:00",
+    "git_sha": "83fba325a775",
+    "rule_version": "v15"
+  },
+  "payload_sha": "bddce2a25e622155",
+  "payload": {
+    "clusters": [
+      [
+        "DELETE /cart/items/{itemId}",
+        "GET /cart/items",
+        "POST /cart/items",
+        "PUT /cart/items/{itemId}"
+      ],
+      [
+        "DELETE /products/{id}",
+        "GET /products",
+        "GET /products/{id}",
+        "POST /products",
+        "PUT /products/{id}"
+      ],
+      [
+        "GET /orders",
+        "GET /orders/{id}",
+        "POST /orders",
+        "POST /orders/{id}/cancel"
+      ]
+    ],
+    "cluster_count": 3
+  }
+}

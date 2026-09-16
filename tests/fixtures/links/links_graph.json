@@ -1,0 +1,165 @@
+{
+  "provenance": {
+    "recorded_utc": "2026-09-16T16:59:56.482080+00:00",
+    "git_sha": "83fba325a775",
+    "rule_version": "v15"
+  },
+  "payload_sha": "56146de10b201ce5",
+  "payload": {
+    "edges": [
+      {
+        "source": "DELETE /cart/items/{itemId}",
+        "target": "GET /cart/items",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "DELETE /cart/items/{itemId}",
+        "target": "POST /cart/items",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "DELETE /cart/items/{itemId}",
+        "target": "PUT /cart/items/{itemId}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "DELETE /products/{id}",
+        "target": "GET /products",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "DELETE /products/{id}",
+        "target": "GET /products/{id}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "DELETE /products/{id}",
+        "target": "POST /products",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /cart/items",
+        "target": "POST /cart/items",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /cart/items",
+        "target": "PUT /cart/items/{itemId}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /orders",
+        "target": "GET /orders/{id}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /orders",
+        "target": "POST /orders",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /orders/{id}",
+        "target": "POST /orders",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /orders/{id}",
+        "target": "POST /orders/{id}/cancel",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /products",
+        "target": "GET /products/{id}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /products",
+        "target": "POST /products",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /products",
+        "target": "PUT /products/{id}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /products/{id}",
+        "target": "POST /products",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "GET /products/{id}",
+        "target": "PUT /products/{id}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "POST /cart/items",
+        "target": "DELETE /cart/items/{itemId}",
+        "kind": "DATA_FLOW",
+        "candidates": [
+          {
+            "producer": "response.id",
+            "consumer": "body.itemId",
+            "mode": "DECLARED",
+            "rule": "R2"
+          }
+        ]
+      },
+      {
+        "source": "POST /cart/items",
+        "target": "PUT /cart/items/{itemId}",
+        "kind": "DATA_FLOW",
+        "candidates": [
+          {
+            "producer": "response.id",
+            "consumer": "body.itemId",
+            "mode": "DECLARED",
+            "rule": "R2"
+          }
+        ]
+      },
+      {
+        "source": "POST /cart/items",
+        "target": "PUT /cart/items/{itemId}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      },
+      {
+        "source": "POST /products",
+        "target": "POST /cart/items",
+        "kind": "DATA_FLOW",
+        "candidates": [
+          {
+            "producer": "response.id",
+            "consumer": "body.productId",
+            "mode": "DECLARED",
+            "rule": "R2"
+          }
+        ]
+      },
+      {
+        "source": "POST /products",
+        "target": "PUT /products/{id}",
+        "kind": "LIFECYCLE",
+        "candidates": []
+      }
+    ]
+  }
+}

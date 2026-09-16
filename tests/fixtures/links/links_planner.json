@@ -1,0 +1,41 @@
+{
+  "provenance": {
+    "recorded_utc": "2026-09-16T16:59:56.508259+00:00",
+    "git_sha": "83fba325a775",
+    "rule_version": "v15"
+  },
+  "payload_sha": "88d86553c59b8342",
+  "payload": {
+    "counts": {
+      "planned_paths": 1,
+      "candidate_paths": 1,
+      "selected_paths": 1
+    },
+    "invalid_attempts_by_reason": {
+      "module_revisit": 2
+    },
+    "paths": [
+      {
+        "path_id": "Pc61912b81c96",
+        "endpoints": [
+          "POST /products",
+          "POST /cart/items"
+        ],
+        "static_class": "spec_blind",
+        "priority": 20,
+        "bindings": [
+          {
+            "producer": "response.id",
+            "consumer": "body.productId",
+            "mode": "DECLARED"
+          }
+        ]
+      }
+    ],
+    "selected": [
+      "Pc61912b81c96"
+    ],
+    "deferred": [],
+    "not_materialized": []
+  }
+}
