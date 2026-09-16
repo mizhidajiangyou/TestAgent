@@ -138,19 +138,25 @@ def match_modules(
         for word in weak:
             for m in re.finditer(re.escape(word), clause.text):
                 candidates.append((m.start(), -(len(word)), module, WEAK_SCORE))
-    # Longest alias wins each overlapping span; equal-length cross-module
-    # conflicts at the same span are dropped entirely.
-    by_start: dict[int, list[tuple[int, int, str, float]]] = {}
-    for start, neg_len, module, score in candidates:
-        by_start.setdefault(start, []).append((start, neg_len, module, score))
+    # "同一文本区间只计最长别名一次" (v15 §4.2): sort by longest span
+    # first, greedily accept non-overlapping hits; equal-span cross-module
+    # conflicts are not recalled at all.
+    candidates.sort(
+        key=lambda c: (c[1], c[0])
+    )  # neg_len ascending = longest span first, then start
+    accepted: list[tuple[int, int, str, float]] = []
     scores: dict[str, float] = {}
-    for _, group in sorted(by_start.items()):
-        best = min(group, key=lambda item: (item[1], item[0]))
-        same_span = [g for g in group if g[1] == best[1]]
-        modules_at_span = {g[2] for g in same_span}
-        if len(modules_at_span) > 1:
-            continue  # ambiguous alias: not recalled
-        scores[best[2]] = scores.get(best[2], 0.0) + best[3]
+    for start, neg_len, module, score in candidates:
+        end = start - neg_len
+        overlapping = [
+            (s, e) for (s, e) in ((a[0], a[0] - a[1]) for a in accepted) if s < end and start < e
+        ]
+        if any(s == start and e == end and m != module for (s, e, m, _sc) in candidates):
+            continue  # equal-span cross-module conflict: not recalled
+        if any(s < end and start < e for (s, e) in overlapping):
+            continue  # a longer alias already owns this region
+        accepted.append((start, neg_len, module, score))
+        scores[module] = scores.get(module, 0.0) + score
     return {mod: sc for mod, sc in scores.items() if sc >= min_score}
 
 

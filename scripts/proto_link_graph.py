@@ -67,9 +67,9 @@ class LinkGraph:
         out: set[str] = set()
         frontier = set(keys)
         for _ in range(hop):
-            nxt = {
-                e.dst for e in self.edges if e.src in frontier
-            } | {e.src for e in self.edges if e.dst in frontier}
+            nxt = {e.dst for e in self.edges if e.src in frontier} | {
+                e.src for e in self.edges if e.dst in frontier
+            }
             out |= nxt
             frontier = nxt - out
         return out - set(keys)
@@ -204,9 +204,10 @@ def build_link_graph(spec: dict, req_text: str) -> LinkGraph:
                 continue
             target = pluralize(m.group(1).lower())
             for other in sorted(keys):
-                if other.split(" ", 1)[0] == "POST" and other.split(" ", 1)[1].strip(
-                    "/"
-                ).split("/")[0].lower() == target:
+                if (
+                    other.split(" ", 1)[0] == "POST"
+                    and other.split(" ", 1)[1].strip("/").split("/")[0].lower() == target
+                ):
                     add(other, key, f, "R2", "strong", f"field {f} references /{target}")
 
     # ---- R6: requirement prose co-occurrence (PRIMARY rule on this project)
@@ -225,7 +226,7 @@ def build_link_graph(spec: dict, req_text: str) -> LinkGraph:
             continue
         tags = sorted(hits)
         for i, a in enumerate(tags):
-            for b in tags[i +1:]:
+            for b in tags[i + 1 :]:
                 ev = f"requirement '{head}' couples {a}({hits[a][0]}) with {b}({hits[b][0]})"
                 graph.module_links.append((a, b, ev))
                 # project module links onto endpoint level where both sides exist
@@ -277,7 +278,9 @@ text = graph.to_text()
 v1_size = 3646
 print(f"   v1 to_text (all edges)     : {v1_size} chars")
 print(f"   v2 to_text (cross only)    : {len(text)} chars  ({len(text) / v1_size:.0%} of v1)")
-print(f"   + api_map                  : {len(text) + 1104} chars ~= {(len(text) + 1104) / 3.2:.0f} tokens")
+print(
+    f"   + api_map                  : {len(text) + 1104} chars ~= {(len(text) + 1104) / 3.2:.0f} tokens"
+)
 print(f"   share of 32768 output budget: {(len(text) + 1104) / 3.2 / 32768:.1%}")
 assert len(text) < v1_size * 0.5, "FAIL: cross-cluster filter did not shrink the payload"
 print()
@@ -316,8 +319,7 @@ print()
 print("=" * 70)
 print("V2 CHECKS PASSED")
 print("  A R6 recovers links the API contract does not carry (cart<->orders)")
-print("  B cross-cluster filtering cut the prompt payload to "
-      f"{len(text) / v1_size:.0%} of v1")
-print(f"  C chains span 3 modules (v1 managed only 2)")
+print(f"  B cross-cluster filtering cut the prompt payload to {len(text) / v1_size:.0%} of v1")
+print("  C chains span 3 modules (v1 managed only 2)")
 print(f"  D {len(current)} -> {len(new)} batches, module-pure")
 print("=" * 70)

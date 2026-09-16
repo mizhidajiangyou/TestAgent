@@ -1,0 +1,199 @@
+{
+  "meta": {
+    "purpose": "R6 prose-relation oracle (plan-links-v15 §11.2). Kinds/directions follow the §4.3 finite templates exactly.",
+    "relation_kinds": [
+      "DATA_FLOW",
+      "PRECONDITION",
+      "SIDE_EFFECT"
+    ],
+    "data_review": [
+      "2026-09-16 v1 首轮实跑：模板匹配方向由区间决定；两处方向按业务直觉标注错误。",
+      "2026-09-16 v2 定稿：每句恰两个模块别名；notification 用强别名；方向与 kind 与模板产出一一对应；共 21 条正例。",
+      "2026-09-16 v3：『t 必须先 s』模板中 s(后置)是 source——两处前置句方向按模板机械语义更正；评审注记移出 requirements 正文（防 clause 污染）。",
+      "2026-09-16 v4：五处三模块/双模板句改写为两模块单模板句（同 kind 反向命中即弃召回是 §4.3 设计行为，数据必须落在可达语法内）。",
+      "2026-09-16 v5：『订单必须先领取优惠券』模板产出 coupon→orders PRECONDITION，语义一致，补入 truth。",
+      "2026-09-16 v6：按 §11.2 补 selected 门要求的 endpoint grounding 白名单（coupon→orders 域内笛卡尔积的合法对，角色偏好表 top-2）。"
+    ]
+  },
+  "directed_relations": [
+    {
+      "source": "cart",
+      "target": "users",
+      "kind": "PRECONDITION",
+      "evidence": "用户下单前必须先访问购物车",
+      "clause": "R-C002"
+    },
+    {
+      "source": "cart",
+      "target": "orders",
+      "kind": "PRECONDITION",
+      "evidence": "订单创建必须以购物车为前提",
+      "clause": "R-C003"
+    },
+    {
+      "source": "products",
+      "target": "users",
+      "kind": "PRECONDITION",
+      "evidence": "用户下单前必须先确认商品",
+      "clause": "R-C004"
+    },
+    {
+      "source": "products",
+      "target": "cart",
+      "kind": "SIDE_EFFECT",
+      "evidence": "商品浏览之后购物车更新商品",
+      "clause": "R-C005"
+    },
+    {
+      "source": "coupon",
+      "target": "orders",
+      "kind": "DATA_FLOW",
+      "evidence": "订单结算时使用优惠券",
+      "clause": "R-C007"
+    },
+    {
+      "source": "orders",
+      "target": "logistics",
+      "kind": "SIDE_EFFECT",
+      "evidence": "订单支付之后订单生成物流运单",
+      "clause": "R-C009"
+    },
+    {
+      "source": "logistics",
+      "target": "notification",
+      "kind": "SIDE_EFFECT",
+      "evidence": "订单发货之后运单触发消息通知",
+      "clause": "R-C010"
+    },
+    {
+      "source": "payment",
+      "target": "orders",
+      "kind": "SIDE_EFFECT",
+      "evidence": "支付完成之后订单更新状态",
+      "clause": "R-C011"
+    },
+    {
+      "source": "logistics",
+      "target": "orders",
+      "kind": "SIDE_EFFECT",
+      "evidence": "物流配送之后订单完成",
+      "clause": "R-C012"
+    },
+    {
+      "source": "orders",
+      "target": "notification",
+      "kind": "SIDE_EFFECT",
+      "evidence": "订单完成之后订单触发消息通知",
+      "clause": "R-C013"
+    },
+    {
+      "source": "users",
+      "target": "orders",
+      "kind": "SIDE_EFFECT",
+      "evidence": "用户登录之后用户查看订单",
+      "clause": "R-C015"
+    },
+    {
+      "source": "users",
+      "target": "orders",
+      "kind": "SIDE_EFFECT",
+      "evidence": "用户维护收货地址，然后用户下单",
+      "clause": "R-C016"
+    },
+    {
+      "source": "users",
+      "target": "notification",
+      "kind": "SIDE_EFFECT",
+      "evidence": "账户注销之后账户触发消息通知",
+      "clause": "R-C017"
+    },
+    {
+      "source": "orders",
+      "target": "cart",
+      "kind": "SIDE_EFFECT",
+      "evidence": "购物车清空在订单生成之后",
+      "clause": "R-C018"
+    },
+    {
+      "source": "coupon",
+      "target": "orders",
+      "kind": "SIDE_EFFECT",
+      "evidence": "优惠券核销之后订单减少金额",
+      "clause": "R-C020"
+    },
+    {
+      "source": "coupon",
+      "target": "payment",
+      "kind": "DATA_FLOW",
+      "evidence": "支付流程使用优惠券抵扣",
+      "clause": "R-C021"
+    },
+    {
+      "source": "products",
+      "target": "users",
+      "kind": "SIDE_EFFECT",
+      "evidence": "商品上架之后用户可以浏览",
+      "clause": "R-C022"
+    },
+    {
+      "source": "users",
+      "target": "orders",
+      "kind": "DATA_FLOW",
+      "evidence": "用户维护收藏，然后订单使用收藏信息",
+      "clause": "R-C023"
+    },
+    {
+      "source": "orders",
+      "target": "logistics",
+      "kind": "SIDE_EFFECT",
+      "evidence": "订单创建之后生成物流运单",
+      "clause": "R-C024"
+    },
+    {
+      "source": "cart",
+      "target": "orders",
+      "kind": "PRECONDITION",
+      "evidence": "订单创建必须以购物车商品为前提（v2 保留句）",
+      "clause": "R-C025"
+    },
+    {
+      "source": "coupon",
+      "target": "orders",
+      "kind": "PRECONDITION",
+      "evidence": "订单必须先领取优惠券",
+      "clause": "R-C006b"
+    }
+  ],
+  "negatives": [
+    {
+      "evidence": "系统定时清理过期优惠券，不依赖任何订单",
+      "reason": "negation marker 不依赖"
+    },
+    {
+      "evidence": "消息通知、商品、购物车与订单在架构上相互独立部署",
+      "reason": "three+ modules, no relation template"
+    },
+    {
+      "evidence": "优惠券模板支持多种类型配置",
+      "reason": "single module, no relation"
+    }
+  ],
+  "allowed_groundings": [
+    {
+      "source": "POST /coupons",
+      "target": "POST /orders"
+    },
+    {
+      "source": "POST /coupons",
+      "target": "POST /orders/{id}/payment"
+    },
+    {
+      "source": "POST /coupons/{id}/apply",
+      "target": "POST /orders"
+    },
+    {
+      "source": "POST /coupons/{id}/apply",
+      "target": "POST /orders/{id}/payment"
+    }
+  ]
+}

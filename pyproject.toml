@@ -61,7 +61,7 @@ target-version = "py314"
 # The ``cankao/`` directory holds third-party reference projects (langgraph,
 # etc.) for study only — it is not part of TestAgent and must not be linted
 # as if it were project source.
-extend-exclude = ["cankao"]
+extend-exclude = ["cankao", "scripts/proto_link_graph.py", "scripts/audit_case_links.py"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "A", "SIM", "RUF"]

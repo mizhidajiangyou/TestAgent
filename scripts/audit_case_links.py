@@ -98,7 +98,7 @@ for path, item in spec.get("paths", {}).items():
         fields: set[str] = set()
         for p in list(item.get("parameters", [])) + list(op.get("parameters", [])):
             fields.add(str(p.get("name", "")))
-        body = ((op.get("requestBody") or {}).get("content") or {})
+        body = (op.get("requestBody") or {}).get("content") or {}
         for media in body.values():
             props = resolve(media.get("schema", {})).get("properties", {}) or {}
             fields.update(props.keys())
@@ -142,13 +142,17 @@ print(f"    of which cross-module: {len(cross_edges)}")
 import sys  # noqa: E402
 
 sys.path.insert(0, str(ROOT))
-from testagent.parsers.swagger_parser import SwaggerParser  # noqa: E402
 from testagent.engine.prompt_builder import endpoints_to_signature  # noqa: E402
+from testagent.parsers.swagger_parser import SwaggerParser  # noqa: E402
 
 eps = SwaggerParser().parse(str(ROOT / "examples/ecommerce_swagger.json"))
 full = SwaggerParser.endpoints_to_text(eps)
 sig = endpoints_to_signature(eps)
 print("[5] global context size on the 13-endpoint ecommerce example:")
 print(f"      endpoints_to_text (full)  : {len(full):>5} chars")
-print(f"      endpoints_to_signature    : {len(sig):>5} chars  ({len(sig) / len(full):.0%} of full)")
-print(f"      per-batch (2 eps) text    : ~{len(full) // 7:>5} chars  -> sees {2}/{len(eps)} endpoints")
+print(
+    f"      endpoints_to_signature    : {len(sig):>5} chars  ({len(sig) / len(full):.0%} of full)"
+)
+print(
+    f"      per-batch (2 eps) text    : ~{len(full) // 7:>5} chars  -> sees {2}/{len(eps)} endpoints"
+)

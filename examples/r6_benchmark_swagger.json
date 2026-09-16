@@ -1,0 +1,47 @@
+{
+  "openapi": "3.0.0",
+  "info": {"title": "R6 Benchmark - ecommerce fulfillment extension", "version": "1.0.0"},
+  "paths": {
+    "/products": {
+      "get": {"tags": ["products"], "summary": "list products", "responses": {"200": {"description": "OK"}}},
+      "post": {"tags": ["products"], "summary": "create product", "responses": {"201": {"description": "Created"}}}
+    },
+    "/products/{id}": {
+      "get": {"tags": ["products"], "summary": "product detail", "responses": {"200": {"description": "OK"}}}
+    },
+    "/cart": {
+      "get": {"tags": ["cart"], "summary": "view cart", "responses": {"200": {"description": "OK"}}}
+    },
+    "/cart/items": {
+      "post": {"tags": ["cart"], "summary": "add cart item", "responses": {"201": {"description": "Created"}}}
+    },
+    "/cart/items/{id}": {
+      "delete": {"tags": ["cart"], "summary": "remove cart item", "responses": {"204": {"description": "Deleted"}}}
+    },
+    "/orders": {
+      "get": {"tags": ["orders"], "summary": "list orders", "responses": {"200": {"description": "OK"}}},
+      "post": {"tags": ["orders"], "summary": "place order", "responses": {"201": {"description": "Created"}}}
+    },
+    "/orders/{id}": {
+      "get": {"tags": ["orders"], "summary": "order detail", "responses": {"200": {"description": "OK"}}}
+    },
+    "/orders/{id}/payment": {
+      "post": {"tags": ["payment"], "summary": "pay order", "responses": {"200": {"description": "Paid"}}}
+    },
+    "/orders/{id}/shipment": {
+      "post": {"tags": ["logistics"], "summary": "ship order", "responses": {"201": {"description": "Shipped"}}}
+    },
+    "/coupons": {
+      "post": {"tags": ["coupon"], "summary": "issue coupon", "responses": {"201": {"description": "Issued"}}}
+    },
+    "/coupons/{id}/apply": {
+      "post": {"tags": ["coupon"], "summary": "apply coupon to order", "responses": {"200": {"description": "Applied"}}}
+    },
+    "/notifications": {
+      "get": {"tags": ["notification"], "summary": "list notifications", "responses": {"200": {"description": "OK"}}}
+    },
+    "/users/{id}/addresses": {
+      "get": {"tags": ["users"], "summary": "user addresses", "responses": {"200": {"description": "OK"}}}
+    }
+  }
+}
