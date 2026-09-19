@@ -220,19 +220,21 @@ def build_engine_generate_unit(llm: LLMClient) -> Any:
             )
 
         def _scope_item_key(item: Any) -> str:
-            if spec.scope_key_field:
-                if isinstance(item, dict):
-                    return str(item.get(spec.scope_key_field, "") or "")
-                return str(getattr(item, spec.scope_key_field, "") or "")
+            """Scope key of a BATCH OBJECT (the endpoint side). APIEndpoint
+            objects key on "METHOD /path" (full_path, B6a-2); dicts key on
+            method+path or their "endpoint" field. ``spec.scope_key_field``
+            applies to the PRODUCED dict items (make_dict_hooks' item side),
+            NOT to these scope objects — an APIEndpoint has no "endpoint"
+            attribute and keying it through the field made the whole batch
+            set empty (every item out_of_scope, FH2.1 debug finding)."""
             if isinstance(item, dict):
+                if spec.scope_key_field:
+                    return str(item.get(spec.scope_key_field, "") or "")
                 method = item.get("method", "")
                 path = item.get("path", "")
                 if method and path:
                     return f"{method} {path}"
                 return str(item.get("endpoint", "") or "")
-            # APIEndpoint-like scope items: full_path "METHOD /path" is the
-            # engine's batch scope key (B6a-2; defect-found in FH2.1 tests —
-            # str(dataclass) repr made every item out_of_scope).
             method = getattr(item, "method", "")
             path = getattr(item, "path", "")
             if method and path:
@@ -246,7 +248,7 @@ def build_engine_generate_unit(llm: LLMClient) -> Any:
             scope_item_key=_scope_item_key,
         )
         engine = TruncationEngine(policy, json_mode=False, hooks=hooks)
-        scope_items = _unit_scope_items(unit_ctx)
+        scope_items = _unit_scope_items(unit_ctx, ctx)
         items = await engine.arun(llm, system_prompt, user_prompt, scope_items, label)
 
         if not items:
@@ -260,14 +262,21 @@ def build_engine_generate_unit(llm: LLMClient) -> Any:
     return generate_unit
 
 
-def _unit_scope_items(unit_ctx: dict[str, Any]) -> list[Any]:
-    """Scope items for the engine: the split unit's endpoints (batch) or
-    the single item; falls back to the full parsed endpoint list."""
+def _unit_scope_items(unit_ctx: dict[str, Any], ctx: TaskContext) -> list[Any]:
+    """Engine scope items (legacy parity, FH2.1 debug finding): phase2 batch
+    units scope to the batch endpoints; EVERYTHING ELSE — including phase1
+    per-input requirement units — scopes to the full spec endpoint list
+    (the legacy generator passes ``endpoints`` for both phases; requirement
+    text items are NOT scope keys). No endpoints at all -> empty list, the
+    engine's filter is bypassed (pure-requirements behavior)."""
     batch = unit_ctx.get("_unit_batch")
     if batch:
         return list(batch)
+    endpoints = ctx.parsed.get("endpoints")
+    if endpoints:
+        return list(endpoints)
     item = unit_ctx.get("_unit_item")
-    if item is not None:
+    if item is not None and getattr(item, "method", None) and getattr(item, "path", None):
         return [item]
     return []
 

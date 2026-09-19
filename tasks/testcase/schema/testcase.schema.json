@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TestAgent testcase item (tasks/testcase artifact schema)",
+  "description": "FH2.3 field truth source: legacy 10 fields plus the quality-line additions (plan-k section 4.1 ownership). Code identity fields (binds/executability/path_id/source_stage/scenario_*) are program-stamped and NOT required from the LLM; they ride on the artifact after the quality gates run.",
+  "type": "object",
+  "required": ["title"],
+  "properties": {
+    "id": {"type": "string", "description": "LLM emits literal TC-XXX; renumbered after merge (H1 dimension 2)"},
+    "title": {"type": "string", "minLength": 1},
+    "description": {"type": "string"},
+    "endpoint": {"type": "string", "description": "METHOD /path verbatim from the spec, or N/A"},
+    "test_type": {
+      "type": "string",
+      "enum": ["functional", "boundary", "negative", "security", "integration"]
+    },
+    "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+    "preconditions": {"type": "array", "items": {"type": "string"}},
+    "steps": {"type": "array", "items": {"type": "string"}},
+    "expected_results": {"type": "array", "items": {"type": "string"}},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "scenario_operation": {"type": "string", "default": ""},
+    "scenario_scene": {"type": "string", "default": ""},
+    "scenario_variant": {"type": "string", "default": ""},
+    "equivalence_class": {
+      "type": "string",
+      "enum": ["", "positive", "negative", "boundary", "security", "integration"],
+      "default": ""
+    },
+    "covers_obligations": {"type": "array", "items": {"type": "string"}, "default": []},
+    "binds": {"type": "object", "default": {}},
+    "executability": {"type": "object", "default": {}},
+    "path_id": {"type": "string", "default": ""},
+    "source_stage": {
+      "type": "string",
+      "enum": ["", "phase1", "phase2", "l3b"],
+      "default": ""
+    }
+  },
+  "additionalProperties": true
+}

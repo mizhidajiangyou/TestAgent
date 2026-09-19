@@ -1,0 +1,272 @@
+{
+  "manifest_version": 1,
+  "name": "testcase",
+  "display_name": "Test case generation (pipeline task package)",
+  "description": "Two-phase test case generation on the task-package pipeline (FH2.3, plan-k B6b.3): Phase 1 requirements per-input, Phase 2 API-specific endpoint batches of 2, engine-backed truncation, review, H1 historical merge. Templates are byte-identical migrations of the frozen legacy prompts (reverse-rename discipline: no rename needed, sha256 equality proven by tests).",
+  "version": "1.0.0",
+  "aliases": [],
+  "examples": "  testagent testcase --requirements examples/sample_requirements.md --swagger examples/sample_swagger.json\n  testagent testcase --requirements req.md --no-review -o output/cases.json",
+  "inputs": [
+    {
+      "name": "requirements",
+      "kind": "requirements",
+      "required": false,
+      "option": [
+        "--requirements",
+        "-r"
+      ],
+      "help": "Path to requirements document"
+    },
+    {
+      "name": "swagger",
+      "kind": "swagger",
+      "required": false,
+      "option": [
+        "--swagger",
+        "-s"
+      ],
+      "help": "Path or URL to Swagger/OpenAPI spec (optional)"
+    },
+    {
+      "name": "historical_cases",
+      "kind": "file",
+      "required": false,
+      "parse": "testcase_history",
+      "context_var": "historical_cases",
+      "option": [
+        "--historical-cases",
+        "-H"
+      ],
+      "help": "Historical test cases JSON baseline (H1 merge input)"
+    }
+  ],
+  "require_any": [
+    "requirements",
+    "swagger"
+  ],
+  "pipeline": {
+    "stages": [
+      {
+        "name": "phase1",
+        "template": "prompts/testcase_prompt.j2",
+        "system_prompt": "inline:You are a senior QA engineer. Generate comprehensive, well-structured test cases from requirements and API specifications. Output only valid JSON. Keep the total output within the model's token limit: prefer a focused set of high-value cases with concise descriptions and steps over exhaustive coverage, so the response is never cut off mid-JSON.",
+        "split": {
+          "by": "per_input",
+          "input": "requirements"
+        },
+        "when": {
+          "input_present": [
+            "requirements"
+          ]
+        },
+        "output": {
+          "contract": "json_list"
+        }
+      },
+      {
+        "name": "phase2_api",
+        "template": "prompts/api_prompt.j2",
+        "system_prompt": "inline:You are a senior QA engineer specializing in API testing. Generate boundary, security, and integration test cases. Output only valid JSON.",
+        "split": {
+          "by": "batch",
+          "input": "endpoints",
+          "batch_size": 2
+        },
+        "when": {
+          "input_present": [
+            "requirements",
+            "endpoints"
+          ]
+        },
+        "output": {
+          "contract": "json_list"
+        }
+      }
+    ],
+    "merge": {
+      "baseline_input": "historical_cases",
+      "dedup": {
+        "keys": [
+          "title",
+          "endpoint",
+          "test_type"
+        ],
+        "normalize": "lower"
+      },
+      "renumber": {
+        "field": "id",
+        "format": "TC-{i:03d}"
+      }
+    },
+    "truncation": {
+      "enabled": true,
+      "policy": "from_settings",
+      "slim_continue": true,
+      "scope_key_field": "endpoint"
+    }
+  },
+  "review": {
+    "enabled": "from_settings",
+    "max_rounds": "from_settings",
+    "template": "prompts/review_prompt.j2",
+    "context": [
+      "test_cases_json",
+      "round",
+      "context_text"
+    ],
+    "context_template": "prompts/review_context.j2"
+  },
+  "artifact": {
+    "type": "structured",
+    "item_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "TestAgent testcase item (tasks/testcase artifact schema)",
+      "description": "FH2.3 field truth source: legacy 10 fields plus the quality-line additions (plan-k section 4.1 ownership). Code identity fields (binds/executability/path_id/source_stage/scenario_*) are program-stamped and NOT required from the LLM; they ride on the artifact after the quality gates run.",
+      "type": "object",
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "LLM emits literal TC-XXX; renumbered after merge (H1 dimension 2)"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "METHOD /path verbatim from the spec, or N/A"
+        },
+        "test_type": {
+          "type": "string",
+          "enum": [
+            "functional",
+            "boundary",
+            "negative",
+            "security",
+            "integration"
+          ]
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_results": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scenario_operation": {
+          "type": "string",
+          "default": ""
+        },
+        "scenario_scene": {
+          "type": "string",
+          "default": ""
+        },
+        "scenario_variant": {
+          "type": "string",
+          "default": ""
+        },
+        "equivalence_class": {
+          "type": "string",
+          "enum": [
+            "",
+            "positive",
+            "negative",
+            "boundary",
+            "security",
+            "integration"
+          ],
+          "default": ""
+        },
+        "covers_obligations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "binds": {
+          "type": "object",
+          "default": {}
+        },
+        "executability": {
+          "type": "object",
+          "default": {}
+        },
+        "path_id": {
+          "type": "string",
+          "default": ""
+        },
+        "source_stage": {
+          "type": "string",
+          "enum": [
+            "",
+            "phase1",
+            "phase2",
+            "l3b"
+          ],
+          "default": ""
+        }
+      },
+      "additionalProperties": true
+    },
+    "validators": []
+  },
+  "output": {
+    "default_path": "./output/testcases.json",
+    "formats": {
+      "json_list": {
+        "extension": ".json"
+      }
+    }
+  },
+  "session": {
+    "record": true,
+    "resume": true
+  },
+  "template_context": {
+    "endpoints": "GET /users\nPOST /users",
+    "endpoints_text": "GET /users - list\nPOST /users - create",
+    "endpoints_signature": "- GET /users params:[]\n- POST /users body:[]",
+    "requirements": "Sample requirement",
+    "requirements_text": "Sample requirement",
+    "output_language": "chinese",
+    "historical_cases": "",
+    "json_mode": false,
+    "unit_item": "Sample requirement",
+    "unit_batch": "GET /users, POST /users",
+    "test_cases_json": "[{\"id\": \"TC-XXX\", \"title\": \"sample\"}]",
+    "round": 1,
+    "context_text": "requirements + endpoints context"
+  }
+}
