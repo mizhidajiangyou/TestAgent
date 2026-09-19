@@ -127,17 +127,20 @@ def _atomic_write(path: Path, data: bytes, *, exclusive: bool) -> None:
 
 
 def _validate_serialized(data: bytes, artifact: LoadedArtifact) -> None:
-    """Re-parse what we are about to publish (v4 §7.2 step 1)."""
+    """Re-parse what we are about to publish (v4 §7.2 step 1). Format-aware:
+    JSON re-parses; text formats verify decodable UTF-8 + BOM retention."""
     import json
 
-    text = data.decode("utf-8")
-    parsed = json.loads(text)
     if artifact.format.value == "json":
+        parsed = json.loads(data.decode("utf-8"))
         if isinstance(parsed, dict):
             assert isinstance(parsed.get("test_cases"), list)
         else:
             assert isinstance(parsed, list)
-    if artifact.bom:
+    else:
+        text = data.decode("utf-8")
+        assert len(text) > 0
+    if artifact.bom and not data.startswith(b"\xef\xbb\xbf"):
         raise ValueError("BOM lost in serialization")
 
 

@@ -1,0 +1,26 @@
+{
+  "milestone": "v4 M7 发布门",
+  "date_utc": "2026-09-19T04:44:38Z",
+  "commit_sha": "6e6da18",
+  "gates": [
+    {"cmd": "ruff check + format", "result": "PASS"},
+    {"cmd": "mypy strict", "result": "92 files, 0 errors"},
+    {"cmd": "pytest tests/ -q", "result": "863 passed"},
+    {"cmd": "engine golden", "result": "16 passed, diff=0"},
+    {"cmd": "TestArchitectureGate", "result": "6 passed"},
+    {"cmd": "tasks validate --strict", "result": "PASS"},
+    {"cmd": "CLI discovery (--help x4)", "result": "PASS"}
+  ],
+  "real_model_acceptance": {
+    "model": "qwen3.7-flash-2026-07-15 (DashScope primary fallback chain)",
+    "review_mode_b_json": {"status": "REVIEWED", "run_id": "ebc55e41fd24", "exit": 0, "ids_preserved": true},
+    "review_mode_b_md": {"status": "REVIEWED", "run_id": "67315650c88c", "fences_balanced": true},
+    "review_mode_a": {"status": "REVIEWED", "run_id": "cd117927fa7b"},
+    "single_concurrency_1": {"cases": 15, "capabilities_saved": {"split_mode": "single", "concurrency": 1}, "serial_log": true, "swagger_warn": true},
+    "auto_default": {"cases": 40, "capabilities": "auto/3(settings)"},
+    "gui_with_reference": {"selected": "6/6", "compile_ok": true},
+    "gui_without_reference": {"done": true}
+  },
+  "fix_during_acceptance": "publication._validate_serialized made format-aware (MD was being JSON-parsed); BOM check restructured",
+  "verdict": "PASS"
+}
