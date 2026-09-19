@@ -64,6 +64,7 @@ from testagent.pipeline.consistency import (
 )
 from testagent.pipeline.executability import grade_case, placeholder_closure_metrics
 from testagent.pipeline.normalization import needs_reask, normalize_case, semantic_validation
+from testagent.pipeline.binding import bind_requirements
 from testagent.pipeline.obligations import (
     BindingBasis,
     ObligationRegistry,
@@ -388,13 +389,29 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         """T5/T7: register requirement-AC and spec obligations for this
         session; the uncovered ones drive the per-endpoint quota floor."""
         registry = ObligationRegistry()
+        # T6 binding chain (defect ⑤-b: was never invoked, so requirement
+        # obligations carried no endpoint_bindings and the T7 floor was
+        # permanently zero on the requirement side).
+        refs = [
+            RequirementRef(
+                id=req.id or f"REQ-{i}",
+                text=(req.description or "") + " " + " ".join(req.acceptance_criteria or []),
+            )
+            for i, req in enumerate(requirements, 1)
+        ]
+        bindings = bind_requirements(refs, endpoints)
+        bindings_by_req = {b.requirement_id: b for b in bindings}
         for req in requirements:
-            if req.acceptance_criteria:
-                registry.register_requirement_acs(
-                    req.id or "REQ",
-                    list(req.acceptance_criteria),
-                    binding_basis=BindingBasis.KEYWORD,
-                )
+            if not req.acceptance_criteria:
+                continue
+            req_id = req.id or "REQ"
+            binding = bindings_by_req.get(req_id)
+            registry.register_requirement_acs(
+                req_id,
+                list(req.acceptance_criteria),
+                endpoint_bindings=binding.endpoints if binding and binding.endpoints else (),
+                binding_basis=binding.basis if binding else BindingBasis.KEYWORD,
+            )
         registry.register_many(register_spec_obligations(endpoints))
         self._obligation_registry = registry
 

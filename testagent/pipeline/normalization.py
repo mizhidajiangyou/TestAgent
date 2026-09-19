@@ -43,6 +43,19 @@ _FIELD_ASSERT_RE = re.compile(
 )
 
 
+def _as_str_list(value: Any, transform: Any) -> list[str]:
+    """Coerce a list-like field into ``list[str]`` WITHOUT character
+    iteration (defect ③, 2026-09-19 review): a bare string is a single
+    item, not an iterable of chars; non-list non-str values are wrapped."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [transform(value)] if value.strip() else []
+    if isinstance(value, list):
+        return [transform(str(v)) for v in value]
+    return [transform(str(value))]
+
+
 def normalize_case(case: dict[str, Any]) -> dict[str, Any]:
     """T11a: deterministic, structure-only normalization (returns a copy)."""
     out = dict(case)
@@ -60,17 +73,15 @@ def normalize_case(case: dict[str, Any]) -> dict[str, Any]:
 
     out["title"] = _norm_text(str(out.get("title", "")))
     out["description"] = _norm_text(str(out.get("description", "")))
-    out["preconditions"] = [_norm_text(str(p)) for p in out.get("preconditions", []) or []]
+    out["preconditions"] = _as_str_list(out.get("preconditions"), _norm_text)
     # Steps: one line each (collapse accidental newlines/whitespace runs).
-    steps = []
-    for step in out.get("steps", []) or []:
-        one_line = " ".join(_norm_text(str(step)).split())
-        steps.append(one_line)
-    out["steps"] = steps
+    out["steps"] = _as_str_list(
+        out.get("steps"), lambda v: " ".join(_norm_text(str(v)).split())
+    )
     # expected_results: split semicolon-joined strings into individual items.
     split_results: list[str] = []
-    for result in out.get("expected_results", []) or []:
-        for part in str(result).split(";"):
+    for result in _as_str_list(out.get("expected_results"), _norm_text):
+        for part in result.split(";"):
             part = _norm_text(part.strip())
             if part:
                 split_results.append(part)

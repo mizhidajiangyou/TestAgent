@@ -149,8 +149,13 @@ def gate_a_closure(case: dict[str, Any]) -> tuple[list[str], list[str], str]:
             for name, endpoint in bind_producers.items():
                 if endpoint in step and has_producer_verb:
                     produced.add(name)
-            if has_producer_verb or has_store:
-                produced.update(_placeholders_in(step))
+            # Production events are EXPLICIT ONLY (defect ④, 2026-09-19
+            # review): store/capture verbs, `<ID> = value` assignment or a
+            # binds producer endpoint. A bare creation verb must NOT mark
+            # every placeholder in the step as produced — a step like
+            # "POST /orders body {buyer: <USER_ID>}" CONSUMES <USER_ID>,
+            # and marking it produced made forward consumption close
+            # spuriously (orphan lost, closure faked at 1.0).
         steps_data.append((_placeholders_in(step), produced))
 
     production_step: dict[str, int] = {}

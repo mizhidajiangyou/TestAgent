@@ -190,13 +190,18 @@ class ObligationRegistry:
         return "\n".join(lines)
 
 
-def _spec_fact(endpoint_id: str, fact_id: str, statement: str) -> Obligation:
+def _spec_fact(
+    endpoint_id: str, fact_id: str, statement: str, full_path: str = ""
+) -> Obligation:
     return Obligation(
         id=f"SPEC-{endpoint_id}-{fact_id}",
         requirement_id=None,
         statement=statement,
         source=ObligationSource.SPEC,
-        endpoint_bindings=(endpoint_id,),
+        # Bindings use the engine scope-key format "METHOD /path" (full_path)
+        # so the T7 obligation floor can match them against scope keys
+        # (defect ⑤, 2026-09-19 review).
+        endpoint_bindings=(full_path,) if full_path else (endpoint_id,),
         binding_basis=BindingBasis.EXPLICIT,
     )
 
@@ -214,6 +219,7 @@ def register_spec_obligations(endpoints: Sequence[Any]) -> list[Obligation]:
         endpoint_id = (
             f"{ep.method.upper()}_{ep.path.strip('/').replace('/', '_').replace('{}', 'id')}"
         )
+        full_path = f"{ep.method.upper()} {ep.path}"
         body = getattr(ep, "request_body", None)
         schema = body.get("schema", {}) if isinstance(body, dict) else {}
         props = schema.get("properties", {}) if isinstance(schema, dict) else {}
@@ -224,7 +230,10 @@ def register_spec_obligations(endpoints: Sequence[Any]) -> list[Obligation]:
                 if name in required:
                     obligations.append(
                         _spec_fact(
-                            endpoint_id, f"required_{name}", f"{name} is a required body field"
+                            endpoint_id,
+                            f"required_{name}",
+                            f"{name} is a required body field",
+                            full_path,
                         )
                     )
                 if pschema.get("format") in _FORMAT_FACTS:
@@ -233,6 +242,7 @@ def register_spec_obligations(endpoints: Sequence[Any]) -> list[Obligation]:
                             endpoint_id,
                             f"format_{name}",
                             f"{name} must satisfy format={pschema['format']}",
+                            full_path,
                         )
                     )
                 for bound in ("minimum", "maximum"):
@@ -242,11 +252,14 @@ def register_spec_obligations(endpoints: Sequence[Any]) -> list[Obligation]:
                                 endpoint_id,
                                 f"{bound}_{name}",
                                 f"{name} declares {bound}={pschema[bound]}",
+                                full_path,
                             )
                         )
         for code in getattr(ep, "responses", None) or []:
             if str(code)[:1] in {"4", "5"}:
                 obligations.append(
-                    _spec_fact(endpoint_id, f"error_{code}", f"declared error response {code}")
+                    _spec_fact(
+                        endpoint_id, f"error_{code}", f"declared error response {code}", full_path
+                    )
                 )
     return obligations
