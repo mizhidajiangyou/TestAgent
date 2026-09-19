@@ -120,7 +120,7 @@ class TestHarnessSelfTest:
             {"p": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234"},
             {"p": "sk-abcdefghijklmnop"},
         ):
-            with pytest.raises(AssertionError, match="credential|bearer"):
+            with pytest.raises(AssertionError, match=r"credential|bearer"):
                 ensure_no_credentials(bad)
 
     def test_fingerprint_excludes_volatile_fields(self) -> None:
