@@ -8,10 +8,10 @@ commit 落盘**，作为删除门的证据基线。
 | 门 | 结果 | 读数 |
 | --- | --- | --- |
 | ruff check | PASS | testagent/ + tests/ + scripts/ |
-| ruff format --check | PASS | 158 文件 |
+| ruff format --check | PASS | 160 文件 |
 | mypy strict | PASS | 94 源文件 0 错 |
 | pytest tests/ -q | PASS | 968 passed |
-| TestArchitectureGate | PASS | 8 条（含新「pipeline 禁读 settings 单例」） |
+| TestArchitectureGate | PASS | 7 passed（含新「pipeline 禁读 settings 单例」） |
 | engine golden | PASS | 四轨迹 diff=0（本轮未重录引擎 golden） |
 | tasks validate --strict | PASS | _example / gui / perf / testcase |
 | links golden 三 stage | PASS | graph / planner / fixture |
