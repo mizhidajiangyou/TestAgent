@@ -1,0 +1,28 @@
+{
+  "artifact": {
+    "body": {
+      "detail": "Generation produced 0 test cases. The LLM calls failed or returned no usable content — most often because responses were truncated beyond the model's output limit. Lower OPENAI_MAX_OUTPUT_TOKENS to the model's real output cap, or reduce the requested scope (fewer / more compact cases)."
+    },
+    "status": 500
+  },
+  "events": [],
+  "failure_semantics": {
+    "observable": "error",
+    "status_class": "5xx"
+  },
+  "fixture_version": 1,
+  "input": {
+    "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
+  },
+  "meta": {
+    "git_sha": "ba93ecd0b272",
+    "layer": "http-contract",
+    "normalized": [
+      "session_id"
+    ],
+    "recorded_utc": "2026-09-19T14:03:39.166288+00:00"
+  },
+  "name": "err-call-failed",
+  "request_trace": [],
+  "task": "web_contract"
+}

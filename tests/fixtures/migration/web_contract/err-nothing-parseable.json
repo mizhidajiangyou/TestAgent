@@ -1,0 +1,28 @@
+{
+  "artifact": {
+    "body": {
+      "detail": "No requirements could be parsed from the provided document."
+    },
+    "status": 400
+  },
+  "events": [],
+  "failure_semantics": {
+    "observable": "error",
+    "status_class": "4xx"
+  },
+  "fixture_version": 1,
+  "input": {
+    "requirements": "　\n---\n"
+  },
+  "meta": {
+    "git_sha": "ba93ecd0b272",
+    "layer": "http-contract",
+    "normalized": [
+      "session_id"
+    ],
+    "recorded_utc": "2026-09-19T14:03:38.126325+00:00"
+  },
+  "name": "err-nothing-parseable",
+  "request_trace": [],
+  "task": "web_contract"
+}

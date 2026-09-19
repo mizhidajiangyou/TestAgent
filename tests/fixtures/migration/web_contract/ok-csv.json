@@ -1,0 +1,105 @@
+{
+  "artifact": {
+    "body": {
+      "count": 2,
+      "download_content": "id,title,description,endpoint,test_type,priority,preconditions,steps,expected_results,tags,scenario_operation,scenario_scene,scenario_variant,equivalence_class,covers_obligations,binds,executability\nTC-001,List users returns 200,GET /users with a valid token,N/A N/A,functional,high,User is authenticated,Send GET request to /users,Status code is 200,smoke,,,,,,{},\"{\"\"grade\"\": \"\"INTEGRATION\"\", \"\"orphans\"\": [], \"\"forward_references\"\": [], \"\"bind_violations\"\": [], \"\"spec_blind\"\": [], \"\"closure_rate\"\": \"\"1.0\"\", \"\"setup_dependency_completeness\"\": \"\"n/a\"\"}\"\nTC-002,Create user with valid data,POST /users accepts a valid body,N/A N/A,functional,medium,,Send POST request with valid body,Status code is 201,crud,,,,,,{},\"{\"\"grade\"\": \"\"INTEGRATION\"\", \"\"orphans\"\": [], \"\"forward_references\"\": [], \"\"bind_violations\"\": [], \"\"spec_blind\"\": [], \"\"closure_rate\"\": \"\"1.0\"\", \"\"setup_dependency_completeness\"\": \"\"n/a\"\"}\"\n",
+      "download_filename": "testcases.csv",
+      "historical_count": 0,
+      "output_format": "csv",
+      "session_id": "<normalized>",
+      "test_cases": [
+        {
+          "binds": {},
+          "covers_obligations": [],
+          "description": "GET /users with a valid token",
+          "endpoint": "N/A N/A",
+          "equivalence_class": "",
+          "executability": {
+            "bind_violations": [],
+            "closure_rate": "1.0",
+            "forward_references": [],
+            "grade": "INTEGRATION",
+            "orphans": [],
+            "setup_dependency_completeness": "n/a",
+            "spec_blind": []
+          },
+          "expected_results": [
+            "Status code is 200"
+          ],
+          "id": "TC-001",
+          "preconditions": [
+            "User is authenticated"
+          ],
+          "priority": "high",
+          "scenario_operation": "",
+          "scenario_scene": "",
+          "scenario_variant": "",
+          "steps": [
+            "Send GET request to /users"
+          ],
+          "tags": [
+            "smoke"
+          ],
+          "test_type": "functional",
+          "title": "List users returns 200"
+        },
+        {
+          "binds": {},
+          "covers_obligations": [],
+          "description": "POST /users accepts a valid body",
+          "endpoint": "N/A N/A",
+          "equivalence_class": "",
+          "executability": {
+            "bind_violations": [],
+            "closure_rate": "1.0",
+            "forward_references": [],
+            "grade": "INTEGRATION",
+            "orphans": [],
+            "setup_dependency_completeness": "n/a",
+            "spec_blind": []
+          },
+          "expected_results": [
+            "Status code is 201"
+          ],
+          "id": "TC-002",
+          "preconditions": [],
+          "priority": "medium",
+          "scenario_operation": "",
+          "scenario_scene": "",
+          "scenario_variant": "",
+          "steps": [
+            "Send POST request with valid body"
+          ],
+          "tags": [
+            "crud"
+          ],
+          "test_type": "functional",
+          "title": "Create user with valid data"
+        }
+      ],
+      "token_usage": "prompt=10 completion=20 total=30"
+    },
+    "status": 200
+  },
+  "events": [],
+  "failure_semantics": {
+    "observable": "ok",
+    "status_class": "2xx"
+  },
+  "fixture_version": 1,
+  "input": {
+    "output_format": "csv",
+    "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
+  },
+  "meta": {
+    "git_sha": "ba93ecd0b272",
+    "layer": "http-contract",
+    "normalized": [
+      "session_id"
+    ],
+    "recorded_utc": "2026-09-19T14:03:37.999327+00:00"
+  },
+  "name": "ok-csv",
+  "request_trace": [],
+  "task": "web_contract"
+}

@@ -1,0 +1,29 @@
+{
+  "artifact": {
+    "body": {
+      "detail": "Swagger spec not found: ./nope.json"
+    },
+    "status": 404
+  },
+  "events": [],
+  "failure_semantics": {
+    "observable": "error",
+    "status_class": "4xx"
+  },
+  "fixture_version": 1,
+  "input": {
+    "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n",
+    "swagger_url": "./nope.json"
+  },
+  "meta": {
+    "git_sha": "ba93ecd0b272",
+    "layer": "http-contract",
+    "normalized": [
+      "session_id"
+    ],
+    "recorded_utc": "2026-09-19T14:03:38.109577+00:00"
+  },
+  "name": "err-swagger-missing",
+  "request_trace": [],
+  "task": "web_contract"
+}

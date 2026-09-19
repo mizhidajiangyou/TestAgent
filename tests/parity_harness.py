@@ -271,12 +271,45 @@ def replay_fixture(
     return replay_diff(recorded, replayed)
 
 
+def _local_secret_values() -> set[str]:
+    """Real secret VALUES from the local ``.env``, minus anything that also
+    appears in ``.env.example`` (placeholders are not secrets). Same discipline
+    as the history audit (R29): scan by value, not by variable name —
+    otherwise user-facing guidance that legitimately names ``OPENAI_API_KEY``
+    trips the guard while an actual key in an unexpected field would not."""
+    repo = Path(__file__).parents[1]
+
+    def _values(name: str) -> dict[str, str]:
+        path = repo / name
+        if not path.exists():
+            return {}
+        out: dict[str, str] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, _, value = stripped.partition("=")
+            out[key.strip()] = value.strip().strip("\"'")
+        return out
+
+    real, template = _values(".env"), _values(".env.example")
+    placeholders = set(template.values())
+    return {
+        value
+        for key, value in real.items()
+        if len(value) >= 8 and value not in placeholders and "api_key" in key.lower()
+    }
+
+
 def ensure_no_credentials(payload: dict[str, Any]) -> None:
-    """Safety: no api_key-looking values anywhere in a serialized fixture
-    (recording discipline - fixtures get committed)."""
+    """Safety: no credential may enter a fixture (recording discipline —
+    fixtures get committed). Catches token shapes and the real local API-key
+    values; variable NAMES are allowed, since the HTTP contract quotes them."""
     text = json.dumps(payload, ensure_ascii=False)
-    for marker in ("sk-", "api_key", "OPENAI_API_KEY"):
-        assert marker not in text, f"credential marker {marker!r} leaked into fixture"
+    for marker in ("sk-", "Bearer ", "-----BEGIN"):
+        assert marker not in text, f"credential shape {marker!r} leaked into fixture"
+    for value in _local_secret_values():
+        assert value not in text, "the local API key leaked into a committed fixture"
 
 
 def repo_env() -> dict[str, str]:

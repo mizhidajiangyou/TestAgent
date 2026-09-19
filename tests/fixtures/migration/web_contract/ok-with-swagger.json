@@ -1,0 +1,173 @@
+{
+  "artifact": {
+    "body": {
+      "count": 4,
+      "download_content": null,
+      "download_filename": null,
+      "historical_count": 0,
+      "output_format": "json",
+      "session_id": "<normalized>",
+      "test_cases": [
+        {
+          "binds": {},
+          "covers_obligations": [],
+          "description": "GET /users with a valid token",
+          "endpoint": "GET /users",
+          "equivalence_class": "",
+          "executability": {
+            "bind_violations": [],
+            "closure_rate": "1.0",
+            "forward_references": [],
+            "grade": "INTEGRATION",
+            "orphans": [],
+            "setup_dependency_completeness": "n/a",
+            "spec_blind": []
+          },
+          "expected_results": [
+            "Status code is 200"
+          ],
+          "id": "TC-001",
+          "preconditions": [
+            "User is authenticated"
+          ],
+          "priority": "high",
+          "scenario_operation": "",
+          "scenario_scene": "",
+          "scenario_variant": "",
+          "steps": [
+            "Send GET request to /users"
+          ],
+          "tags": [
+            "smoke"
+          ],
+          "test_type": "functional",
+          "title": "List users returns 200"
+        },
+        {
+          "binds": {},
+          "covers_obligations": [],
+          "description": "POST /users accepts a valid body",
+          "endpoint": "POST /users",
+          "equivalence_class": "",
+          "executability": {
+            "bind_violations": [],
+            "closure_rate": "1.0",
+            "forward_references": [],
+            "grade": "INTEGRATION",
+            "orphans": [],
+            "setup_dependency_completeness": "n/a",
+            "spec_blind": []
+          },
+          "expected_results": [
+            "Status code is 201"
+          ],
+          "id": "TC-002",
+          "preconditions": [],
+          "priority": "medium",
+          "scenario_operation": "",
+          "scenario_scene": "",
+          "scenario_variant": "",
+          "steps": [
+            "Send POST request with valid body"
+          ],
+          "tags": [
+            "crud"
+          ],
+          "test_type": "functional",
+          "title": "Create user with valid data"
+        },
+        {
+          "binds": {},
+          "covers_obligations": [],
+          "description": "GET /users with a valid token",
+          "endpoint": "GET /users",
+          "equivalence_class": "",
+          "executability": {
+            "bind_violations": [],
+            "closure_rate": "1.0",
+            "forward_references": [],
+            "grade": "INTEGRATION",
+            "orphans": [],
+            "setup_dependency_completeness": "n/a",
+            "spec_blind": []
+          },
+          "expected_results": [
+            "Status code is 200"
+          ],
+          "id": "TC-003",
+          "preconditions": [
+            "User is authenticated"
+          ],
+          "priority": "high",
+          "scenario_operation": "",
+          "scenario_scene": "",
+          "scenario_variant": "",
+          "steps": [
+            "Send GET request to /users"
+          ],
+          "tags": [
+            "smoke"
+          ],
+          "test_type": "functional",
+          "title": "List users returns 200"
+        },
+        {
+          "binds": {},
+          "covers_obligations": [],
+          "description": "POST /users accepts a valid body",
+          "endpoint": "POST /users",
+          "equivalence_class": "",
+          "executability": {
+            "bind_violations": [],
+            "closure_rate": "1.0",
+            "forward_references": [],
+            "grade": "INTEGRATION",
+            "orphans": [],
+            "setup_dependency_completeness": "n/a",
+            "spec_blind": []
+          },
+          "expected_results": [
+            "Status code is 201"
+          ],
+          "id": "TC-004",
+          "preconditions": [],
+          "priority": "medium",
+          "scenario_operation": "",
+          "scenario_scene": "",
+          "scenario_variant": "",
+          "steps": [
+            "Send POST request with valid body"
+          ],
+          "tags": [
+            "crud"
+          ],
+          "test_type": "functional",
+          "title": "Create user with valid data"
+        }
+      ],
+      "token_usage": "prompt=10 completion=20 total=30"
+    },
+    "status": 200
+  },
+  "events": [],
+  "failure_semantics": {
+    "observable": "ok",
+    "status_class": "2xx"
+  },
+  "fixture_version": 1,
+  "input": {
+    "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n",
+    "swagger_url": "<tmp>/spec.json"
+  },
+  "meta": {
+    "git_sha": "ba93ecd0b272",
+    "layer": "http-contract",
+    "normalized": [
+      "session_id"
+    ],
+    "recorded_utc": "2026-09-19T14:03:38.039926+00:00"
+  },
+  "name": "ok-with-swagger",
+  "request_trace": [],
+  "task": "web_contract"
+}

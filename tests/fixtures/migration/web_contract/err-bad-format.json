@@ -1,0 +1,29 @@
+{
+  "artifact": {
+    "body": {
+      "detail": "output_format must be one of: json, csv, markdown"
+    },
+    "status": 400
+  },
+  "events": [],
+  "failure_semantics": {
+    "observable": "error",
+    "status_class": "4xx"
+  },
+  "fixture_version": 1,
+  "input": {
+    "output_format": "xml",
+    "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
+  },
+  "meta": {
+    "git_sha": "ba93ecd0b272",
+    "layer": "http-contract",
+    "normalized": [
+      "session_id"
+    ],
+    "recorded_utc": "2026-09-19T14:03:38.092793+00:00"
+  },
+  "name": "err-bad-format",
+  "request_trace": [],
+  "task": "web_contract"
+}

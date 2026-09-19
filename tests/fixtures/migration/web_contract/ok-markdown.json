@@ -1,0 +1,105 @@
+{
+  "artifact": {
+    "body": {
+      "count": 2,
+      "download_content": "# Test Case Report\n\n**作者:** TestAgent\n**日期:** <timestamp>\n**版本:** 0.1.0\n**测试用例总数:** 2\n\n## 汇总\n\n### 按测试类型\n\n| 类型 | 数量 |\n|------|-------|\n| 功能 | 2 |\n\n### 按优先级\n\n| 优先级 | 数量 |\n|----------|-------|\n| 高 | 1 |\n| 中 | 1 |\n\n## 测试用例\n\n### TC-001: List users returns 200\n\n- **接口:** `N/A N/A`\n- **类型:** 功能\n- **优先级:** 高\n- **描述:** GET /users with a valid token\n\n**前置条件:**\n1. User is authenticated\n\n**操作步骤:**\n1. Send GET request to /users\n\n**预期结果:**\n- Status code is 200\n\n---\n\n### TC-002: Create user with valid data\n\n- **接口:** `N/A N/A`\n- **类型:** 功能\n- **优先级:** 中\n- **描述:** POST /users accepts a valid body\n\n**操作步骤:**\n1. Send POST request with valid body\n\n**预期结果:**\n- Status code is 201\n\n---\n",
+      "download_filename": "testcases.md",
+      "historical_count": 0,
+      "output_format": "markdown",
+      "session_id": "<normalized>",
+      "test_cases": [
+        {
+          "binds": {},
+          "covers_obligations": [],
+          "description": "GET /users with a valid token",
+          "endpoint": "N/A N/A",
+          "equivalence_class": "",
+          "executability": {
+            "bind_violations": [],
+            "closure_rate": "1.0",
+            "forward_references": [],
+            "grade": "INTEGRATION",
+            "orphans": [],
+            "setup_dependency_completeness": "n/a",
+            "spec_blind": []
+          },
+          "expected_results": [
+            "Status code is 200"
+          ],
+          "id": "TC-001",
+          "preconditions": [
+            "User is authenticated"
+          ],
+          "priority": "high",
+          "scenario_operation": "",
+          "scenario_scene": "",
+          "scenario_variant": "",
+          "steps": [
+            "Send GET request to /users"
+          ],
+          "tags": [
+            "smoke"
+          ],
+          "test_type": "functional",
+          "title": "List users returns 200"
+        },
+        {
+          "binds": {},
+          "covers_obligations": [],
+          "description": "POST /users accepts a valid body",
+          "endpoint": "N/A N/A",
+          "equivalence_class": "",
+          "executability": {
+            "bind_violations": [],
+            "closure_rate": "1.0",
+            "forward_references": [],
+            "grade": "INTEGRATION",
+            "orphans": [],
+            "setup_dependency_completeness": "n/a",
+            "spec_blind": []
+          },
+          "expected_results": [
+            "Status code is 201"
+          ],
+          "id": "TC-002",
+          "preconditions": [],
+          "priority": "medium",
+          "scenario_operation": "",
+          "scenario_scene": "",
+          "scenario_variant": "",
+          "steps": [
+            "Send POST request with valid body"
+          ],
+          "tags": [
+            "crud"
+          ],
+          "test_type": "functional",
+          "title": "Create user with valid data"
+        }
+      ],
+      "token_usage": "prompt=10 completion=20 total=30"
+    },
+    "status": 200
+  },
+  "events": [],
+  "failure_semantics": {
+    "observable": "ok",
+    "status_class": "2xx"
+  },
+  "fixture_version": 1,
+  "input": {
+    "output_format": "markdown",
+    "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
+  },
+  "meta": {
+    "git_sha": "ba93ecd0b272",
+    "layer": "http-contract",
+    "normalized": [
+      "session_id"
+    ],
+    "recorded_utc": "2026-09-19T14:03:38.018729+00:00"
+  },
+  "name": "ok-markdown",
+  "request_trace": [],
+  "task": "web_contract"
+}
