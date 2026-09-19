@@ -89,7 +89,14 @@ class Container(containers.DeclarativeContainer):
         ),
     )
 
-    testcase_generator = providers.Singleton(
+    # Factory (defect ⑨, 2026-09-19 review): agenerate writes per-session
+    # instance state (_raw_dumper/_session_case_count/_obligation_registry/
+    # _conflict_table/_dedup_*), and web/app.py serves concurrent requests
+    # from one container — a Singleton generator would cross-pollute
+    # sessions (raw dumps into the wrong session dir, shared budget
+    # counters). CLI constructs once per process anyway, so Factory is
+    # behavior-neutral there.
+    testcase_generator = providers.Factory(
         TestCaseGenerator,
         llm_client=llm_client,
         prompt_builder=prompt_builder,

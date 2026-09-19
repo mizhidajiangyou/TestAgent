@@ -57,6 +57,7 @@ cover/
 
 # Django stuff:
 *.log
+!output/gates/**/*.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -223,7 +224,9 @@ output/*
 *.jtl
 
 task.md
-uv.lock
+# uv.lock is committed (defect ⑩): ignored lock + lower-bound-only deps
+# meant CI/Docker resolved newest versions on every run.
+# uv.lock
 
 # OS metadata (plan-k FH1.5)
 .DS_Store

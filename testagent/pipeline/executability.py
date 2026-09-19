@@ -139,7 +139,6 @@ def gate_a_closure(case: dict[str, Any]) -> tuple[list[str], list[str], str]:
         step_upper = step.upper()
         is_cleanup = bool(_CLEANUP_RE.search(step))
         has_producer_verb = any(verb in step_upper for verb in _PRODUCER_VERBS)
-        has_store = bool(_STORE_RE.search(step))
         produced: set[str] = set()
         for m in _STORE_RE.finditer(normalize_placeholder(step)):
             name = m.group(1) or m.group(2)

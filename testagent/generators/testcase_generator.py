@@ -54,6 +54,7 @@ from testagent.engine.truncation import (
 )
 from testagent.generators.base import BaseGenerator
 from testagent.parsers.requirement_parser import RequirementParser
+from testagent.pipeline.binding import bind_requirements
 from testagent.pipeline.consistency import (
     ConflictPolicy,
     Finding,
@@ -64,7 +65,6 @@ from testagent.pipeline.consistency import (
 )
 from testagent.pipeline.executability import grade_case, placeholder_closure_metrics
 from testagent.pipeline.normalization import needs_reask, normalize_case, semantic_validation
-from testagent.pipeline.binding import bind_requirements
 from testagent.pipeline.obligations import (
     BindingBasis,
     ObligationRegistry,
@@ -1080,7 +1080,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             acall_llm=acall_llm,
             label="test-cases",
         )
-        return result.artifact
+        return self._restore_code_identity(test_cases, result.artifact)
 
     # ------------------------------------------------------------------
     # Phase 1: Requirements-driven (module-batched)
@@ -1539,7 +1539,37 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             call_llm=call_llm,
             label="test-cases",
         )
-        return result.artifact
+        return self._restore_code_identity(test_cases, result.artifact)
+
+    @staticmethod
+    def _restore_code_identity(
+        original: list[TestCase], reviewed: list[TestCase]
+    ) -> list[TestCase]:
+        """Carry program-owned quality fields across the review boundary
+        (defect ⑦, 2026-09-19 review): the reviewer LLM returns the plain
+        legacy JSON contract, so a wholesale replacement zeroed
+        binds/executability/scenario_*/covers_obligations. Restoration is
+        positional (review preserves order and count via its retention
+        guard); unmatchable positions keep the reviewed values as-is."""
+        for idx, reviewed_case in enumerate(reviewed):
+            if idx >= len(original):
+                break
+            src = original[idx]
+            if not reviewed_case.binds:
+                reviewed_case.binds = src.binds
+            if not reviewed_case.executability:
+                reviewed_case.executability = src.executability
+            if not reviewed_case.scenario_operation:
+                reviewed_case.scenario_operation = src.scenario_operation
+            if not reviewed_case.scenario_scene:
+                reviewed_case.scenario_scene = src.scenario_scene
+            if not reviewed_case.scenario_variant:
+                reviewed_case.scenario_variant = src.scenario_variant
+            if not reviewed_case.equivalence_class:
+                reviewed_case.equivalence_class = src.equivalence_class
+            if not reviewed_case.covers_obligations:
+                reviewed_case.covers_obligations = src.covers_obligations
+        return reviewed
 
     # ------------------------------------------------------------------
     # Historical case merging

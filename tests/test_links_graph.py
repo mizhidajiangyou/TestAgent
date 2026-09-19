@@ -162,7 +162,9 @@ class TestR3R4:
     def test_same_path_lifecycle(self) -> None:
         graph = build_graph(_USERS_SPEC)
         adjacency = graph.lifecycle_adjacency()
-        assert "POST /users" in adjacency.get("GET /orders", set()) or True
+        # GET /orders and POST /orders share the path -> R3 adjacency.
+        assert "POST /users" not in adjacency.get("GET /orders", set())
+        assert "POST /orders" in adjacency.get("GET /orders", set())
         pairs = {
             frozenset((e.source, e.target)) for e in graph.edges if e.kind == RelationKind.LIFECYCLE
         }

@@ -75,9 +75,7 @@ def normalize_case(case: dict[str, Any]) -> dict[str, Any]:
     out["description"] = _norm_text(str(out.get("description", "")))
     out["preconditions"] = _as_str_list(out.get("preconditions"), _norm_text)
     # Steps: one line each (collapse accidental newlines/whitespace runs).
-    out["steps"] = _as_str_list(
-        out.get("steps"), lambda v: " ".join(_norm_text(str(v)).split())
-    )
+    out["steps"] = _as_str_list(out.get("steps"), lambda v: " ".join(_norm_text(str(v)).split()))
     # expected_results: split semicolon-joined strings into individual items.
     split_results: list[str] = []
     for result in _as_str_list(out.get("expected_results"), _norm_text):

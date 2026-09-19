@@ -190,9 +190,7 @@ class ObligationRegistry:
         return "\n".join(lines)
 
 
-def _spec_fact(
-    endpoint_id: str, fact_id: str, statement: str, full_path: str = ""
-) -> Obligation:
+def _spec_fact(endpoint_id: str, fact_id: str, statement: str, full_path: str = "") -> Obligation:
     return Obligation(
         id=f"SPEC-{endpoint_id}-{fact_id}",
         requirement_id=None,

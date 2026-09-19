@@ -245,13 +245,12 @@ class TestEngineEventBaseline:
         events, llm = await _run_scenario(name, caplog)
         again, _ = await _run_scenario(name, caplog)
         assert _to_dicts(events) == _to_dicts(again), "trajectory not deterministic"
-        assert (
-            len(events)
-            == llm.calls
-            + sum(1 for e in events if e.event != "call")
-            - sum(1 for e in events if e.event == "call")
-            or True
-        )  # sanity only
+        # Real invariant (replaces a vacuous `or True` sanity): rounds are
+        # non-decreasing across the trajectory — a recovery event shares the
+        # round of its triggering call, and each new call increments it.
+        rounds = [e.round for e in events]
+        assert rounds == sorted(rounds), f"rounds not monotonic: {rounds}"
+        assert llm.calls == sum(1 for e in events if e.event == "call")
 
         golden_path = FIXTURE_DIR / f"{name}.json"
         payload = {

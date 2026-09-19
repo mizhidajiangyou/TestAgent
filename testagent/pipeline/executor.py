@@ -264,10 +264,17 @@ class PipelineExecutor:
         return merged
 
     def _flatten(self, outcomes: list[UnitResult], stage: Any) -> list[dict[str, Any]]:
-        """Concat unit items, unwrapping envelope keys when declared."""
+        """Concat unit items, unwrapping envelope keys when declared.
+
+        Only SUCCESS (and EMPTY-with-items salvage) outcomes contribute
+        items: VALIDATION_ERROR etc. may carry their rejected items for
+        auditing (runtime.py contract), and those MUST NOT enter the final
+        artifact (defect ⑧, 2026-09-19 review)."""
         items: list[dict[str, Any]] = []
         unwrap = stage.output.unwrap_keys
         for outcome in outcomes:
+            if outcome.status not in (UnitStatus.SUCCESS, UnitStatus.EMPTY):
+                continue
             for item in outcome.items:
                 if unwrap and isinstance(item, dict):
                     for key in unwrap:

@@ -129,6 +129,14 @@ def _run_task(task: TaskPackage, kwargs: Any, click_ctx: click.Context) -> None:
         f"[green]Done:[/] {count} item(s) -> {path} "
         f"(session {result.session_id}, failed units {result.units_failed})"
     )
+    # Defect ⑧ (2026-09-19 review): a run with failed units or an empty
+    # artifact must not print Done and exit 0 — CI can never trust it.
+    if result.units_failed > 0:
+        console.print(f"[red]{result.units_failed} unit(s) failed; exit 1.[/]")
+        raise SystemExit(1)
+    if count == 0:
+        console.print("[red]Artifact is empty; exit 1.[/]")
+        raise SystemExit(1)
 
 
 def register_tasks(main: Group, registry: Registry) -> None:

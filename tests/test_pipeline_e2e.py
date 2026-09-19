@@ -104,8 +104,24 @@ class TestArchitectureGate:
         ),
     }
     #: Planned shared Settings keys; T1 lands the first (AUDIT_DUMP_ENABLED).
+    # Every non-LLM settings key added since the snapshot baseline (defect
+    # ⑩: only 1 of 15 keys was tracked). LLMSettings sub-model keys are
+    # excluded — the uniqueness test reads the Settings class body.
     _SHARED_SETTINGS_KEYS: tuple[str, ...] = (
         "audit_dump_enabled",
+        "conflict_policy",
+        "cases_budget",
+        "links_enabled",
+        "links_prose_enabled",
+        "links_r6_min_score",
+        "links_max_neighbors",
+        "links_neighbor_chars",
+        "links_cluster_size",
+        "links_max_planned_paths",
+        "links_max_hops",
+        "links_l3b_max_calls",
+        "links_seeding",
+        "links_l0_max_chars",
         "split_mode",
         "single_doc_warn_tokens",
         "review_chunk_size",
@@ -176,12 +192,17 @@ class TestArchitectureGate:
     #: getattr-with-default (plan-links-v15 §3.1 / plan-k §4.2). Delivered
     #: by LINK-S1b; S2 modules and later links code are covered.
     _LINKS_SHARED_FIELDS = ("response_schemas", "binds", "executability", "path_id", "source_stage")
+    # Actual links-domain modules on disk (defect ⑩: the original list
+    # named a nonexistent links.py and missed four delivered modules while
+    # the scan skipped missing files — a gate that silently scans nothing).
     _LINKS_MODULES = (
-        "links.py",
+        "links_fields.py",
+        "links_graph.py",
+        "links_prompt_contract.py",
+        "links_r6.py",
         "pathplanner.py",
         "linkcheck.py",
         "context_builder.py",
-        "links_fields.py",
     )
 
     def test_links_domain_no_raw_getattr_shared_fields(self) -> None:
