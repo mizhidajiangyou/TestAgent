@@ -238,3 +238,7 @@ cankao/
 
 # Task context files are LOCAL ONLY (user ruling 2026-09-16, never commit)
 task-history-migration.md
+task-history-*.md
+
+# Agent commit gate (never tracked: 0 no commit / 1 ask each time / 2 auto)
+.agent_git
