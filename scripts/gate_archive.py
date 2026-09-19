@@ -53,9 +53,7 @@ def _git(*args: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--node", required=True, help="milestone label, e.g. FH2.6-b7.1")
-    parser.add_argument(
-        "--only", default="", help="comma-separated gate ids to run (default: all)"
-    )
+    parser.add_argument("--only", default="", help="comma-separated gate ids to run (default: all)")
     parser.add_argument("--note", default="", help="one-line verdict note")
     args = parser.parse_args()
 
@@ -67,6 +65,9 @@ def main() -> int:
         return 2
 
     sha = _git("rev-parse", "--short", "HEAD") or "nohead"
+    # Measured BEFORE the archive dir exists: creating it makes the tree
+    # dirty, which would make every archive self-report as not-HEAD-exact.
+    dirty = bool(_git("status", "--porcelain"))
     started = datetime.now(UTC)
     target = GATES_ROOT / f"{started:%Y%m%d}-{args.node}-{sha[:7]}"
     target.mkdir(parents=True, exist_ok=True)
@@ -101,7 +102,6 @@ def main() -> int:
         print(f"[gate] {gate_id}: {'PASS' if proc.returncode == 0 else 'FAIL'}")
 
     verdict = all(item["exit"] == 0 for item in results)
-    dirty = bool(_git("status", "--porcelain"))
     manifest = {
         "milestone": args.node,
         "date_utc": started.isoformat(timespec="seconds").replace("+00:00", "Z"),
