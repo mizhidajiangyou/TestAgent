@@ -30,6 +30,7 @@ Registered divergences (B5.3 failure-suite scope, see task.md):
   empty-response semantics: no re-ask).
 """
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -262,6 +263,28 @@ async def _run_pipeline(
 # ----------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------
+# Frozen legacy prompt bytes (B5.4 / plan-k 删除门前置固化)
+#
+# Recorded from ``templates/*.j2`` at commit 4f73474, i.e. from the legacy
+# generator that B5.4 deletes. The reverse-rename diff below is what proves the
+# task-package copy still equals those historical bytes — the comparison
+# survives the deletion instead of disappearing with it.
+# ----------------------------------------------------------------------
+def _sha_full(text: str) -> str:
+    """Full hex digest (the module's ``_sha`` above truncates to 12 for the
+    fingerprint comparisons; the frozen template bytes need the whole digest)."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+LEGACY_PERFORMANCE_PROMPT_SHA256 = (
+    "b13767dc92ac2ab2a40f2c7cd2c97d5fd38190ec77e4255ed79cdcabf6783df5"
+)
+LEGACY_SCRIPT_REVIEW_PROMPT_SHA256 = (
+    "7b4a1fccd2a5f2ec35253fa3b66150905c1e072909660f7ca6527853e9da6a5c"
+)
+
+
 class TestTemplateDiscipline:
     def test_generation_template_is_renamed_copy_of_legacy(self) -> None:
         adapted = (TASK_ROOT / "prompts" / "performance.j2").read_text(encoding="utf-8")
@@ -275,14 +298,12 @@ class TestTemplateDiscipline:
             .replace("{{ auth_type", "{{ config.auth_type")
             .replace("{{ (think_time_ms", "{{ (config.think_time_ms")
         )
-        legacy = (REPO / "templates" / "performance_prompt.j2").read_text(encoding="utf-8")
-        assert reversed_ == legacy
+        assert _sha_full(reversed_) == LEGACY_PERFORMANCE_PROMPT_SHA256
 
     def test_review_template_is_renamed_copy_of_legacy(self) -> None:
         adapted = (TASK_ROOT / "prompts" / "script_review.j2").read_text(encoding="utf-8")
         reversed_ = adapted.replace("script_format", "script_kind")
-        legacy = (REPO / "templates" / "script_review_prompt.j2").read_text(encoding="utf-8")
-        assert reversed_ == legacy
+        assert _sha_full(reversed_) == LEGACY_SCRIPT_REVIEW_PROMPT_SHA256
 
     def test_package_validates_strict(self) -> None:
         task = _task()

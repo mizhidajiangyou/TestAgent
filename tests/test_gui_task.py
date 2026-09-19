@@ -8,6 +8,7 @@
   text contract writes the .py file; fingerprint (system,user) recorded.
 """
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,9 @@ from testagent.cli import main
 from testagent.pipeline.manifest import load_manifest
 
 REPO = Path(__file__).parents[1]
+
+#: Frozen legacy gui prompt bytes (see tests/test_perf_task.py for the reason).
+LEGACY_GUI_TEST_PROMPT_SHA256 = "c911580bb969996556bb1dec2f1f345b958b48ddbc4efc0f72d55e9a855afaca"
 
 
 class TestGuiTaskManifest:
@@ -29,11 +33,15 @@ class TestGuiTaskManifest:
         """Migrated template with endpoints_text renamed back to endpoints
         must be byte-identical with the frozen gui_test_prompt.j2."""
         migrated = (REPO / "tasks" / "gui" / "prompts" / "main.j2").read_text(encoding="utf-8")
-        frozen = (REPO / "templates" / "gui_test_prompt.j2").read_text(encoding="utf-8")
         reversed_rename = migrated.replace("{{ endpoints_text }}", "{{ endpoints }}").replace(
             "{% if endpoints_text %}", "{% if endpoints %}"
         )
-        assert reversed_rename == frozen
+        # Bytes recorded from templates/gui_test_prompt.j2 at 4f73474 — the
+        # legacy template is deleted by B5.4, the comparison is not.
+        assert (
+            hashlib.sha256(reversed_rename.encode("utf-8")).hexdigest()
+            == LEGACY_GUI_TEST_PROMPT_SHA256
+        )
 
     def test_url_default_from_settings(self) -> None:
         from testagent.config.constants import DEFAULT_TARGET_URL
