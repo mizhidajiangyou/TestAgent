@@ -11,6 +11,7 @@ from tests.parity_harness import (
     Fingerprint,
     Fixture,
     ensure_fixture,
+    ensure_no_credentials,
     load_fixture,
     minimal_diff,
     observable_failure_class,
@@ -108,6 +109,19 @@ class TestHarnessSelfTest:
         bad.input = {"api_key": "sk-123"}  # type: ignore[assignment]
         with pytest.raises(AssertionError, match="credential"):
             record_fixture(bad)
+
+    def test_credential_guard_ignores_prompt_vocabulary(self) -> None:
+        """Env-var NAMES and auth schemes are ordinary prompt text (an error
+        contract teaches the model to send ``Bearer <TOKEN>``); blocking them
+        made a recorded HTTP contract impossible to store. The real risk —
+        token shapes and the local key value — still fails loudly."""
+        ensure_no_credentials({"p": "set OPENAI_API_KEY and send Bearer <TOKEN>"})
+        for bad in (
+            {"p": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234"},
+            {"p": "sk-abcdefghijklmnop"},
+        ):
+            with pytest.raises(AssertionError, match="credential|bearer"):
+                ensure_no_credentials(bad)
 
     def test_fingerprint_excludes_volatile_fields(self) -> None:
         """I2: same (system,user,params,label) -> same fingerprint regardless

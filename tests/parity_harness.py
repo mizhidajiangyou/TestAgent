@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -53,6 +54,9 @@ FIXTURE_ROOT = Path(__file__).parents[1] / "tests" / "fixtures" / "migration"
 
 #: Opt-in switch for writing baselines (see module docstring).
 RECORD_ENV = "TESTAGENT_RECORD_PARITY"
+
+#: "Bearer " + a long opaque value = a real token; "Bearer <TOKEN>" is vocabulary.
+_BEARER_TOKEN_RE = re.compile(r"Bearer\s+[A-Za-z0-9\-_.]{20,}")
 
 #: Terminal EngineEvent names (plan-e R5): exactly one per trajectory.
 TERMINAL_EVENTS = {"done", "fail"}
@@ -306,8 +310,11 @@ def ensure_no_credentials(payload: dict[str, Any]) -> None:
     fixtures get committed). Catches token shapes and the real local API-key
     values; variable NAMES are allowed, since the HTTP contract quotes them."""
     text = json.dumps(payload, ensure_ascii=False)
-    for marker in ("sk-", "Bearer ", "-----BEGIN"):
+    for marker in ("sk-", "-----BEGIN"):
         assert marker not in text, f"credential shape {marker!r} leaked into fixture"
+    # A bearer SCHEME is ordinary prompt vocabulary (``Bearer <TOKEN>`` inside an
+    # error contract); only a token-shaped value after it is a leak.
+    assert _BEARER_TOKEN_RE.search(text) is None, "a bearer token leaked into fixture"
     for value in _local_secret_values():
         assert value not in text, "the local API key leaked into a committed fixture"
 
