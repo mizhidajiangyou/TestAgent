@@ -1,0 +1,30 @@
+{
+  "artifact": "import pytest\nfrom playwright.sync_api import Page, expect\n\n\ndef test_home(page: Page) -> None:\n    page.goto('https://x.test')\n    expect(page.get_by_role('heading')).to_be_visible()",
+  "events": [],
+  "failure_semantics": {
+    "observable": "ok",
+    "units_failed": 0
+  },
+  "fixture_version": 1,
+  "input": {
+    "requirements": "req.md",
+    "url": "x.test"
+  },
+  "meta": {
+    "git_sha": "bee63d560ad3",
+    "recorded_utc": "2026-09-19T08:49:11.372282+00:00",
+    "task": "gui"
+  },
+  "name": "gui-baseline",
+  "request_trace": [
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {},
+      "response_text": "import pytest\nfrom playwright.sync_api import Page, expect\n\n\ndef test_home(page: Page) -> None:\n    page.goto('https://x.test')\n    expect(page.get_by_role('heading')).to_be_visible()\n",
+      "system_sha256": "2920e8771f7bc1f890b457659eac3cb40852d710a6ea05cafca9fdebcae6e87c",
+      "user_sha256": "859679a79a0863e9a65cf20e38e2d1dea40a95a8e21325bc5a76bc3bf4a85f67"
+    }
+  ],
+  "task": "gui"
+}

@@ -1,0 +1,31 @@
+{
+  "artifact": "import http from 'k6/http';\nexport const options = {vus: 1, duration: '1s'};\nexport default function () { http.get('https://x.test/users'); }",
+  "events": [],
+  "failure_semantics": {
+    "observable": "ok",
+    "units_failed": 0
+  },
+  "fixture_version": 1,
+  "input": {
+    "base_url": "x.test",
+    "script_format": "k6",
+    "swagger": "spec.json"
+  },
+  "meta": {
+    "git_sha": "bee63d560ad3",
+    "recorded_utc": "2026-09-19T08:49:11.395962+00:00",
+    "task": "perf"
+  },
+  "name": "perf-baseline-k6",
+  "request_trace": [
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {},
+      "response_text": "import http from 'k6/http';\nexport const options = {vus: 1, duration: '1s'};\nexport default function () { http.get('https://x.test/users'); }\n",
+      "system_sha256": "f9df73534d1bb627f3362a45cf0baf9407351f97ad10b9c109adc15895ddb969",
+      "user_sha256": "b62b46369125b4b2d5a83956599ab2231f9eaa831904f72d2a1e0538092f6ae9"
+    }
+  ],
+  "task": "perf"
+}
