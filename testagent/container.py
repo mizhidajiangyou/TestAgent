@@ -20,6 +20,7 @@ from testagent.engine.truncation import TruncationPolicy
 from testagent.generators.gui_test_generator import GUITestGenerator
 from testagent.generators.performance_generator import PerformanceGenerator
 from testagent.generators.testcase_generator import TestCaseGenerator
+from testagent.parsers.document_parser import DocumentParser
 from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
 from testagent.pipeline.executor import PipelineExecutor
@@ -50,6 +51,7 @@ class Container(containers.DeclarativeContainer):
     prompt_builder = providers.Singleton(PromptBuilder)
     swagger_parser = providers.Singleton(SwaggerParser)
     requirement_parser = providers.Singleton(RequirementParser)
+    document_parser = providers.Singleton(DocumentParser)
     testcase_report = providers.Singleton(TestCaseReport)
     performance_report = providers.Singleton(PerformanceReport)
 

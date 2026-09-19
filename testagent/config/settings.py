@@ -199,6 +199,26 @@ class Settings(BaseSettings):
             raise ValueError("links_* numeric settings must be >= 1 (l3b budget cannot be 0)")
         return v
 
+    @field_validator(
+        "single_doc_warn_tokens",
+        "review_chunk_size",
+        "review_max_prompt_chars",
+        "gui_reference_max_cases",
+        "gui_reference_max_chars",
+    )
+    @classmethod
+    def _validate_modular_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("modular capability numeric settings must be >= 1")
+        return v
+
+    @field_validator("review_max_chunk_failure_ratio")
+    @classmethod
+    def _validate_review_failure_ratio(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("review_max_chunk_failure_ratio must be within [0, 1]")
+        return v
+
     @field_validator("links_r6_min_score")
     @classmethod
     def _validate_links_r6_score(cls, v: float) -> float:
@@ -289,6 +309,25 @@ class Settings(BaseSettings):
     links_seeding: Literal["priority", "all"] = Field(default="priority", alias="LINKS_SEEDING")
     #: L0 character budget (rendered length is the only degradation trigger).
     links_l0_max_chars: int = Field(default=8000, alias="LINKS_L0_MAX_CHARS")
+
+    # --- modular capabilities (plan-modular-capabilities-v4 §3.1) ---
+    #: Requirement input mode: ``auto`` keeps chapter splitting, ``single``
+    #: feeds the whole document as exactly one requirement unit (Phase 1).
+    split_mode: Literal["auto", "single"] = Field(default="auto", alias="SPLIT_MODE")
+    #: Single-doc oversize WARNING threshold (estimated tokens; warn only).
+    single_doc_warn_tokens: int = Field(default=8000, alias="SINGLE_DOC_WARN_TOKENS")
+    #: Independent review: max logical entries per chunk.
+    review_chunk_size: int = Field(default=20, alias="REVIEW_CHUNK_SIZE")
+    #: Independent review: chunk-failure ratio that fails the whole document.
+    review_max_chunk_failure_ratio: float = Field(
+        default=0.5, alias="REVIEW_MAX_CHUNK_FAILURE_RATIO"
+    )
+    #: Independent review: rendered system+user character cap per call.
+    review_max_prompt_chars: int = Field(default=48000, alias="REVIEW_MAX_PROMPT_CHARS")
+    #: GUI reference import: max cases rendered into the reference block.
+    gui_reference_max_cases: int = Field(default=30, alias="GUI_REFERENCE_MAX_CASES")
+    #: GUI reference import: final rendered character cap.
+    gui_reference_max_chars: int = Field(default=16000, alias="GUI_REFERENCE_MAX_CHARS")
 
 
 @lru_cache(maxsize=1)
