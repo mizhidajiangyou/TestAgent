@@ -1,0 +1,111 @@
+{
+  "artifact": [
+    {
+      "endpoint": "GET /users",
+      "id": "TC-XXX",
+      "test_type": "functional",
+      "title": "list users"
+    },
+    {
+      "endpoint": "POST /users",
+      "id": "TC-XXX",
+      "test_type": "functional",
+      "title": "create user"
+    }
+  ],
+  "events": [],
+  "failure_semantics": {
+    "observable_classes": [
+      "ok"
+    ],
+    "units": [
+      {
+        "observable": "ok",
+        "stage": "phase1",
+        "units_failed": 0,
+        "units_total": 3
+      },
+      {
+        "observable": "ok",
+        "stage": "phase2_api",
+        "units_failed": 0,
+        "units_total": 1
+      }
+    ],
+    "units_failed": 0
+  },
+  "fixture_version": 1,
+  "input": {
+    "requirements": "req.md",
+    "swagger": "spec.json"
+  },
+  "meta": {
+    "git_sha": "4c3be9e2fc1e",
+    "recorded_utc": "2026-09-19T08:47:12.920133+00:00",
+    "review_enabled": true
+  },
+  "name": "tc-a5-review-on",
+  "request_trace": [
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
+      "user_sha256": "e71d524d6107ab776fa31e866e26cf76242e1ea7dcc7160555fdef7693b79db5"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
+      "user_sha256": "e71d524d6107ab776fa31e866e26cf76242e1ea7dcc7160555fdef7693b79db5"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
+      "user_sha256": "e71d524d6107ab776fa31e866e26cf76242e1ea7dcc7160555fdef7693b79db5"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "370f7a3a2080be485223357fb8a389d08d7ada7c1a24f98e781cbd9dba68a858",
+      "user_sha256": "86ba7e3f8ed59405c031b55d7f4cc5ff648eb8f1b1fcf649f40d6d394250a004"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": null
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "d235109134f76670dcb7af4018eee56d901fe6443243838823132077c09d9fbe",
+      "user_sha256": "1a070f761a8f5db90c06f282d698b749b6ed222336bdf374b4542154b0925867"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": null
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "d235109134f76670dcb7af4018eee56d901fe6443243838823132077c09d9fbe",
+      "user_sha256": "1486095915efe3b5e7a57b47954766f9bdb1715683b19dbc4372520b756becd1"
+    }
+  ],
+  "task": "testcase"
+}

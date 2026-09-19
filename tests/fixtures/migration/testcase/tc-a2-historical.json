@@ -1,0 +1,124 @@
+{
+  "artifact": [
+    {
+      "endpoint": "GET /users",
+      "expected_results": [
+        "ok"
+      ],
+      "id": "TC-001",
+      "priority": "high",
+      "steps": [
+        "s"
+      ],
+      "test_type": "functional",
+      "title": "list users"
+    },
+    {
+      "endpoint": "POST /users",
+      "id": "TC-002",
+      "test_type": "functional",
+      "title": "create user"
+    }
+  ],
+  "events": [],
+  "failure_semantics": {
+    "observable_classes": [
+      "failed"
+    ],
+    "units": [
+      {
+        "observable": "ok",
+        "stage": "phase1",
+        "units_failed": 0,
+        "units_total": 3
+      },
+      {
+        "observable": "ok",
+        "stage": "phase2_api",
+        "units_failed": 1,
+        "units_total": 1
+      },
+      {
+        "count": 1,
+        "observable": "failed_units",
+        "stage": "*"
+      }
+    ],
+    "units_failed": 1
+  },
+  "fixture_version": 1,
+  "input": {
+    "historical_cases": "history.json",
+    "requirements": "req.md",
+    "swagger": "spec.json"
+  },
+  "meta": {
+    "git_sha": "4c3be9e2fc1e",
+    "recorded_utc": "2026-09-19T08:47:12.842657+00:00",
+    "review_enabled": false
+  },
+  "name": "tc-a2-historical",
+  "request_trace": [
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
+      "user_sha256": "7a1fccf19ac22d38f4271c66a518be34bfebf889eea6799d706ee0cac5ab93fa"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
+      "user_sha256": "7a1fccf19ac22d38f4271c66a518be34bfebf889eea6799d706ee0cac5ab93fa"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
+      "user_sha256": "7a1fccf19ac22d38f4271c66a518be34bfebf889eea6799d706ee0cac5ab93fa"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "",
+      "system_sha256": "370f7a3a2080be485223357fb8a389d08d7ada7c1a24f98e781cbd9dba68a858",
+      "user_sha256": "86ba7e3f8ed59405c031b55d7f4cc5ff648eb8f1b1fcf649f40d6d394250a004"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "",
+      "system_sha256": "370f7a3a2080be485223357fb8a389d08d7ada7c1a24f98e781cbd9dba68a858",
+      "user_sha256": "1288f399c0b3cee9ccd799e589c379e0e3891465553bebc8c45e79195c814d89"
+    },
+    {
+      "label": "",
+      "model": "fake-model",
+      "params": {
+        "max_tokens": 16000
+      },
+      "response_text": "",
+      "system_sha256": "370f7a3a2080be485223357fb8a389d08d7ada7c1a24f98e781cbd9dba68a858",
+      "user_sha256": "1288f399c0b3cee9ccd799e589c379e0e3891465553bebc8c45e79195c814d89"
+    }
+  ],
+  "task": "testcase"
+}

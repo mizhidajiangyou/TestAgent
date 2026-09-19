@@ -1,0 +1,23 @@
+{
+  "fixture_version": 1,
+  "task": "testcase",
+  "recorded_from": "new chain (tasks/testcase + build_engine_generate_unit, post-fix behavior first recording; no legacy baseline existed)",
+  "post_wiring_replay_subset": {
+    "baseline": [
+      "tc-a1-baseline"
+    ],
+    "historical": [
+      "tc-a2-historical"
+    ],
+    "truncation": [
+      "tc-a3-truncation"
+    ],
+    "empty-unit": [
+      "tc-a4-empty-unit"
+    ],
+    "review-on": [
+      "tc-a5-review-on"
+    ]
+  },
+  "note": "Subset IDs frozen per plan-l L-4 v3: post-link-wiring replay takes exactly these fixtures (mechanical selection, executor has no add/remove rights). Missing ID = FH2.4 milestone not passable."
+}
