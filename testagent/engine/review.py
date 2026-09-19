@@ -137,12 +137,29 @@ class ReviewLoop[T]:
         current = artifact
         rounds_executed = 0
         rounds_succeeded = 0
+        # FH1.4 short-circuit: when the previous round was rejected by the
+        # shrink guard AND this round would use the SAME client (single-model
+        # fallback), the identical input re-run is skipped — same input to
+        # the same model repeats the same failure (修复4, a.log case).
+        prev_rejected = False
+        prev_client: LLMClient | None = None
 
         for round_idx in range(1, self._max_rounds + 1):
             rounds_executed += 1
             use_secondary = round_idx % 2 == 1
             # Odd rounds: secondary (non-primary) model; even rounds: primary.
             client = self._review_llm if use_secondary else self._llm
+            if prev_rejected and client is prev_client:
+                logger.info(
+                    "review round %d/%d skipped_after_rejection | label=%s "
+                    "(same client, input unchanged after shrink-guard rejection)",
+                    round_idx,
+                    self._max_rounds,
+                    label,
+                )
+                prev_rejected = True
+                prev_client = client
+                continue
             system_prompt, user_prompt = build_prompt(current, round_idx)
 
             tokens_out: int | None = None
@@ -155,6 +172,8 @@ class ReviewLoop[T]:
 
             if not refined:
                 self._log_round(round_idx, client, label, ok=False, tokens_out=tokens_out)
+                prev_rejected = False
+                prev_client = client
                 continue
 
             if _coverage_regression(current, refined):
@@ -169,10 +188,14 @@ class ReviewLoop[T]:
                     MIN_RETENTION_RATIO * 100,
                 )
                 self._log_round(round_idx, client, label, ok=False, tokens_out=tokens_out)
+                prev_rejected = True
+                prev_client = client
                 continue
 
             rounds_succeeded += 1
             current = refined
+            prev_rejected = False
+            prev_client = client
             self._log_round(round_idx, client, label, ok=True, tokens_out=tokens_out)
 
         if self._max_rounds > 0 and rounds_succeeded == 0:
@@ -207,11 +230,25 @@ class ReviewLoop[T]:
         current = artifact
         rounds_executed = 0
         rounds_succeeded = 0
+        # FH1.4 short-circuit (async mirror): see the sync ``run`` comment.
+        prev_rejected = False
+        prev_client: LLMClient | None = None
 
         for round_idx in range(1, self._max_rounds + 1):
             rounds_executed += 1
             use_secondary = round_idx % 2 == 1
             client = self._review_llm if use_secondary else self._llm
+            if prev_rejected and client is prev_client:
+                logger.info(
+                    "review round %d/%d skipped_after_rejection | label=%s "
+                    "(same client, input unchanged after shrink-guard rejection)",
+                    round_idx,
+                    self._max_rounds,
+                    label,
+                )
+                prev_rejected = True
+                prev_client = client
+                continue
             system_prompt, user_prompt = build_prompt(current, round_idx)
 
             tokens_out: int | None = None
@@ -224,6 +261,8 @@ class ReviewLoop[T]:
 
             if not refined:
                 self._log_round(round_idx, client, label, ok=False, tokens_out=tokens_out)
+                prev_rejected = False
+                prev_client = client
                 continue
 
             if _coverage_regression(current, refined):
@@ -238,10 +277,14 @@ class ReviewLoop[T]:
                     MIN_RETENTION_RATIO * 100,
                 )
                 self._log_round(round_idx, client, label, ok=False, tokens_out=tokens_out)
+                prev_rejected = True
+                prev_client = client
                 continue
 
             rounds_succeeded += 1
             current = refined
+            prev_rejected = False
+            prev_client = client
             self._log_round(round_idx, client, label, ok=True, tokens_out=tokens_out)
 
         if self._max_rounds > 0 and rounds_succeeded == 0:

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -469,3 +470,119 @@ class TestReviewLoopAsync:
 
         assert len(secondary.async_calls) == 2
         assert result.artifact == "ok-data"
+
+
+class TestShortCircuit:
+    """FH1.4 (修复4): after a shrink-guard rejection, the next round with the
+    SAME client and unchanged input is skipped (skipped_after_rejection)."""
+
+    def _loop(self, max_rounds: int) -> ReviewLoop:
+        return ReviewLoop(
+            primary_llm=MagicMock(),
+            review_llm=MagicMock(),
+            prompt_builder=MagicMock(),
+            max_rounds=max_rounds,
+        )
+
+    def test_sync_skip_after_rejection_single_model(self) -> None:
+        """Single-model fallback: round 1 rejected by shrink guard -> round 2
+        (same client, same input) must NOT call the LLM."""
+        llm = MagicMock()
+        loop = ReviewLoop(
+            primary_llm=llm,
+            review_llm=llm,  # same object: single-model fallback
+            prompt_builder=MagicMock(),
+            max_rounds=2,
+        )
+        calls: list[int] = []
+
+        def call_llm(system, user, client, round_idx):
+            calls.append(round_idx)
+            return [{"id": 1}]  # one item from a 5-item artifact: < 50% retention
+
+        result = loop.run(
+            [{"id": i} for i in range(5)],
+            build_prompt=lambda current, idx: ("sys", "user"),
+            call_llm=call_llm,
+            label="sc",
+        )
+        assert calls == [1], "round 2 must be skipped (no second LLM call)"
+        assert result.rounds_executed == 2  # the skip still counts as a round
+        assert result.used_review is False
+        assert result.artifact == [{"id": 0}, {"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}]
+
+    @pytest.mark.asyncio
+    async def test_async_skip_after_rejection_single_model(self) -> None:
+        llm = MagicMock()
+        loop = ReviewLoop(
+            primary_llm=llm,
+            review_llm=llm,
+            prompt_builder=MagicMock(),
+            max_rounds=2,
+        )
+        calls: list[int] = []
+
+        async def acall_llm(system, user, client, round_idx):
+            calls.append(round_idx)
+            return [{"id": 1}]
+
+        result = await loop.arun(
+            [{"id": i} for i in range(5)],
+            build_prompt=lambda current, idx: ("sys", "user"),
+            acall_llm=acall_llm,
+            label="sc",
+        )
+        assert calls == [1]
+        assert result.used_review is False
+
+    def test_no_skip_when_clients_alternate(self) -> None:
+        """Cross-model review (distinct clients): round 2 uses a different
+        client, so the short-circuit must NOT fire."""
+        primary, secondary = MagicMock(), MagicMock()
+        loop = ReviewLoop(
+            primary_llm=primary,
+            review_llm=secondary,
+            prompt_builder=MagicMock(),
+            max_rounds=2,
+        )
+        calls: list[int] = []
+
+        def call_llm(system, user, client, round_idx):
+            calls.append(round_idx)
+            return [{"id": 1}]
+
+        loop.run(
+            [{"id": i} for i in range(5)],
+            build_prompt=lambda current, idx: ("sys", "user"),
+            call_llm=call_llm,
+        )
+        assert calls == [1, 2], "alternating clients must not be skipped"
+
+    def test_no_skip_after_successful_round(self) -> None:
+        """A successful round clears the rejection flag: the next same-client
+        round runs normally (only post-rejection rounds skip)."""
+        llm = MagicMock()
+        loop = ReviewLoop(
+            primary_llm=llm,
+            review_llm=llm,
+            prompt_builder=MagicMock(),
+            max_rounds=3,
+        )
+        calls: list[int] = []
+        responses = [
+            [{"id": i} for i in range(10)],  # round 1: full rewrite, accepted
+            [{"id": 1}],  # round 2: rejected (< 50%)
+            [{"id": 1}],  # round 3: would be skipped (same client, rejected)
+        ]
+
+        def call_llm(system, user, client, round_idx):
+            calls.append(round_idx)
+            return responses.pop(0)
+
+        result = loop.run(
+            [{"id": i} for i in range(5)],
+            build_prompt=lambda current, idx: ("sys", "user"),
+            call_llm=call_llm,
+        )
+        assert calls == [1, 2], "round 3 must be skipped after round-2 rejection"
+        assert result.rounds_executed == 3
