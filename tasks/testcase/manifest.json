@@ -103,6 +103,9 @@
       "policy": "from_settings",
       "slim_continue": true,
       "scope_key_field": "endpoint"
+    },
+    "quality": {
+      "enabled": true
     }
   },
   "review": {

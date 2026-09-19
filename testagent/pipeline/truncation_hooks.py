@@ -142,6 +142,7 @@ def make_dict_hooks(
     scope_item_key: Callable[[Any], str] | None = None,
     build_reask: Callable[[str, str, str, str], str] | None = None,
     build_continue_context: Callable[[EngineContext], str] | None = None,
+    expected_for: Callable[[list[str]], dict[str, int]] | None = None,
 ) -> GenericHooks:
     """Assemble dict-level :class:`GenericHooks` (B6b.1's building block —
     wired from manifest ``TruncationSpec`` config there).
@@ -181,4 +182,5 @@ def make_dict_hooks(
         scope_item_key=resolved_scope_item_key,
         build_reask=build_reask or generic_reask,
         build_continue_context=build_continue_context,
+        expected_for=expected_for,
     )

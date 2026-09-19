@@ -1,14 +1,72 @@
 {
   "artifact": [
     {
+      "binds": {},
+      "covers_obligations": [],
+      "description": "list users on GET /users",
       "endpoint": "GET /users",
+      "equivalence_class": "",
+      "executability": {
+        "bind_violations": [],
+        "closure_rate": "1.0",
+        "forward_references": [],
+        "grade": "INTEGRATION",
+        "orphans": [],
+        "setup_dependency_completeness": "n/a",
+        "spec_blind": []
+      },
+      "expected_results": [
+        "200 and the payload matches"
+      ],
       "id": "TC-001",
+      "preconditions": [
+        "user exists"
+      ],
+      "priority": "high",
+      "scenario_operation": "",
+      "scenario_scene": "",
+      "scenario_variant": "",
+      "steps": [
+        "call GET /users"
+      ],
+      "tags": [
+        "smoke"
+      ],
       "test_type": "functional",
       "title": "list users"
     },
     {
+      "binds": {},
+      "covers_obligations": [],
+      "description": "create user on POST /users",
       "endpoint": "POST /users",
+      "equivalence_class": "",
+      "executability": {
+        "bind_violations": [],
+        "closure_rate": "1.0",
+        "forward_references": [],
+        "grade": "INTEGRATION",
+        "orphans": [],
+        "setup_dependency_completeness": "n/a",
+        "spec_blind": []
+      },
+      "expected_results": [
+        "200 and the payload matches"
+      ],
       "id": "TC-002",
+      "preconditions": [
+        "user exists"
+      ],
+      "priority": "high",
+      "scenario_operation": "",
+      "scenario_scene": "",
+      "scenario_variant": "",
+      "steps": [
+        "call POST /users"
+      ],
+      "tags": [
+        "smoke"
+      ],
       "test_type": "functional",
       "title": "create user"
     }
@@ -45,8 +103,8 @@
     "swagger": "spec.json"
   },
   "meta": {
-    "git_sha": "4c3be9e2fc1e",
-    "recorded_utc": "2026-09-19T08:47:12.893819+00:00",
+    "git_sha": "75680a474463",
+    "recorded_utc": "2026-09-19T14:43:06.698171+00:00",
     "review_enabled": false
   },
   "name": "tc-a4-empty-unit",
@@ -67,7 +125,7 @@
       "params": {
         "max_tokens": 16000
       },
-      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"description\": \"list users on GET /users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call GET /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"description\": \"create user on POST /users\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call POST /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}]",
       "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
       "user_sha256": "5eea7ae3d167d54a86e73ae2ab7f0bd5a74aea3a51870ade7d203dc602c6513a"
     },
@@ -77,7 +135,7 @@
       "params": {
         "max_tokens": 16000
       },
-      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"description\": \"list users on GET /users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call GET /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"description\": \"create user on POST /users\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call POST /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}]",
       "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
       "user_sha256": "fa234b85d6f2d23b2c78821f15edb9ca3b76b98a6a63a2e1ca06c123af7d9c13"
     },
@@ -87,7 +145,7 @@
       "params": {
         "max_tokens": 16000
       },
-      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\"}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\"}]",
+      "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"description\": \"list users on GET /users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call GET /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"description\": \"create user on POST /users\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call POST /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}]",
       "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
       "user_sha256": "fa234b85d6f2d23b2c78821f15edb9ca3b76b98a6a63a2e1ca06c123af7d9c13"
     },

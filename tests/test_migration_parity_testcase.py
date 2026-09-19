@@ -93,32 +93,32 @@ class ScriptedPipelineLLM(LLMClient):
         return None
 
 
+#: Realistic model output: the quality line drops degenerate stubs (empty title
+#: or no expected results), so a payload without them could never survive the
+#: chain these fixtures claim to pin (they predate QL-1 wiring, when the new
+#: chain had no such filter — see the re-record note in the commit).
+def _case(title: str, endpoint: str, test_type: str) -> dict[str, Any]:
+    return {
+        "id": "TC-XXX",
+        "title": title,
+        "description": f"{title} on {endpoint}",
+        "endpoint": endpoint,
+        "test_type": test_type,
+        "priority": "high",
+        "preconditions": ["user exists"],
+        "steps": [f"call {endpoint}"],
+        "expected_results": ["200 and the payload matches"],
+        "tags": ["smoke"],
+    }
+
+
 _VALID = json.dumps(
     [
-        {
-            "id": "TC-XXX",
-            "title": "list users",
-            "endpoint": "GET /users",
-            "test_type": "functional",
-        },
-        {
-            "id": "TC-XXX",
-            "title": "create user",
-            "endpoint": "POST /users",
-            "test_type": "functional",
-        },
+        _case("list users", "GET /users", "functional"),
+        _case("create user", "POST /users", "functional"),
     ]
 )
-_ALTERNATIVE = json.dumps(
-    [
-        {
-            "id": "TC-XXX",
-            "title": "delete user",
-            "endpoint": "GET /users/{id}",
-            "test_type": "negative",
-        }
-    ]
-)
+_ALTERNATIVE = json.dumps([_case("delete user", "GET /users/{id}", "negative")])
 _TRUNCATED = _VALID[:-14]  # cut mid-JSON: salvage + continue path
 
 

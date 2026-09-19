@@ -36,6 +36,7 @@ __all__ = [
     "dict_to_testcase",
     "merge_historical_cases",
     "testcase_to_dict",
+    "testcase_to_full_dict",
 ]
 
 H1_CONTRACT = {
@@ -89,6 +90,15 @@ def dict_to_testcase(item: dict[str, Any], *, index: int = 0) -> TestCase | None
         steps=[str(s) for s in item.get("steps", []) or []],
         expected_results=[str(e) for e in item.get("expected_results", []) or []],
         tags=[str(t) for t in item.get("tags", []) or []],
+        binds=item.get("binds") or {},
+        executability=item.get("executability") or {},
+        scenario_operation=str(item.get("scenario_operation", "") or ""),
+        scenario_scene=str(item.get("scenario_scene", "") or ""),
+        scenario_variant=str(item.get("scenario_variant", "") or ""),
+        equivalence_class=str(item.get("equivalence_class", "") or ""),
+        covers_obligations=[str(c) for c in item.get("covers_obligations") or []],
+        path_id=str(item.get("path_id", "") or ""),
+        source_stage=str(item.get("source_stage", "") or ""),
     )
 
 
@@ -105,6 +115,35 @@ def testcase_to_dict(tc: TestCase) -> dict[str, Any]:
         "steps": list(tc.steps),
         "expected_results": list(tc.expected_results),
         "tags": list(tc.tags),
+    }
+
+
+def testcase_to_full_dict(tc: TestCase) -> dict[str, Any]:
+    """TestCase → the 17-key document (engine dict + quality columns).
+
+    This is the shape the quality passes read (``semantic_validation``,
+    ``placeholder_closure_metrics``, ``grade_case``) and the shape the web API
+    has always returned per case — so it has exactly one holder. The 10-key
+    ``testcase_to_dict`` above stays the pipeline artifact representation.
+    """
+    return {
+        "id": tc.id,
+        "title": tc.title,
+        "description": tc.description,
+        "endpoint": tc.endpoint.full_path,
+        "test_type": tc.test_type.value,
+        "scenario_operation": tc.scenario_operation,
+        "scenario_scene": tc.scenario_scene,
+        "scenario_variant": tc.scenario_variant,
+        "equivalence_class": tc.equivalence_class,
+        "covers_obligations": tc.covers_obligations,
+        "binds": tc.binds,
+        "executability": tc.executability,
+        "priority": tc.priority.value,
+        "preconditions": tc.preconditions,
+        "steps": tc.steps,
+        "expected_results": tc.expected_results,
+        "tags": tc.tags,
     }
 
 

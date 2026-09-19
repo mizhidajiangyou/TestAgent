@@ -128,10 +128,25 @@ class MergeSpec(StrictModel):
 
 
 class TruncationSpec(StrictModel):
-    enabled: bool = True
+    #: Engine-backed recovery is opt-IN per package (plan-d D8: perf/gui never
+    #: adopt it). The composition root wires one unit generator for every
+    #: task, so a package that does not declare this stays on the plain path.
+    enabled: bool = False
     policy: str = "from_settings"
     slim_continue: bool = True
     scope_key_field: str = ""
+
+
+class QualitySpec(StrictModel):
+    """Case quality line (fix-plan T1~T13) — opt-IN per package.
+
+    Off by default: the deterministic columns (normalization, scenario dedup,
+    obligation floor/accounting, conflict adjudication, executability grading,
+    session budget) only make sense for a structured case artifact, and a
+    package that does not declare them must keep the plain dict pipeline.
+    """
+
+    enabled: bool = False
 
 
 class ValidatorSpec(StrictModel):
@@ -193,6 +208,7 @@ class PipelineSpec(StrictModel):
     stages: list[StageSpec]
     merge: MergeSpec = Field(default_factory=MergeSpec)
     truncation: TruncationSpec = Field(default_factory=TruncationSpec)
+    quality: QualitySpec = Field(default_factory=QualitySpec)
     fan_out_recover: bool = True
 
     @field_validator("stages")

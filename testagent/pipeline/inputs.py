@@ -144,6 +144,10 @@ class TaskContext:
     raw: dict[str, Any] = field(default_factory=dict)  # CLI values as given
     parsed: dict[str, Any] = field(default_factory=dict)  # parsed products
     settings_views: dict[str, Any] = field(default_factory=dict)  # lang/mode/...
+    #: Per-run case quality line (pipeline.quality), attached by the executor
+    #: when the package declares it. Unit generators use it for the obligation
+    #: floor and the scope-aware dict->TestCase conversion.
+    quality: Any = None
 
 
 def _resolve_settings_value(settings: Any, key: str) -> Any:

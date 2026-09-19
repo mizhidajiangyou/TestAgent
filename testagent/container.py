@@ -25,7 +25,7 @@ from testagent.parsers.requirement_parser import RequirementParser
 from testagent.parsers.swagger_parser import SwaggerParser
 from testagent.pipeline.executor import PipelineExecutor
 from testagent.pipeline.registry import get_registry
-from testagent.pipeline.runtime import build_generate_unit, build_review_runner
+from testagent.pipeline.runtime import build_engine_generate_unit, build_review_runner
 from testagent.reports.performance_report import PerformanceReport
 from testagent.reports.testcase_report import TestCaseReport
 
@@ -79,9 +79,15 @@ class Container(containers.DeclarativeContainer):
         PipelineExecutor,
         llm_client=llm_client,
         settings=settings,
+        # Engine-backed recovery, opt-in per package via manifest
+        # pipeline.truncation.enabled (tasks/testcase declares it; perf/gui do
+        # not and are delegated to the single-call path byte-for-byte). The cap
+        # is injected here — a pipeline module reading the settings singleton
+        # would ignore every override the composition root applies.
         generate_unit=providers.Callable(
-            build_generate_unit,
+            build_engine_generate_unit,
             llm=llm_client.provided,
+            output_token_cap=settings.provided.llm.max_output_tokens,
         ),
         review_runner=providers.Callable(
             build_review_runner,

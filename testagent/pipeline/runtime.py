@@ -27,6 +27,7 @@ from testagent.pipeline.review_hooks import (
     make_text_hooks,
 )
 from testagent.pipeline.status import UnitResult, UnitStatus
+from testagent.pipeline.testcase_adapter import testcase_to_full_dict
 from testagent.pipeline.validators import strip_fences, validate_structured, validate_text
 
 if TYPE_CHECKING:
@@ -149,6 +150,18 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
         session_id: str,
         fingerprint_log: FingerprintLog | None = None,
     ) -> UnitResult:
+        spec = task.manifest.pipeline.truncation
+        if not spec.enabled:
+            # Rollback seam: delegate to the single-call implementation. This
+            # must happen BEFORE rendering/recording — otherwise a delegated
+            # unit records two fingerprints (one per path) and the plain path
+            # it is supposed to reproduce byte-for-byte no longer matches.
+            plain = build_generate_unit(llm)
+            result: UnitResult = await plain(
+                task, stage, label, unit_ctx, ctx, session_id, fingerprint_log
+            )
+            return result
+
         render_ctx = {**ctx.parsed, **ctx.settings_views, **_unit_views(unit_ctx)}
         system_prompt = task.system_prompt(stage.system_prompt, render_ctx)
         user_prompt = task.render(stage.template, render_ctx)
@@ -160,15 +173,6 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
                 params={"via": "pipeline-engine"},
                 label=CALL_LABEL.get(""),
             )
-
-        spec = task.manifest.pipeline.truncation
-        if not spec.enabled:
-            # Rollback seam: delegate to the single-call implementation.
-            plain = build_generate_unit(llm)
-            result: UnitResult = await plain(
-                task, stage, label, unit_ctx, ctx, session_id, fingerprint_log
-            )
-            return result
 
         from testagent.engine.truncation import TruncationEngine, TruncationPolicy
         from testagent.pipeline.truncation_hooks import make_dict_hooks
@@ -243,11 +247,16 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
                 return f"{method} {path}"
             return str(item)
 
+        quality = ctx.quality
         hooks = make_dict_hooks(
             extract=_extract,
             salvage=_salvage,
             scope_field=spec.scope_key_field or "endpoint",
             scope_item_key=_scope_item_key,
+            # Obligation-driven quota floor (T7) — absent unless the package
+            # declares the quality line, in which case the executor attaches a
+            # per-run pass onto the TaskContext.
+            expected_for=quality.expected_for if quality is not None else None,
         )
         engine = TruncationEngine(policy, json_mode=False, hooks=hooks)
         scope_items = _unit_scope_items(unit_ctx, ctx)
@@ -259,6 +268,12 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
         schema = task.manifest.artifact.item_schema
         if schema and validate_structured(items, schema):
             return UnitResult(status=UnitStatus.VALIDATION_ERROR, items=items)
+        if quality is not None:
+            # Same conversion the legacy chain ran per batch (T8 identity dedup,
+            # T11a normalization, endpoint scoping, T11b semantic validation).
+            # Schema validation above stays on the raw model output.
+            endpoints = list(ctx.parsed.get("endpoints") or [])
+            items = [testcase_to_full_dict(tc) for tc in quality.to_test_cases(items, endpoints)]
         return UnitResult(status=UnitStatus.SUCCESS, items=items)
 
     return generate_unit

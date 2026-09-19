@@ -101,16 +101,53 @@ def write_artifact(
     return output_path
 
 
+#: Columns whose CSV form joins a list, and those serialized as JSON.
+_CSV_JOINED = ("preconditions", "steps", "expected_results", "tags", "covers_obligations")
+_CSV_JSON = ("binds", "executability")
+
+
+def csv_row(item: dict[str, Any]) -> dict[str, str]:
+    """Flatten one case dict into a CSV row.
+
+    Single holder for the flattening rules and the column list: the legacy
+    generator used to own an identical copy, and two holders of one row
+    contract is how download and file output silently disagree.
+    """
+    row: dict[str, str] = {}
+    for column in CSV_COLUMNS:
+        value = item.get(column, "" if column not in _CSV_JSON else None)
+        if column in _CSV_JOINED:
+            row[column] = (
+                "; ".join(str(v) for v in value) if isinstance(value, list) else str(value)
+            )
+        elif column in _CSV_JSON:
+            row[column] = json.dumps(value or {}, ensure_ascii=False)
+        else:
+            row[column] = value if isinstance(value, str) else str(value)
+    return row
+
+
+def render_csv_text(items: list[dict[str, Any]]) -> str:
+    """CSV document (header + rows, no BOM) for the web download path."""
+    import io
+
+    buffer = io.StringIO(newline="")
+    # \n, not the csv module's \r\n: the web download used to come from a file
+    # read back with universal newlines, so \n IS the HTTP contract here. The
+    # file writer below keeps \r\n (legacy CLI artifact bytes).
+    writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    for item in items:
+        writer.writerow(csv_row(item))
+    return buffer.getvalue()
+
+
 def _write_csv(items: list[dict[str, Any]], path: Path) -> None:
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         writer.writeheader()
         for item in items:
-            row = {k: item.get(k, "") for k in CSV_COLUMNS}
-            for key in ("preconditions", "steps", "expected_results", "tags"):
-                value = row[key]
-                row[key] = "; ".join(str(v) for v in value) if isinstance(value, list) else value
-            writer.writerow(row)
+            writer.writerow(csv_row(item))
 
 
 def _write_markdown(items: list[dict[str, Any]], path: Path, manifest: Manifest) -> None:

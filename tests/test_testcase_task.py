@@ -132,12 +132,18 @@ class TestPipelineE2E:
                         "title": "golden case",
                         "endpoint": "GET /users",
                         "test_type": "functional",
+                        "priority": "high",
+                        "steps": ["call GET /users"],
+                        "expected_results": ["200 with the user list"],
                     },
                     {
                         "id": "TC-XXX",
                         "title": "another case",
                         "endpoint": "POST /users",
                         "test_type": "negative",
+                        "priority": "medium",
+                        "steps": ["call POST /users with a bad body"],
+                        "expected_results": ["400 with a validation error"],
                     },
                 ]
             )

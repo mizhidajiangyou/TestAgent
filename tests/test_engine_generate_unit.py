@@ -75,7 +75,9 @@ class _Task:
 
     def __init__(self, spec: TruncationSpec | None = None) -> None:
         self.manifest = MagicMock()
-        self.manifest.pipeline.truncation = spec or TruncationSpec()
+        # This double stands for an ENGINE-backed package, and the model
+        # default is opt-in False (only packages that declare it recover).
+        self.manifest.pipeline.truncation = spec or TruncationSpec(enabled=True)
         self.manifest.artifact.item_schema = None
 
     @staticmethod
@@ -144,6 +146,26 @@ class TestEngineGenerateUnit:
         )
         assert result.status is UnitStatus.SUCCESS
         assert llm.calls == 1, "disabled spec must NOT run the recovery loop"
+
+    async def test_disabled_spec_records_one_fingerprint(self) -> None:
+        """The rollback seam must be byte-identical to the plain path — including
+        how many fingerprints it records. Recording the engine fingerprint
+        before delegating logged every delegated unit twice."""
+        from testagent.pipeline.fingerprint import FingerprintLog
+
+        llm = ScriptedLLM([_VALID])
+        unit = build_engine_generate_unit(llm, output_token_cap=_CAP)
+        log = FingerprintLog()
+        await unit(
+            _Task(TruncationSpec(enabled=False)),
+            _STAGE,
+            "b",
+            _unit_ctx(_EPS),
+            _ctx(_EPS),
+            "s6",
+            fingerprint_log=log,
+        )
+        assert [e.params for e in log.entries] == [{"via": "pipeline"}]
 
     async def test_schema_violation_maps_validation_error(self) -> None:
         task = _Task()
