@@ -1,0 +1,9 @@
+$ /Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m mypy testagent/
+[cwd] /Users/zhangtianxin/Desktop/TestAgent
+[exit] 0
+
+--- stdout ---
+Success: no issues found in 94 source files
+
+--- stderr ---
+

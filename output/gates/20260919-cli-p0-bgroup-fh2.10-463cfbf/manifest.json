@@ -1,0 +1,94 @@
+{
+  "milestone": "cli-p0-bgroup-fh2.10",
+  "date_utc": "2026-09-19T17:11:21Z",
+  "commit_sha": "463cfbf",
+  "branch": "dev",
+  "working_tree_dirty": false,
+  "python": "3.14.2",
+  "os": "Darwin 25.5.0 arm64",
+  "executor": "agent (Qoder session) + zhangtianxin",
+  "gates": [
+    {
+      "id": "ruff",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m ruff check testagent/ tests/ scripts/",
+      "exit": 0,
+      "result": "PASS",
+      "log": "ruff.log",
+      "summary_tail": "All checks passed!"
+    },
+    {
+      "id": "format",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m ruff format --check testagent/ tests/ scripts/",
+      "exit": 0,
+      "result": "PASS",
+      "log": "format.log",
+      "summary_tail": "160 files already formatted"
+    },
+    {
+      "id": "mypy",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m mypy testagent/",
+      "exit": 0,
+      "result": "PASS",
+      "log": "mypy.log",
+      "summary_tail": "Success: no issues found in 94 source files"
+    },
+    {
+      "id": "pytest",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m pytest tests/ -q",
+      "exit": 0,
+      "result": "PASS",
+      "log": "pytest.log",
+      "summary_tail": " | -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html | 979 passed, 7 warnings in 94.72s (0:01:34)"
+    },
+    {
+      "id": "arch",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m pytest tests/test_pipeline_e2e.py::TestArchitectureGate -q",
+      "exit": 0,
+      "result": "PASS",
+      "log": "arch.log",
+      "summary_tail": ".......                                                                  [100%] | 7 passed in 0.52s"
+    },
+    {
+      "id": "engine-golden",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m pytest tests/test_engine_event_baseline.py -q",
+      "exit": 0,
+      "result": "PASS",
+      "log": "engine-golden.log",
+      "summary_tail": "................                                                         [100%] | 16 passed in 0.40s"
+    },
+    {
+      "id": "tasks-validate",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/testagent tasks validate --strict",
+      "exit": 0,
+      "result": "PASS",
+      "log": "tasks-validate.log",
+      "summary_tail": "✓ gui | ✓ perf | ✓ testcase"
+    },
+    {
+      "id": "links-golden",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/golden_links.py --stage all",
+      "exit": 0,
+      "result": "PASS",
+      "log": "links-golden.log",
+      "summary_tail": "[golden][PASS] graph | [golden][PASS] planner | [golden][PASS] fixture"
+    },
+    {
+      "id": "r6-graph",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/benchmark_r6.py --stage graph",
+      "exit": 0,
+      "result": "PASS",
+      "log": "r6-graph.log",
+      "summary_tail": "[r6] module pairs: {'precision': 1.0, 'recall': 0.9167, 'predicted': 11, 'truth': 12, 'hits': 11} | [r6] directed relations: {'precision': 1.0, 'recall': 0.8889, 'predicted': 16, 'truth': 18, 'hits': 16} | [r6][PASS] graph stage"
+    },
+    {
+      "id": "r6-selected",
+      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/benchmark_r6.py --stage selected",
+      "exit": 0,
+      "result": "PASS",
+      "log": "r6-selected.log",
+      "summary_tail": "[r6] selected R6 hops: [('POST /coupons', 'POST /orders', 'DATA_FLOW'), ('POST /coupons', 'POST /orders/{id}/payment', 'DATA_FLOW'), ('POST /coupons/{id}/apply', 'POST /orders', 'DATA_FLOW')] | [r6][PASS] selected stage"
+    }
+  ],
+  "note": "真实模型验收暴露的 CLI 文本产物 P0（7e6816d）+ B 组三项与安全加固（994ba8f）+ README 纪律章节（463cfbf）的里程碑门",
+  "verdict": "PASS"
+}
