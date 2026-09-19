@@ -95,22 +95,32 @@ class RawResponseDumper:
             path.write_text(content, encoding="utf-8")
         return path
 
-    def write_reconciliation(self, artifact_count: int) -> Path:
+    def write_reconciliation(
+        self,
+        artifact_count: int,
+        dedup_removed: int = 0,
+        budget_trimmed: int = 0,
+    ) -> Path:
         """Write ``reconciliation.json`` and return its path.
 
-        ``rows_sum`` is the sum of all merge rows (each row's ``added``);
-        the T1 contract is ``rows_sum == artifact_count`` — every artifact
-        must be traceable to exactly one audited merge.
+        ``rows_sum`` is the sum of all merge rows (each row's ``added``).
+        The T1 contract is full-chain: merges minus deterministic removals
+        (T8 dedup, T7 budget trim) must equal the artifact count — every
+        artifact traceable to an audited merge, every removal traceable to
+        an audited gate.
         """
         with self._lock:
             rows = [dict(r) for r in self._merge_rows]
             raw_calls = self._raw_calls
         rows_sum = sum(int(r.get("added", 0)) for r in rows)
+        expected = rows_sum - dedup_removed - budget_trimmed
         payload = {
             "session_id": self._session_id,
             "artifact_count": artifact_count,
             "rows_sum": rows_sum,
-            "match": rows_sum == artifact_count,
+            "dedup_removed": dedup_removed,
+            "budget_trimmed": budget_trimmed,
+            "match": expected == artifact_count,
             "raw_calls": raw_calls,
             "rows": rows,
         }

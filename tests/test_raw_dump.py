@@ -68,6 +68,18 @@ class TestRawResponseDumper:
         payload = json.loads(dumper.write_reconciliation(4).read_text(encoding="utf-8"))
         assert payload["match"] is False and payload["rows_sum"] == 3
 
+    def test_reconciliation_full_chain(self, tmp_path: Path) -> None:
+        """Full-chain contract: merges - dedup - budget trims == artifacts."""
+        dumper = RawResponseDumper(tmp_path, "s5")
+        dumper.sink({"kind": "merge", "label": "a", "added": 10})
+        payload = json.loads(
+            dumper.write_reconciliation(8, dedup_removed=2, budget_trimmed=0).read_text(
+                encoding="utf-8"
+            )
+        )
+        assert payload["match"] is True
+        assert payload["dedup_removed"] == 2
+
     def test_invalid_session_id_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError):
             RawResponseDumper(tmp_path, "bad/id")

@@ -361,9 +361,15 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 "dedup_report.md",
                 render_dedup_report(self._dedup_removed, self._dedup_missing),
             )
-            self._dedup_removed = []
-            self._dedup_missing = []
-        path = dumper.write_reconciliation(len(artifacts))
+        dedup_removed = len(self._dedup_removed)
+        self._dedup_removed = []
+        self._dedup_missing = []
+        # Full-chain reconciliation (T1): engine merges minus deterministic
+        # removals (T8 dedup, T7 budget trim) must equal the artifact count.
+        trimmed = self._budget_trim_report.count("- TC-") if self._budget_trim_report else 0
+        path = dumper.write_reconciliation(
+            len(artifacts), dedup_removed=dedup_removed, budget_trimmed=trimmed
+        )
         logger.info("Raw audit dump written: %s", path)
 
     def _prompt_extra(self, historical_text: str = "") -> dict[str, str] | None:
