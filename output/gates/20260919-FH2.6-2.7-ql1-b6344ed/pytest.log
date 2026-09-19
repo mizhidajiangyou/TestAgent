@@ -1,0 +1,53 @@
+$ /Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m pytest tests/ -q
+[cwd] /Users/zhangtianxin/Desktop/TestAgent
+[exit] 0
+
+--- stdout ---
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 22%]
+........................................................................ [ 29%]
+........................................................................ [ 37%]
+........................................................................ [ 44%]
+........................................................................ [ 52%]
+........................................................................ [ 59%]
+........................................................................ [ 66%]
+........................................................................ [ 74%]
+........................................................................ [ 81%]
+........................................................................ [ 89%]
+........................................................................ [ 96%]
+................................                                         [100%]
+=============================== warnings summary ===============================
+testagent/config/models.py:58
+  /Users/zhangtianxin/Desktop/TestAgent/testagent/config/models.py:58: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: tests/test_budget.py)
+    @dataclass
+
+testagent/config/models.py:58
+  /Users/zhangtianxin/Desktop/TestAgent/testagent/config/models.py:58: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: tests/test_e2e_agenerate_streaming_recovery.py)
+    @dataclass
+
+testagent/config/models.py:58
+  /Users/zhangtianxin/Desktop/TestAgent/testagent/config/models.py:58: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: tests/test_migration_parity_web.py)
+    @dataclass
+
+testagent/config/models.py:58
+  /Users/zhangtianxin/Desktop/TestAgent/testagent/config/models.py:58: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: tests/test_reports.py)
+    @dataclass
+
+testagent/reports/testcase_report.py:20
+  /Users/zhangtianxin/Desktop/TestAgent/testagent/reports/testcase_report.py:20: PytestCollectionWarning: cannot collect test class 'TestCaseReport' because it has a __init__ constructor (from: tests/test_reports.py)
+    class TestCaseReport(BaseReport[TestCaseReportInput]):
+
+testagent/config/models.py:58
+  /Users/zhangtianxin/Desktop/TestAgent/testagent/config/models.py:58: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: tests/test_testcase_adapter.py)
+    @dataclass
+
+testagent/config/models.py:58
+  /Users/zhangtianxin/Desktop/TestAgent/testagent/config/models.py:58: PytestCollectionWarning: cannot collect test class 'TestCase' because it has a __init__ constructor (from: tests/test_testcase_generator.py)
+    @dataclass
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+968 passed, 7 warnings in 94.75s (0:01:34)
+
+--- stderr ---
+
