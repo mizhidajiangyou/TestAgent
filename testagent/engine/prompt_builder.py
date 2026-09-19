@@ -51,11 +51,49 @@ ERROR_CONTRACT = (
 )
 
 
+#: System-prompt bases, hoisted out of the legacy ``build_*`` builders so the
+#: conversation chain (plan-k B7.2, which renders ``tasks/<pkg>/prompts``) and
+#: the frozen generators compose byte-identical prompts from ONE holder until
+#: B7.3 deletes those builders.
+TESTCASE_SYSTEM_BASE = (
+    "You are a senior QA engineer. Generate comprehensive, well-structured "
+    "test cases from requirements and API specifications. Output only valid JSON. "
+    "Keep the total output within the model's token limit: prefer a focused set "
+    "of high-value cases with concise descriptions and steps over exhaustive "
+    "coverage, so the response is never cut off mid-JSON."
+)
+TESTCASE_HISTORICAL_SUFFIX = (
+    " Historical test cases are provided as a baseline — generate ONLY "
+    "net-new or updated cases that are NOT already covered by the baseline."
+)
+K6_SYSTEM_BASE = (
+    "You are an expert k6 performance engineer. Output only complete, runnable k6 JavaScript."
+)
+JMETER_SYSTEM_BASE = (
+    "You are an expert JMeter performance engineer. Output only complete, valid JMeter JMX XML."
+)
+GUI_SYSTEM_BASE = (
+    "You are a senior QA automation engineer specializing in Playwright "
+    "and pytest. Generate complete, runnable, maintainable GUI test "
+    "scripts. Output only valid Python code."
+)
+
+#: Task packages live next to the source tree; the composition root passes the
+#: configured ``TASKS_DIR`` in.
+DEFAULT_TASKS_DIR = "tasks"
+
+
 class PromptBuilder:
     """Build LLM prompts from templates or inline strings."""
 
-    def __init__(self, templates_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        templates_dir: Path | None = None,
+        tasks_dir: Path | str = DEFAULT_TASKS_DIR,
+    ) -> None:
         self._templates_dir = templates_dir or TEMPLATES_DIR
+        self._tasks_dir = Path(tasks_dir)
+        self._package_envs: dict[str, Environment] = {}
         if self._templates_dir.exists():
             self._env = Environment(
                 loader=FileSystemLoader(str(self._templates_dir)),
@@ -65,6 +103,36 @@ class PromptBuilder:
             )
         else:
             self._env = Environment(loader=BaseLoader(), autoescape=False)
+
+    def render_package_prompt(
+        self, package: str, template_name: str, context: dict[str, Any]
+    ) -> str | None:
+        """Render a task-package prompt (plan-k B7.2).
+
+        ``tasks/<pkg>/prompts`` is the source of prompt text for the new chain;
+        the env is configured exactly like the legacy one (``trim_blocks`` /
+        ``lstrip_blocks``), otherwise the bytes would differ by whitespace and
+        every prompt fingerprint would move. Returns ``None`` when the package
+        template is unavailable, so a partially installed tree still renders
+        from ``templates/``.
+        """
+        env = self._package_envs.get(package)
+        if env is None:
+            prompts_dir = self._tasks_dir / package / "prompts"
+            if not prompts_dir.is_dir():
+                return None
+            env = Environment(
+                loader=FileSystemLoader(str(prompts_dir)),
+                autoescape=False,
+                trim_blocks=True,
+                lstrip_blocks=True,
+            )
+            self._package_envs[package] = env
+        try:
+            return env.get_template(template_name).render(**context)
+        except Exception:
+            logger.debug("Package prompt %s/%s not available", package, template_name)
+            return None
 
     def render_template(self, name: str, **context: Any) -> str | None:
         """Render a named Jinja2 template by name.
@@ -106,19 +174,10 @@ class PromptBuilder:
         if extra_context and isinstance(extra_context.get("historical_cases"), str):
             historical_cases = extra_context["historical_cases"]
 
-        system_prompt = (
-            "You are a senior QA engineer. Generate comprehensive, well-structured "
-            "test cases from requirements and API specifications. Output only valid JSON. "
-            "Keep the total output within the model's token limit: prefer a focused set "
-            "of high-value cases with concise descriptions and steps over exhaustive "
-            "coverage, so the response is never cut off mid-JSON."
-        )
+        system_prompt = TESTCASE_SYSTEM_BASE
         if historical_cases:
-            system_prompt += (
-                " Historical test cases are provided as a baseline — generate ONLY "
-                "net-new or updated cases that are NOT already covered by the baseline."
-            )
-        lang_hint = self._language_instruction(output_language)
+            system_prompt += TESTCASE_HISTORICAL_SUFFIX
+        lang_hint = self.language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
         system_prompt += ERROR_CONTRACT
@@ -185,7 +244,7 @@ class PromptBuilder:
             "Generate boundary, security, and integration test cases. "
             "Output only valid JSON."
         )
-        lang_hint = self._language_instruction(output_language)
+        lang_hint = self.language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
         system_prompt += ERROR_CONTRACT
@@ -287,7 +346,7 @@ class PromptBuilder:
             "weak assertions in generated test cases, then produce a complete, improved list. "
             "Output only valid JSON."
         )
-        lang_hint = self._language_instruction(output_language)
+        lang_hint = self.language_instruction(output_language)
         if lang_hint:
             system_prompt += " " + lang_hint
         system_prompt += ERROR_CONTRACT
@@ -359,7 +418,7 @@ class PromptBuilder:
                 "coverage, fragile locators and weak assertions, then produce the "
                 "complete revised script. Output only complete, valid Python code."
             )
-        lang_hint = self._language_instruction(output_language, code_context=True)
+        lang_hint = self.language_instruction(output_language, code_context=True)
         if lang_hint:
             system_prompt += " " + lang_hint
 
@@ -387,17 +446,8 @@ class PromptBuilder:
         output_language: str = "english",
     ) -> tuple[str, str]:
         """Build prompts for performance script generation."""
-        if script_format == "jmeter":
-            system_prompt = (
-                "You are an expert JMeter performance engineer. "
-                "Output only complete, valid JMeter JMX XML."
-            )
-        else:
-            system_prompt = (
-                "You are an expert k6 performance engineer. "
-                "Output only complete, runnable k6 JavaScript."
-            )
-        lang_hint = self._language_instruction(output_language, code_context=True)
+        system_prompt = JMETER_SYSTEM_BASE if script_format == "jmeter" else K6_SYSTEM_BASE
+        lang_hint = self.language_instruction(output_language, code_context=True)
         if lang_hint:
             system_prompt += " " + lang_hint
 
@@ -430,12 +480,8 @@ class PromptBuilder:
         robust locators (``get_by_role`` / ``get_by_label`` / ``get_by_text``)
         and ``expect()`` assertions, rather than fragile CSS/XPath selectors.
         """
-        system_prompt = (
-            "You are a senior QA automation engineer specializing in Playwright "
-            "and pytest. Generate complete, runnable, maintainable GUI test "
-            "scripts. Output only valid Python code."
-        )
-        lang_hint = self._language_instruction(output_language, code_context=True)
+        system_prompt = GUI_SYSTEM_BASE
+        lang_hint = self.language_instruction(output_language, code_context=True)
         if lang_hint:
             system_prompt += " " + lang_hint
 
@@ -460,7 +506,7 @@ class PromptBuilder:
         return system_prompt, user_prompt
 
     @staticmethod
-    def _language_instruction(output_language: str, code_context: bool = False) -> str:
+    def language_instruction(output_language: str, code_context: bool = False) -> str:
         """Return a language instruction snippet for prompts."""
         if output_language == "chinese":
             if code_context:
@@ -478,7 +524,7 @@ class PromptBuilder:
         self, endpoints: str, requirements: str, json_mode: bool = False, **kwargs: Any
     ) -> str:
         """Fallback inline prompt for test case generation."""
-        lang_hint = self._language_instruction(kwargs.get("output_language", "english"))
+        lang_hint = self.language_instruction(kwargs.get("output_language", "english"))
         lang_section = f"\n{lang_hint}" if lang_hint else ""
         ep_section = f"\n## API Endpoints\n{endpoints}\n" if endpoints else ""
         ep_rule = "(must match an endpoint above)" if endpoints else '(use "N/A" if no API spec)'
@@ -546,7 +592,7 @@ class PromptBuilder:
         **kwargs: Any,
     ) -> str:
         """Fallback inline prompt for API-specific generation."""
-        lang_hint = self._language_instruction(kwargs.get("output_language", "english"))
+        lang_hint = self.language_instruction(kwargs.get("output_language", "english"))
         lang_section = f"\n{lang_hint}" if lang_hint else ""
         covered_section = ""
         if already_covered:
@@ -582,7 +628,7 @@ Endpoint field must match one of the listed endpoints exactly (method+path); do 
         json_mode: bool = False,
     ) -> str:
         """Fallback inline prompt for review/refinement."""
-        lang_hint = self._language_instruction(output_language)
+        lang_hint = self.language_instruction(output_language)
         lang_section = f"\n{lang_hint}" if lang_hint else ""
         ep_section = f"\n## API Endpoints\n{endpoints}\n" if endpoints else ""
         if json_mode:
@@ -723,7 +769,7 @@ Output ONLY raw JavaScript. No markdown."""
         **kwargs: Any,
     ) -> str:
         """Fallback inline prompt for GUI (Playwright) test script generation."""
-        lang_hint = self._language_instruction(output_language, code_context=True)
+        lang_hint = self.language_instruction(output_language, code_context=True)
         lang_section = f"\n## Language\n{lang_hint}\n" if lang_hint else ""
         ep_section = f"\n## API Context (for reference)\n{endpoints}\n" if endpoints else ""
         return f"""Generate a complete Playwright Python test script for web/GUI testing.

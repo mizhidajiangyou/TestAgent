@@ -1,0 +1,30 @@
+{
+  "artifact": {
+    "system": "You are an expert JMeter performance engineer. Output only complete, valid JMeter JMX XML.",
+    "user": "Generate a complete, production-ready JMeter JMX test plan.\n\n## API Endpoints\nGET /users (page,opt)\nPOST /users (name,req)\n\n## Configuration\n- Virtual Users: 100\n- Duration: 300 seconds\n- Ramp-Up: 60 seconds\n- Think Time: 500 ms\n- Base URL: https://api.example.com\n- Auth: none\n\n## Requirements\n1. Complete XML from <?xml ...?> to </jmeterTestPlan>\n2. ThreadGroup with configured users/ramp-up/duration (ramp-up then steady state)\n3. HTTP Request Defaults (server + port from Base URL), Cookie Manager, Cache Manager\n4. HTTP Header Manager with Content-Type: application/json (and Authorization when Auth != none)\n5. HTTP Samplers for EACH listed endpoint with realistic request bodies (from schema) for POST/PUT\n6. Response Assertions for success status codes AND at least one key field\n7. If Auth != none: a login sampler that extracts a token (JSON Extractor / Regular Expression Extractor) and reuses it via a Header Manager for subsequent samplers\n8. Summary Report and Simple Data Writer listeners\n9. (Cleanup) if any sampler creates data, add a teardown step that deletes it\n\nOutput ONLY raw JMX XML. Start with: <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+  },
+  "events": [],
+  "failure_semantics": {
+    "non_empty": true,
+    "observable": "ok"
+  },
+  "fixture_version": 1,
+  "input": {
+    "artifact_type": "performance_script",
+    "ctx": {
+      "perf_config": {},
+      "script_format": "jmeter"
+    },
+    "endpoints_text": "GET /users (page,opt)\nPOST /users (name,req)",
+    "requirements_text": "# User Management\nAcceptance Criteria:\n- User can register\n",
+    "user_message": "load test the user endpoints"
+  },
+  "meta": {
+    "git_sha": "4f7347406234",
+    "layer": "prompt-bytes",
+    "recorded_utc": "2026-09-19T15:38:30.806533+00:00"
+  },
+  "name": "performance-jmeter",
+  "request_trace": [],
+  "task": "conversation_prompts"
+}

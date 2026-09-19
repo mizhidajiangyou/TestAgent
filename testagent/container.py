@@ -48,7 +48,9 @@ class Container(containers.DeclarativeContainer):
         create_llm_client,
         settings=settings,
     )
-    prompt_builder = providers.Singleton(PromptBuilder)
+    # Prompt text lives in the task packages (plan-k B7.2); the builder needs the
+    # configured TASKS_DIR, not a cwd-relative guess.
+    prompt_builder = providers.Singleton(PromptBuilder, tasks_dir=settings.provided.tasks_dir)
     swagger_parser = providers.Singleton(SwaggerParser)
     requirement_parser = providers.Singleton(RequirementParser)
     document_parser = providers.Singleton(DocumentParser)

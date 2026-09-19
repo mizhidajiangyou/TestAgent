@@ -1,0 +1,29 @@
+{
+  "artifact": {
+    "system": "You are a senior QA automation engineer specializing in Playwright and pytest. Generate complete, runnable, maintainable GUI test scripts. Output only valid Python code.",
+    "user": "Generate a complete Playwright Python test script for web/GUI testing.\n\n## Target URL\nhttps://app.example.com\n\n## Requirements\n# User Management\nAcceptance Criteria:\n- User can register\n\n\n## API Context (for reference)\nGET /users (page,opt)\nPOST /users (name,req)\n\n## Script Requirements (all mandatory)\n1. Use Playwright's Python **sync** API. Start with:\n   ```python\n   import pytest\n   from playwright.sync_api import Page, expect, BrowserContext\n   ```\n2. Use **pytest** as the test framework; type-annotate the `page: Page` argument.\n3. Provide a **fixture** (module- or function-scoped) that:\n   - navigates to the Target URL (use `page.goto(\"https://app.example.com\")`),\n   - waits with `page.wait_for_load_state(\"networkidle\")`,\n   - if the page requires login, performs the login steps in the fixture and stores auth via `context` (e.g. `storage_state`),\n   - yields `page`.\n4. Use **ROBUST locators** (priority order) — NEVER use CSS/XPath as the primary choice:\n   - `page.get_by_role()` — FIRST CHOICE for buttons/inputs/links (e.g. `page.get_by_role(\"button\", name=\"登录\")`).\n   - `page.get_by_label()` — form inputs with associated `<label>`.\n   - `page.get_by_placeholder()` — inputs without labels.\n   - `page.get_by_text()` — non-interactive text.\n   - `page.locator()` — LAST RESORT, only with a stable, specific selector and a comment explaining why.\n5. Use **`expect()`** for ALL assertions (never raw `assert`). Assert concrete values, e.g. `expect(page.get_by_text(\"欢迎\")).to_be_visible()` or `expect(field).to_have_value(\"...\")`. Avoid weak checks like `assert \"welcome\" in page.content()`.\n6. Use **explicit waits**, not fixed sleeps: prefer `page.wait_for_load_state`, `page.wait_for_selector`, or `expect(...).to_be_visible()`. Do NOT use `time.sleep` or long `page.wait_for_timeout`.\n7. Cover at least: happy path, **form validation** (required/format errors — assert the visible error message via `expect(error).to_have_text(...)`), **error handling** (invalid input ⇒ error state), **navigation/routing**, and **UI state changes**.\n8. Each test method needs a descriptive **docstring** and a pytest marker (`@pytest.mark.smoke`, `@pytest.mark.regression`).\n9. **Cleanup**: if the flow creates data or a session, add teardown (logout / delete created data) so the script is re-runnable.\n10. The script MUST target the **Target URL above** (do not navigate to example.com or any other host). It must be syntactically valid Python runnable with:\n   `pytest test_script.py --browser chromium`\n\n\n## Output\nOutput ONLY the Python script code. No markdown fences, no explanations."
+  },
+  "events": [],
+  "failure_semantics": {
+    "non_empty": true,
+    "observable": "ok"
+  },
+  "fixture_version": 1,
+  "input": {
+    "artifact_type": "gui_script",
+    "ctx": {
+      "gui_url": "https://app.example.com"
+    },
+    "endpoints_text": "GET /users (page,opt)\nPOST /users (name,req)",
+    "requirements_text": "# User Management\nAcceptance Criteria:\n- User can register\n",
+    "user_message": "login flow"
+  },
+  "meta": {
+    "git_sha": "4f7347406234",
+    "layer": "prompt-bytes",
+    "recorded_utc": "2026-09-19T15:38:30.820110+00:00"
+  },
+  "name": "gui-with-url",
+  "request_trace": [],
+  "task": "conversation_prompts"
+}

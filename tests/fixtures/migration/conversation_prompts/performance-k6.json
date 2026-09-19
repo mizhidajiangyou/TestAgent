@@ -1,0 +1,32 @@
+{
+  "artifact": {
+    "system": "You are an expert k6 performance engineer. Output only complete, runnable k6 JavaScript.",
+    "user": "Generate a complete, production-ready k6 JavaScript test script.\n\n## API Endpoints\nGET /users (page,opt)\nPOST /users (name,req)\n\n## Configuration\n- Virtual Users: 100\n- Duration: 300 seconds\n- Ramp-Up: 60 seconds\n- Think Time: 500 ms\n- Base URL: https://api.example.com\n- Auth: none\n\n## Requirements (all mandatory for a runnable, meaningful script)\n1. `import http from 'k6/http'; import { check, sleep, group } from 'k6';` and `export const options` with `stages` implementing ramp-up then steady state (use Duration/Ramp-Up from Configuration; e.g. ramp 60s to 100 VUs, hold for the remainder).\n2. NEVER hardcode the host. Build URLs from `const BASE_URL = __ENV.BASE_URL || 'https://api.example.com';`. Document: run with `k6 run -e BASE_URL=https://api.example.com/v1 script.js`.\n3. If Auth != none: obtain a token in `setup()` (login call) and pass it to the default function; send it as `headers: { Authorization: 'Bearer ' + token }` on protected endpoints. Document obtaining `AUTH_TOKEN` via `-e AUTH_TOKEN=...` when the token cannot be fetched inside the script.\n4. Cover EVERY listed endpoint. For POST/PUT include a realistic request `body` taken from the endpoint schema (e.g. `{\"name\":\"...\",\"email\":\"...\",\"age\":30}`). Use `group('endpoint name', () => { ... })` per endpoint.\n5. `check()` assertions: ALWAYS assert `res.status` against the expected code, AND assert at least one key response field (e.g. `res.json('email') !== null`). For error paths assert the error code field.\n6. `thresholds`: set `http_req_duration: ['p(95)<500']` and `http_req_failed: ['rate<0.01']` (tune the 500ms to the agreed SLO if known).\n7. Pacing: use `sleep(0 )` between requests to match Think Time; do not use long fixed sleeps as the only control.\n8. `setup()` / `teardown()`: create any needed test data in `setup()` and DELETE it in `teardown()` so the environment is not polluted across runs.\n9. No secrets hardcoded; never commit real tokens.\n\nOutput ONLY raw JavaScript. No markdown.\n"
+  },
+  "events": [],
+  "failure_semantics": {
+    "non_empty": true,
+    "observable": "ok"
+  },
+  "fixture_version": 1,
+  "input": {
+    "artifact_type": "performance_script",
+    "ctx": {
+      "perf_config": {
+        "base_url": "https://api.example.com"
+      },
+      "script_format": "k6"
+    },
+    "endpoints_text": "GET /users (page,opt)\nPOST /users (name,req)",
+    "requirements_text": "# User Management\nAcceptance Criteria:\n- User can register\n",
+    "user_message": "load test the user endpoints"
+  },
+  "meta": {
+    "git_sha": "4f7347406234",
+    "layer": "prompt-bytes",
+    "recorded_utc": "2026-09-19T15:38:30.791646+00:00"
+  },
+  "name": "performance-k6",
+  "request_trace": [],
+  "task": "conversation_prompts"
+}

@@ -30,7 +30,14 @@ from typing import Any
 
 from testagent.config.constants import DEFAULT_TARGET_URL
 from testagent.engine.llm_client import LLMClient
-from testagent.engine.prompt_builder import PromptBuilder
+from testagent.engine.prompt_builder import (
+    ERROR_CONTRACT,
+    GUI_SYSTEM_BASE,
+    JMETER_SYSTEM_BASE,
+    K6_SYSTEM_BASE,
+    TESTCASE_SYSTEM_BASE,
+    PromptBuilder,
+)
 from testagent.engine.session_store import InMemoryStore, SessionStore
 
 logger = logging.getLogger(__name__)
@@ -506,35 +513,81 @@ class ConversationSession:
     def _build_generate_prompt(
         self, artifact_type: str, user_message: str, ctx: dict[str, Any]
     ) -> tuple[str, str]:
+        """Compose a generation prompt from the task-package templates.
+
+        plan-k B7.2: the prompt TEXT comes from ``tasks/<pkg>/prompts`` (the new
+        chain's source of truth) while the composition — system base, language
+        hint, error contract, JSON wrapper, authoritative table — is shared with
+        the legacy builders through the constants in
+        :mod:`testagent.engine.prompt_builder`. Migration only: the recorded
+        prompt bytes in ``tests/fixtures/migration/conversation_prompts`` must
+        not move.
+        """
+        builder = self._prompt_builder
         if artifact_type == "test_cases":
-            return self._prompt_builder.build_testcase_prompt(
-                endpoints_text=self._endpoints_text,
-                requirements_text=self._requirements_text or user_message,
-                output_language=self._output_language,
+            system_prompt = TESTCASE_SYSTEM_BASE
+            lang_hint = builder.language_instruction(self._output_language)
+            if lang_hint:
+                system_prompt += " " + lang_hint
+            system_prompt += ERROR_CONTRACT
+            user_prompt = self._package_prompt(
+                "testcase",
+                "testcase_prompt.j2",
+                {
+                    "endpoints": self._endpoints_text,
+                    "requirements": self._requirements_text or user_message,
+                    "output_language": self._output_language,
+                    "historical_cases": "",
+                    "json_mode": False,
+                },
             )
+            return system_prompt, user_prompt
+
         if artifact_type == "performance_script":
             script_format = str(ctx.get("script_format") or "k6")
             perf_config = ctx.get("perf_config") or {}
             if not isinstance(perf_config, dict):
                 perf_config = {}
-            return self._prompt_builder.build_performance_prompt(
-                endpoints_text=self._endpoints_text,
-                config=perf_config,
-                script_format=script_format,
-                output_language=self._output_language,
+            system_prompt = JMETER_SYSTEM_BASE if script_format == "jmeter" else K6_SYSTEM_BASE
+            lang_hint = builder.language_instruction(self._output_language, code_context=True)
+            if lang_hint:
+                system_prompt += " " + lang_hint
+            user_prompt = self._package_prompt(
+                "perf",
+                "main.j2",
+                {
+                    "endpoints": self._endpoints_text,
+                    "config": perf_config,
+                    "script_format": script_format,
+                },
             )
+            return system_prompt, user_prompt
+
         if artifact_type == "gui_script":
             # GUI scripts are Playwright Python and must target a real URL.
             # The caller supplies it via context ``gui_url``; fall back to the
             # generator's default when absent so interactive chat still works.
             url = str(ctx.get("gui_url") or "").strip() or DEFAULT_TARGET_URL
             requirements_text = self._requirements_text or user_message
-            return self._prompt_builder.build_gui_test_prompt(
-                url=url,
-                requirements_text=requirements_text,
-                endpoints_text=self._endpoints_text,
-                output_language=self._output_language,
+            system_prompt = GUI_SYSTEM_BASE
+            lang_hint = builder.language_instruction(self._output_language, code_context=True)
+            if lang_hint:
+                system_prompt += " " + lang_hint
+            user_prompt = self._package_prompt(
+                "gui",
+                "main.j2",
+                {
+                    "url": url,
+                    "requirements": requirements_text,
+                    # the package renamed this variable when it moved onto the
+                    # pipeline (endpoints arrives as text from the parser); the
+                    # template body is the frozen one under the reverse rename.
+                    "endpoints_text": self._endpoints_text,
+                    "output_language": self._output_language,
+                },
             )
+            return system_prompt, user_prompt
+
         # code (and any other type): generic inline prompt.
         system_prompt = (
             "You are a senior test automation engineer. Generate the requested artifact."
@@ -547,6 +600,21 @@ class ConversationSession:
             f"Output ONLY the complete {artifact_type} content. No markdown fences."
         )
         return system_prompt, user_prompt
+
+    def _package_prompt(self, package: str, template: str, context: dict[str, Any]) -> str:
+        """Render a package prompt, falling back to the legacy ``templates/``
+        copy (a partially installed task tree still has to work), and fail loud
+        when neither exists — an empty prompt would surface as a mystery LLM
+        answer instead of a broken install."""
+        rendered = self._prompt_builder.render_package_prompt(
+            package, template, context
+        ) or self._prompt_builder.render_template(template, **context)
+        if rendered is None:
+            raise ValueError(
+                f"prompt template unavailable: tasks/{package}/prompts/{template} "
+                "(and no copy under templates/)"
+            )
+        return rendered
 
     # ------------------------------------------------------------------
     # refine
