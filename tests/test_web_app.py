@@ -1,104 +1,52 @@
-"""Tests for the FastAPI web app (TestAgent Web GUI)."""
+"""Tests for the FastAPI web app (TestAgent Web GUI).
 
-import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+Route behavior only — the HTTP contract of ``/api/generate`` (statuses, body
+schema, error texts) is pinned by the recorded cells in
+``tests/test_migration_parity_web.py``; these tests cover what the contract
+fixtures cannot: config sanitization, CSP headers, and that a failure inside
+generation surfaces as an actionable error instead of a silent empty 200.
+"""
+
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from testagent.config.models import (
-    APIEndpoint,
-    TestCase,
-    TestCaseGenInput,
-)
-from testagent.engine.prompt_builder import PromptBuilder
-from testagent.generators.testcase_generator import TestCaseGenerator
-from testagent.parsers.requirement_parser import RequirementParser
-from testagent.reports.testcase_report import TestCaseReport
+from testagent.config.settings import LLMSettings
 from testagent.web.app import create_app
-
-MOCK_LLM_RESPONSE = json.dumps(
-    [
-        {
-            "id": "TC-001",
-            "title": "Get users successfully",
-            "description": "Verify GET /users returns 200",
-            "endpoint": "GET /users",
-            "test_type": "functional",
-            "priority": "high",
-            "preconditions": ["User is authenticated"],
-            "steps": ["Send GET request to /users"],
-            "expected_results": ["Status code is 200"],
-        },
-        {
-            "id": "TC-002",
-            "title": "Create user with valid data",
-            "description": "Verify POST /users creates a user",
-            "endpoint": "POST /users",
-            "test_type": "functional",
-            "priority": "high",
-            "steps": ["Send POST request with valid body"],
-            "expected_results": ["Status code is 201"],
-        },
-    ]
+from tests.parity_harness import bare_settings
+from tests.web_fakes import (
+    CASES_JSON,
+    ScriptedLLM,
+    make_container,
+)
+from tests.web_fakes import (
+    REQUIREMENTS as _REQUIREMENTS_MD,
 )
 
-_REQUIREMENTS_MD = (
-    "# User Management\n"
-    "Users can be created, listed, and deleted.\n\n"
-    "Acceptance Criteria:\n"
-    "- User can register\n"
-    "- User can login\n"
-)
+_MODELS = "gpt-4o-mini,gpt-4o"
 
 
-def _make_container() -> SimpleNamespace:
-    """Build a near-real container: real parser/generator/report, mock LLM."""
-    mock_llm = MagicMock()
-    mock_llm.chat.return_value = MOCK_LLM_RESPONSE
-    # The web route drives the async path (agenerate -> achat), so the mock
-    # must expose an awaitable achat that returns the same canned response.
-    mock_llm.achat = AsyncMock(return_value=MOCK_LLM_RESPONSE)
-    # The generator now runs a zero-token pre-flight (averify) before agenerate.
-    mock_llm.averify = AsyncMock()
-    mock_llm.usage.summary.return_value = "prompt=10 completion=20 total=30"
-    settings = SimpleNamespace(
-        output_language="english",
-        azure_llm=SimpleNamespace(enabled=False),
-        llm=SimpleNamespace(models=["gpt-4o-mini", "gpt-4o"]),
-        review_enabled=False,
-        review_max_rounds=2,
+def _make_container(**llm_flags: bool) -> object:
+    """Real parsers/report, scripted LLM — the same double the contract cells
+    use, so both suites exercise one chain (``models`` only feeds /api/config)."""
+    llm = ScriptedLLM(
+        [_case_response()] * 12,
+        **llm_flags,  # type: ignore[arg-type]
     )
-    # Instances are built once and wrapped in lambdas so each provider-style
-    # ``container.<name>()`` call returns the same shared instance (the spy
-    # test mutates ``gen.agenerate`` and expects later calls to see it).
-    gen = TestCaseGenerator(llm_client=mock_llm, prompt_builder=PromptBuilder())
-    req_parser = RequirementParser()
-    # Swagger parser returns real endpoints so generated cases get real
-    # endpoint paths (matches the historical baseline for dedup tests).
-    swagger_parser = MagicMock(
-        parse=MagicMock(
-            return_value=[
-                APIEndpoint(method="GET", path="/users", summary="List users"),
-                APIEndpoint(method="POST", path="/users", summary="Create user"),
-            ]
-        )
+    settings = bare_settings(
+        llm=LLMSettings(_env_file=None, model=_MODELS),  # type: ignore[call-arg]
     )
-    tc_report = TestCaseReport()
-    return SimpleNamespace(
-        testcase_generator=lambda: gen,
-        requirement_parser=lambda: req_parser,
-        swagger_parser=lambda: swagger_parser,
-        testcase_report=lambda: tc_report,
-        llm_client=lambda: mock_llm,
-        settings=lambda: settings,
-    )
+    return make_container(llm, settings)
+
+
+def _case_response() -> str:
+    return CASES_JSON
 
 
 @pytest.fixture()
 def client() -> TestClient:
-    """A TestClient wired to a container with a mocked LLM (no network)."""
+    """A TestClient wired to a container with a scripted LLM (no network)."""
     return TestClient(create_app(container=_make_container()))
 
 
@@ -157,8 +105,10 @@ class TestGenerate:
         data = r.json()
         assert data["count"] == 2
         assert data["output_format"] == "json"
-        assert data["test_cases"][0]["title"] == "Get users successfully"
+        assert data["test_cases"][0]["title"] == "List users returns 200"
         assert data["download_content"] is None
+        # the quality line reaches the response (it used to be legacy-only)
+        assert data["test_cases"][0]["executability"].get("grade")
 
     def test_generate_empty_requirements_rejected(self, client: TestClient) -> None:
         r = client.post(
@@ -196,12 +146,24 @@ class TestGenerate:
         assert data["download_filename"] == "testcases.md"
         assert data["download_content"] is not None
 
-    def test_generate_with_historical_cases(self, client: TestClient) -> None:
-        """Historical cases act as a baseline; duplicates are deduped."""
+    def test_generate_with_historical_cases(self, tmp_path: Path) -> None:
+        """Historical cases act as the baseline; a regenerated duplicate keeps
+        the historical version and drops the new one (H1 precedence).
+
+        The spec is part of the premise: without endpoints to scope to, a
+        generated case lands on the placeholder endpoint and is (correctly) not
+        a duplicate of a case bound to GET /users.
+        """
+        from tests.web_fakes import SPEC
+
+        spec = tmp_path / "spec.json"
+        spec.write_text(SPEC, encoding="utf-8")
+        client = TestClient(create_app(container=_make_container()))
         historical = [
             {
                 "id": "TC-OLD-001",
-                "title": "Get users successfully",
+                "title": "List users returns 200",
+                "description": "baseline detail the regenerated copy must not overwrite",
                 "endpoint": "GET /users",
                 "test_type": "functional",
                 "priority": "high",
@@ -211,7 +173,7 @@ class TestGenerate:
             "/api/generate",
             json={
                 "requirements": _REQUIREMENTS_MD,
-                "swagger_url": "swagger.json",
+                "swagger_url": str(spec),
                 "output_format": "json",
                 "historical_cases": historical,
             },
@@ -219,8 +181,10 @@ class TestGenerate:
         assert r.status_code == 200
         data = r.json()
         assert data["historical_count"] == 1
-        # 1 historical + 2 new - 1 duplicate = 2 total
+        # 1 historical + 2 new - 1 duplicate = 2; ids are renumbered after the
+        # merge (H1), so precedence is proved by the surviving content.
         assert data["count"] == 2
+        assert data["test_cases"][0]["description"].startswith("baseline detail")
 
     def test_generate_propagates_generation_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A total generation failure surfaces as a 500 with actionable guidance.
@@ -229,10 +193,9 @@ class TestGenerate:
         requirement does not abort the whole run), but when *every* call fails
         the generator raises a clear error that the web layer returns as 500.
         """
-        container = _make_container()
-        # Make the generator raise by giving it an LLM that always errors.
-        # The async path uses achat, so the failure must be injected there.
-        container.testcase_generator()._llm.achat.side_effect = RuntimeError("boom")
+        # Every LLM call raising is the "total failure" case: the pipeline
+        # degrades to an empty artifact and the route must say why.
+        container = _make_container(fail_call=True)
         c = TestClient(create_app(container=container))
         r = c.post(
             "/api/generate",
@@ -243,12 +206,7 @@ class TestGenerate:
 
     def test_generate_model_unavailable_returns_400(self) -> None:
         """A zero-token pre-flight failure surfaces as a 400 with guidance."""
-        container = _make_container()
-        from testagent.engine.llm_client import ModelUnavailableError
-
-        container.testcase_generator()._llm.averify.side_effect = ModelUnavailableError(
-            "Model 'gpt-4o-mini' is not available: 401"
-        )
+        container = _make_container(fail_verify=True)
         c = TestClient(create_app(container=container))
         r = c.post(
             "/api/generate",
@@ -261,28 +219,37 @@ class TestGenerate:
 
 
 class TestGenerateIntegration:
-    """End-to-end-ish: confirm the generator receives parsed requirements."""
+    """End-to-end-ish: confirm the pipeline receives PARSED requirements."""
 
-    def test_generate_calls_generator_with_parsed_requirements(self) -> None:
-        """The web layer parses markdown into RequirementItems before agenerate."""
-        container = _make_container()
-        captured: list[TestCaseGenInput] = []
-        original_agenerate = container.testcase_generator().agenerate
+    def test_generate_parses_markdown_before_generating(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The web layer turns markdown into RequirementItems before the run —
+        the claim the legacy spy test made about ``agenerate``, now checked at
+        the pipeline boundary (``parse_inputs``)."""
+        import testagent.web.app as web_app
 
-        async def spy(data: TestCaseGenInput, session_id: str | None = None) -> list[TestCase]:
-            captured.append(data)
-            return await original_agenerate(data, session_id=session_id)
+        captured: list[object] = []
+        original = web_app.parse_inputs
 
-        container.testcase_generator().agenerate = spy  # type: ignore[method-assign]
+        def spy(manifest: object, raw: dict[str, str], settings: object = None) -> object:
+            ctx = original(manifest, raw, settings)
+            captured.append(ctx)
+            return ctx
 
-        c = TestClient(create_app(container=container))
+        monkeypatch.setattr(web_app, "parse_inputs", spy)
+        monkeypatch.chdir(tmp_path)
+
+        c = TestClient(create_app(container=_make_container()))
         r = c.post(
             "/api/generate",
             json={"requirements": _REQUIREMENTS_MD, "output_format": "json"},
         )
         assert r.status_code == 200
         assert r.json()["count"] == 2
-        # The generator received at least one parsed requirement.
         assert len(captured) == 1
-        assert len(captured[0].requirements) >= 1
-        assert captured[0].requirements[0].title == "User Management"
+        requirements = captured[0].parsed["requirements"]  # type: ignore[attr-defined]
+        assert len(requirements) >= 1
+        assert requirements[0].title == "User Management"
+        # the staged requirement file lives in a temp dir that is gone again
+        assert not Path(captured[0].raw["requirements"]).exists()  # type: ignore[attr-defined]

@@ -92,12 +92,12 @@
     "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
   },
   "meta": {
-    "git_sha": "ba93ecd0b272",
+    "git_sha": "75680a474463",
     "layer": "http-contract",
     "normalized": [
       "session_id"
     ],
-    "recorded_utc": "2026-09-19T14:03:38.018729+00:00"
+    "recorded_utc": "2026-09-19T14:43:40.174375+00:00"
   },
   "name": "ok-markdown",
   "request_trace": [],

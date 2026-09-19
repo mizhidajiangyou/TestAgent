@@ -6,9 +6,10 @@ Exposes:
   - ``GET  /api/config``: current configuration summary.
   - ``POST /api/generate``: generate test cases from requirement text.
 
-The LLM generation uses the async ``TestCaseGenerator.agenerate`` path, which
-fans batches out concurrently via ``asyncio.to_thread`` so the event loop stays
-responsive while generation is in flight.
+The LLM generation runs on the task-package pipeline (``tasks/testcase`` +
+``PipelineExecutor``); the HTTP contract it exposes was recorded from the
+legacy chain BEFORE that switch and is pinned by
+``tests/fixtures/migration/web_contract/`` (plan-k B7.1 / E4).
 
 iframe embedding is enabled by default: ``Content-Security-Policy:
 frame-ancestors *`` is sent on every response. Override the allowed
@@ -17,6 +18,7 @@ origins with the ``WEB_FRAME_ANCESTORS`` env var (space-separated list).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import tempfile
@@ -30,10 +32,12 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from testagent.config.models import TestCaseGenInput
+from testagent.config.models import TestCase
 from testagent.container import Container
 from testagent.engine.llm_client import ModelUnavailableError
-from testagent.generators.testcase_generator import TestCaseGenerator
+from testagent.pipeline.inputs import parse_inputs
+from testagent.pipeline.testcase_adapter import dict_to_testcase, testcase_to_full_dict
+from testagent.pipeline.writers import render_csv_text
 
 logger = logging.getLogger(__name__)
 
@@ -180,11 +184,12 @@ def create_app(container: Container | None = None) -> FastAPI:
 
     @app.post("/api/generate", response_model=GenerateResponse, tags=["generate"])
     async def generate(req: GenerateRequest) -> GenerateResponse:
-        """Generate test cases from requirement text.
+        """Generate test cases from requirement text on the task pipeline.
 
-        Parsing runs synchronously (fast), then the async
-        ``TestCaseGenerator.agenerate`` path fans batches out concurrently so
-        the event loop stays responsive during LLM generation.
+        Contract note: every status code and error string below is pinned by a
+        recorded fixture (``web_contract/``). The pipeline reports failures as
+        ``units_failed`` and never raises, so the legacy "0 cases" guidance has
+        to stay an explicit check here rather than come from the executor.
         """
         if not req.requirements.strip():
             raise HTTPException(status_code=400, detail="requirements must not be empty")
@@ -195,50 +200,52 @@ def create_app(container: Container | None = None) -> FastAPI:
             )
 
         container = _get_container()
-
-        # Parse historical cases (if any) from raw dicts → TestCase objects.
+        settings = container.settings()
         historical = (
-            [
-                tc
-                for tc in (TestCaseGenerator._dict_to_testcase(d) for d in req.historical_cases)
-                if tc
-            ]
+            [tc for tc in (dict_to_testcase(d) for d in req.historical_cases) if tc]
             if req.historical_cases
             else []
         )
+        task = container.task_registry().get("testcase")
+        session_id = uuid.uuid4().hex[:12]
 
-        try:
-            gen_input = _build_gen_input(container, req.requirements, req.swagger_url, historical)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw = _stage_request_inputs(Path(tmpdir), req)
+            try:
+                ctx = parse_inputs(task.manifest, raw, settings)
+            except FileNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not ctx.parsed.get("requirements") and not ctx.parsed.get("endpoints"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="No requirements could be parsed from the provided document.",
+                )
+            try:
+                result = await container.pipeline_executor().arun(task, ctx, session_id=session_id)
+            except ModelUnavailableError as exc:
+                # Zero-token pre-flight failed: bad key / base_url / model name.
+                logger.warning("Model pre-flight verification failed: %s", exc)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Model unavailable: {exc}. Check OPENAI_API_KEY, "
+                        "OPENAI_BASE_URL and OPENAI_MODEL (or set "
+                        "OPENAI_VERIFY_MODEL=false if the provider lacks the "
+                        "/models API)."
+                    ),
+                ) from exc
+            except Exception as exc:  # surface other LLM/config errors to the UI
+                logger.exception("Generation failed")
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        try:
-            session_id = uuid.uuid4().hex[:12]
-            test_cases = await container.testcase_generator().agenerate(
-                gen_input, session_id=session_id
-            )
-        except ModelUnavailableError as exc:
-            # Zero-token pre-flight failed: bad key / base_url / model name.
-            logger.warning("Model pre-flight verification failed: %s", exc)
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Model unavailable: {exc}. Check OPENAI_API_KEY, "
-                    "OPENAI_BASE_URL and OPENAI_MODEL (or set "
-                    "OPENAI_VERIFY_MODEL=false if the provider lacks the "
-                    "/models API)."
-                ),
-            ) from exc
-        except Exception as exc:  # surface other LLM/config errors to the UI
-            logger.exception("Generation failed")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        if not test_cases:
-            # The generator degrades gracefully (never crashes) and returns []
-            # when every LLM call failed. Surface that as a clear 500 with the
-            # usual root-cause hint instead of a silent empty result.
+        artifact = result.artifact if isinstance(result.artifact, list) else []
+        cases = [tc for tc in (dict_to_testcase(item) for item in artifact) if tc]
+        if not cases:
+            # The pipeline degrades gracefully (never crashes) and yields an
+            # empty artifact when every unit failed. Surface that as a clear
+            # 500 with the usual root-cause hint instead of a silent empty 200.
             raise HTTPException(
                 status_code=500,
                 detail=(
@@ -250,13 +257,13 @@ def create_app(container: Container | None = None) -> FastAPI:
                 ),
             )
 
-        cases_dicts = [TestCaseGenerator._testcase_to_dict(tc) for tc in test_cases]
+        cases_dicts = [_case_to_http_dict(tc) for tc in cases]
         download_content, download_filename = _render_output(
-            container, test_cases, cases_dicts, req.output_format
+            container, cases, cases_dicts, req.output_format
         )
 
         return GenerateResponse(
-            count=len(test_cases),
+            count=len(cases),
             test_cases=cases_dicts,
             output_format=req.output_format,
             download_content=download_content,
@@ -285,39 +292,33 @@ def create_app(container: Container | None = None) -> FastAPI:
 # ---------------------------------------------------------------------------
 
 
-def _build_gen_input(
-    container: Container,
-    requirements_text: str,
-    swagger_url: str | None,
-    historical: list[Any],
-) -> TestCaseGenInput:
-    """Parse request inputs into a ``TestCaseGenInput`` for async generation.
+def _stage_request_inputs(tmpdir: Path, req: GenerateRequest) -> dict[str, str]:
+    """Map the HTTP request onto ``tasks/testcase`` inputs.
 
-    The requirement text is written to a temp ``.md`` file so the existing
-    :class:`RequirementParser` (which handles Markdown/JSON/text/binary) can
-    be reused without duplicating parsing logic. Raises ``ValueError`` when
-    neither requirements nor endpoints can be parsed (mapped to HTTP 400 by
-    the caller), and ``FileNotFoundError`` when a Swagger URL/path cannot be
-    fetched (mapped to HTTP 404).
+    Package inputs are paths (the same parsers the CLI uses), so inline request
+    text is staged into a temp file — the approach the legacy route already used
+    for the requirement document.
     """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        req_path = Path(tmpdir) / "requirements.md"
-        req_path.write_text(requirements_text, encoding="utf-8")
+    req_path = tmpdir / "requirements.md"
+    req_path.write_text(req.requirements, encoding="utf-8")
+    raw: dict[str, str] = {"requirements": str(req_path)}
+    if req.swagger_url:
+        raw["swagger"] = req.swagger_url
+    if req.historical_cases:
+        hist_path = tmpdir / "historical_cases.json"
+        hist_path.write_text(json.dumps(req.historical_cases, ensure_ascii=False), encoding="utf-8")
+        raw["historical_cases"] = str(hist_path)
+    return raw
 
-        req_items = container.requirement_parser().parse(str(req_path))
 
-        endpoints: list[Any] = []
-        if swagger_url:
-            endpoints = container.swagger_parser().parse(swagger_url)
+def _case_to_http_dict(tc: TestCase) -> dict[str, Any]:
+    """One case → the HTTP response shape (the 17-key ``testcase_to_full_dict``).
 
-        if not req_items and not endpoints:
-            raise ValueError("No requirements could be parsed from the provided document.")
-
-        return TestCaseGenInput(
-            endpoints=endpoints,
-            requirements=req_items,
-            historical_cases=historical,
-        )
+    Owned by the web contract, pinned by the ``web_contract`` fixtures: the
+    pipeline's own artifact dict is the 10-key narrative form, while the API has
+    always also returned the quality-line columns.
+    """
+    return testcase_to_full_dict(tc)
 
 
 def _render_output(
@@ -335,10 +336,7 @@ def _render_output(
     if output_format == "json":
         return None, None
     if output_format == "csv":
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out = Path(tmpdir) / "testcases.csv"
-            container.testcase_generator().save_csv(test_cases, out)
-            return out.read_text(encoding="utf-8-sig"), "testcases.csv"
+        return render_csv_text(cases_dicts), "testcases.csv"
     # markdown
     from testagent.config.models import TestCaseReportInput
 

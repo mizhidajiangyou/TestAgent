@@ -15,12 +15,12 @@
     "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
   },
   "meta": {
-    "git_sha": "ba93ecd0b272",
+    "git_sha": "75680a474463",
     "layer": "http-contract",
     "normalized": [
       "session_id"
     ],
-    "recorded_utc": "2026-09-19T14:03:39.166288+00:00"
+    "recorded_utc": "2026-09-19T14:43:41.393164+00:00"
   },
   "name": "err-call-failed",
   "request_trace": [],
