@@ -119,6 +119,159 @@ def build_generate_unit(llm: LLMClient) -> Any:
     return generate_unit
 
 
+def build_engine_generate_unit(llm: LLMClient) -> Any:
+    """FH2.1: engine-backed unit generator (plan-d B6b.1).
+
+    Drives the REAL :class:`TruncationEngine` (truncated salvage → slim
+    continue → scope shrink → budget ladder) inside the pipeline unit,
+    configured from the manifest's ``TruncationSpec``:
+
+    - ``enabled=false`` falls back to the plain ``build_generate_unit``
+      behavior contract (single call, no recovery) — rollback seam;
+    - ``scope_key_field`` feeds ``make_dict_hooks``'s declared scope key;
+    - ``policy.from_settings`` mirrors ``OPENAI_MAX_OUTPUT_TOKENS`` into
+      ``TruncationPolicy.output_token_cap``.
+
+    Outcome → UnitStatus mapping is the existing ``unit_status_from_outcome``
+    table (B6a); EngineEvent semantics are untouched (golden diff=0 gate).
+    ``build_generate_unit`` stays as the rollback path.
+    """
+
+    async def generate_unit(
+        task: TaskPackage,
+        stage: StageSpec,
+        label: str,
+        unit_ctx: dict[str, Any],
+        ctx: TaskContext,
+        session_id: str,
+        fingerprint_log: FingerprintLog | None = None,
+    ) -> UnitResult:
+        render_ctx = {**ctx.parsed, **ctx.settings_views, **_unit_views(unit_ctx)}
+        system_prompt = task.system_prompt(stage.system_prompt, render_ctx)
+        user_prompt = task.render(stage.template, render_ctx)
+        if fingerprint_log is not None:
+            fingerprint_log.record(
+                model=getattr(llm, "primary_model", "llm"),
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                params={"via": "pipeline-engine"},
+                label=CALL_LABEL.get(""),
+            )
+
+        spec = task.manifest.pipeline.truncation
+        if not spec.enabled:
+            # Rollback seam: delegate to the single-call implementation.
+            plain = build_generate_unit(llm)
+            result: UnitResult = await plain(
+                task, stage, label, unit_ctx, ctx, session_id, fingerprint_log
+            )
+            return result
+
+        from testagent.config.settings import get_settings
+        from testagent.engine.truncation import TruncationEngine, TruncationPolicy
+        from testagent.pipeline.truncation_hooks import make_dict_hooks
+
+        policy = TruncationPolicy(output_token_cap=get_settings().llm.max_output_tokens)
+
+        def _extract(raw: str) -> list[dict[str, Any]] | None:
+            items = _extract_json_list(raw)
+            return items
+
+        def _salvage(raw: str) -> list[dict[str, Any]] | None:
+            """Brace-depth salvage for truncated JSON (B4.11: the legacy
+            generator's salvage parser cannot be imported, so a compact
+            host-side repair lives here — complete the missing closers for
+            the outermost array and return the parseable prefix)."""
+            text = strip_fences(raw)
+            start = text.find("[")
+            if start == -1:
+                return _extract_json_list(raw)
+            depth = 0
+            in_str = False
+            esc = False
+            last_complete = -1
+            for i, ch in enumerate(text[start:], start):
+                if esc:
+                    esc = False
+                    continue
+                if ch == "\\":
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        last_complete = i
+            if last_complete == -1:
+                return None
+            candidate = text[start : last_complete + 1] + "]"
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                return None
+            return (
+                [it for it in parsed if isinstance(it, dict)] if isinstance(parsed, list) else None
+            )
+
+        def _scope_item_key(item: Any) -> str:
+            if spec.scope_key_field:
+                if isinstance(item, dict):
+                    return str(item.get(spec.scope_key_field, "") or "")
+                return str(getattr(item, spec.scope_key_field, "") or "")
+            if isinstance(item, dict):
+                method = item.get("method", "")
+                path = item.get("path", "")
+                if method and path:
+                    return f"{method} {path}"
+                return str(item.get("endpoint", "") or "")
+            # APIEndpoint-like scope items: full_path "METHOD /path" is the
+            # engine's batch scope key (B6a-2; defect-found in FH2.1 tests —
+            # str(dataclass) repr made every item out_of_scope).
+            method = getattr(item, "method", "")
+            path = getattr(item, "path", "")
+            if method and path:
+                return f"{method} {path}"
+            return str(item)
+
+        hooks = make_dict_hooks(
+            extract=_extract,
+            salvage=_salvage,
+            scope_field=spec.scope_key_field or "endpoint",
+            scope_item_key=_scope_item_key,
+        )
+        engine = TruncationEngine(policy, json_mode=False, hooks=hooks)
+        scope_items = _unit_scope_items(unit_ctx)
+        items = await engine.arun(llm, system_prompt, user_prompt, scope_items, label)
+
+        if not items:
+            return UnitResult(status=UnitStatus.EMPTY)
+
+        schema = task.manifest.artifact.item_schema
+        if schema and validate_structured(items, schema):
+            return UnitResult(status=UnitStatus.VALIDATION_ERROR, items=items)
+        return UnitResult(status=UnitStatus.SUCCESS, items=items)
+
+    return generate_unit
+
+
+def _unit_scope_items(unit_ctx: dict[str, Any]) -> list[Any]:
+    """Scope items for the engine: the split unit's endpoints (batch) or
+    the single item; falls back to the full parsed endpoint list."""
+    batch = unit_ctx.get("_unit_batch")
+    if batch:
+        return list(batch)
+    item = unit_ctx.get("_unit_item")
+    if item is not None:
+        return [item]
+    return []
+
+
 def _unit_views(unit_ctx: dict[str, Any]) -> dict[str, Any]:
     """Expose split payloads under stable template variable names."""
     views: dict[str, Any] = {}
@@ -145,6 +298,7 @@ __all__ = [
     "REVIEW_FAILED",
     "REVIEW_REJECTED",
     "ReviewOutcome",
+    "build_engine_generate_unit",
     "build_generate_unit",
     "build_review_runner",
 ]
