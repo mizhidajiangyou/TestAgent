@@ -103,12 +103,15 @@ _EPS = [
     APIEndpoint(method="POST", path="/users"),
 ]
 
+#: Per-call output cap the composition root would inject (runtime never re-reads settings).
+_CAP = 16000
+
 
 @pytest.mark.asyncio
 class TestEngineGenerateUnit:
     async def test_normal_trajectory(self) -> None:
         llm = ScriptedLLM([_VALID])
-        unit = build_engine_generate_unit(llm)
+        unit = build_engine_generate_unit(llm, output_token_cap=_CAP)
         result = await unit(_Task(), _STAGE, "batch 1/1", _unit_ctx(_EPS), _ctx(_EPS), "s1")
         assert result.status is UnitStatus.SUCCESS
         assert len(result.items) == 2
@@ -119,7 +122,7 @@ class TestEngineGenerateUnit:
         partial items and CONTINUES (continue/reask path), then completes."""
         truncated = _VALID[:-12]  # cut mid-JSON
         llm = ScriptedLLM([truncated, _VALID_2])
-        unit = build_engine_generate_unit(llm)
+        unit = build_engine_generate_unit(llm, output_token_cap=_CAP)
         result = await unit(_Task(), _STAGE, "batch 1/1", _unit_ctx(_EPS), _ctx(_EPS), "s2")
         assert result.status is UnitStatus.SUCCESS
         assert llm.calls >= 2, "engine must continue after salvage"
@@ -128,14 +131,14 @@ class TestEngineGenerateUnit:
         """Repeatedly empty responses: engine ladder exhausts -> EMPTY (the
         B6a Outcome mapping table, not a new policy)."""
         llm = ScriptedLLM(["", "", ""], finish="length")
-        unit = build_engine_generate_unit(llm)
+        unit = build_engine_generate_unit(llm, output_token_cap=_CAP)
         result = await unit(_Task(), _STAGE, "batch 1/1", _unit_ctx(_EPS), _ctx(_EPS), "s3")
         assert result.status is UnitStatus.EMPTY
 
     async def test_disabled_spec_delegates_to_plain_path(self) -> None:
         """TruncationSpec.enabled=false -> single-call contract (rollback)."""
         llm = ScriptedLLM([_VALID])
-        unit = build_engine_generate_unit(llm)
+        unit = build_engine_generate_unit(llm, output_token_cap=_CAP)
         result = await unit(
             _Task(TruncationSpec(enabled=False)), _STAGE, "b", _unit_ctx(_EPS), _ctx(_EPS), "s4"
         )
@@ -146,7 +149,7 @@ class TestEngineGenerateUnit:
         task = _Task()
         task.manifest.artifact.item_schema = {"type": "object", "required": ["id", "title"]}
         llm = ScriptedLLM([json.dumps([{"id": "1"}])])  # missing title
-        unit = build_engine_generate_unit(llm)
+        unit = build_engine_generate_unit(llm, output_token_cap=_CAP)
         result = await unit(task, _STAGE, "b", _unit_ctx(_EPS), _ctx(_EPS), "s5")
         assert result.status is UnitStatus.VALIDATION_ERROR
         assert result.items is not None and result.items[0]["id"] == "1"  # retained for audit

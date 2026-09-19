@@ -23,23 +23,26 @@ The post-link-wiring replay subset is frozen in
 
 import asyncio
 import json
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from testagent.container import Container
 from testagent.engine.llm_client import LLMClient, LLMResponse
 from testagent.pipeline.executor import PipelineExecutor
 from testagent.pipeline.inputs import parse_inputs
+from testagent.pipeline.registry import get_registry
 from tests.parity_harness import (
     Fingerprint,
     Fixture,
-    ensure_no_credentials,
+    bare_settings,
+    ensure_fixture,
     load_fixture,
     minimal_diff,
     observable_failure_class,
-    record_fixture,
 )
 
 REPO = Path(__file__).parents[1]
@@ -146,12 +149,22 @@ def _write_inputs(tmp: Path, historical: list[dict] | None = None) -> dict[str, 
     return raw
 
 
-def _make_settings(review_enabled: bool = False):
-    from testagent.config.settings import Settings
-
-    settings = Settings(review_enabled=review_enabled, _env_file=None)  # type: ignore[call-arg]
+def _make_settings(review_enabled: bool = False) -> Any:
+    settings = bare_settings(review_enabled=review_enabled)
     object.__setattr__(settings, "output_dir", "./output")
     return settings
+
+
+@contextmanager
+def _in_dir(tmp: Path) -> Iterator[None]:
+    """Scope a cwd change so a leak can't poison later tests (input paths in
+    fixtures are relative names, so the pipeline must see them as cwd)."""
+    previous = Path.cwd()
+    os.chdir(tmp)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 def _run_taskcase(
@@ -162,24 +175,25 @@ def _run_taskcase(
     finish: str = "stop",
     review_enabled: bool = False,
 ) -> Fixture:
-    """Drive tasks/testcase through PipelineExecutor; observe E1 elements."""
-    import os
+    """Drive tasks/testcase through PipelineExecutor; observe E1 elements.
 
-    os.environ["TASKS_DIR"] = str(REPO / "tasks")
-    os.chdir(tmp)  # registry/input paths resolve relative to cwd (TASKS_DIR absolute here)
-    container = Container()
-    task = container.task_registry().get("testcase")
+    The registry is built from an explicit absolute TASKS_DIR: the settings
+    singleton is cached process-wide, so mutating ``os.environ`` here would
+    only work when no earlier test has already warmed it.
+    """
+    task = get_registry(REPO / "tasks").get("testcase")
     llm = ScriptedPipelineLLM(responses, finish=finish)
     settings = _make_settings(review_enabled)
 
     executor = PipelineExecutor(
         llm,  # type: ignore[arg-type]
         settings,
-        generate_unit=build_engine_generate_unit_for(llm),
+        generate_unit=build_engine_generate_unit_for(llm, settings),
         review_runner=build_review_runner_for(llm, settings) if review_enabled else None,
     )
-    ctx = parse_inputs(task.manifest, raw, settings)
-    result = asyncio.run(executor.arun(task, ctx, session_id="parity-fixed"))
+    with _in_dir(tmp):
+        ctx = parse_inputs(task.manifest, raw, settings)
+        result = asyncio.run(executor.arun(task, ctx, session_id="parity-fixed"))
 
     units: list[dict[str, Any]] = []
     for stage in result.stage_stats:
@@ -221,10 +235,10 @@ def _run_taskcase(
     )
 
 
-def build_engine_generate_unit_for(llm: Any):
+def build_engine_generate_unit_for(llm: Any, settings: Any):
     from testagent.pipeline.runtime import build_engine_generate_unit
 
-    return build_engine_generate_unit(llm)
+    return build_engine_generate_unit(llm, output_token_cap=settings.llm.max_output_tokens)
 
 
 def build_review_runner_for(llm: Any, settings: Any):
@@ -273,22 +287,22 @@ def _fixture_name(scenario: str) -> str:
 
 @pytest.fixture(scope="module")
 def recorded_fixtures(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Fixture]:
-    """Record all scenario fixtures once (module scope)."""
+    """The committed baselines (rebuilt + re-recorded only under the opt-in)."""
     out: dict[str, Fixture] = {}
     for scenario, cfg in SCENARIOS.items():
-        tmp = tmp_path_factory.mktemp(f"tc-{scenario}")
-        raw = _write_inputs(tmp, historical=cfg.get("historical"))
-        fixture = _run_taskcase(
-            tmp,
-            raw,
-            list(cfg["responses"]),
-            finish=cfg.get("finish", "stop"),
-            review_enabled=cfg.get("review", False),
-        )
-        fixture.name = _fixture_name(scenario)
-        ensure_no_credentials(fixture.to_dict())
-        record_fixture(fixture)
-        out[scenario] = fixture
+
+        def _build(scenario: str = scenario, cfg: dict[str, Any] = cfg) -> Fixture:
+            tmp = tmp_path_factory.mktemp(f"tc-{scenario}")
+            raw = _write_inputs(tmp, historical=cfg.get("historical"))
+            return _run_taskcase(
+                tmp,
+                raw,
+                list(cfg["responses"]),
+                finish=cfg.get("finish", "stop"),
+                review_enabled=cfg.get("review", False),
+            )
+
+        out[scenario] = ensure_fixture("testcase", _fixture_name(scenario), _build)
     return out
 
 

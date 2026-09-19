@@ -9,25 +9,39 @@ and asserts the four gates at the observable level.
 
 import asyncio
 import json
+import os
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from testagent.container import Container
 from testagent.engine.llm_client import LLMClient, LLMResponse
 from testagent.pipeline.executor import PipelineExecutor
 from testagent.pipeline.inputs import parse_inputs
+from testagent.pipeline.registry import get_registry
 from tests.parity_harness import (
     Fingerprint,
     Fixture,
-    ensure_no_credentials,
+    bare_settings,
+    ensure_fixture,
     load_fixture,
     minimal_diff,
-    record_fixture,
 )
 
 REPO = Path(__file__).parents[1]
+
+
+@contextmanager
+def _in_dir(tmp: Path) -> Iterator[None]:
+    """Scope a cwd change so a leak can't poison later tests."""
+    previous = Path.cwd()
+    os.chdir(tmp)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 class ScriptedTextLLM(LLMClient):
@@ -83,17 +97,16 @@ _K6_SCRIPT = (
 
 
 def _run_task(task_name: str, raw: dict[str, str], script: str, tmp: Path) -> Fixture:
-    import os
-
-    os.environ["TASKS_DIR"] = str(REPO / "tasks")
-    os.chdir(tmp)
-    container = Container()
-    task = container.task_registry().get(task_name)
+    """Deterministic by construction: absolute registry path + settings that
+    never read the developer's ``.env`` (a baseline that varies with local env
+    is not a baseline, and CI would drift from the recording machine)."""
+    task = get_registry(REPO / "tasks").get(task_name)
     llm = ScriptedTextLLM(script)
-    settings = container.settings()
+    settings = bare_settings()
     executor = PipelineExecutor(llm, settings, generate_unit=build_unit_for(llm))
-    ctx = parse_inputs(task.manifest, raw, settings)
-    result = asyncio.run(executor.arun(task, ctx, session_id="parity-fixed"))
+    with _in_dir(tmp):
+        ctx = parse_inputs(task.manifest, raw, settings)
+        result = asyncio.run(executor.arun(task, ctx, session_id="parity-fixed"))
     response_texts = list(llm.responses_served)
     return Fixture(
         name="placeholder",
@@ -124,24 +137,13 @@ def build_unit_for(llm: Any):
     return build_generate_unit(llm)
 
 
-@pytest.fixture(scope="module")
-def recorded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Fixture]:
-    out: dict[str, Fixture] = {}
-    tmp_gui = tmp_path_factory.mktemp("gui-parity")
-    (tmp_gui / "req.md").write_text("# GUI\n\nLogin and logout flows.\n", encoding="utf-8")
-    gui = _run_task(
-        "gui",
-        {"requirements": "req.md", "url": "https://x.test"},
-        _GUI_SCRIPT,
-        tmp_gui,
-    )
-    gui.name = "gui-baseline"
-    ensure_no_credentials(gui.to_dict())
-    record_fixture(gui)
-    out["gui-baseline"] = gui
+def _gui_inputs(tmp: Path) -> dict[str, str]:
+    (tmp / "req.md").write_text("# GUI\n\nLogin and logout flows.\n", encoding="utf-8")
+    return {"requirements": "req.md", "url": "https://x.test"}
 
-    tmp_perf = tmp_path_factory.mktemp("perf-parity")
-    (tmp_perf / "spec.json").write_text(
+
+def _perf_inputs(tmp: Path) -> dict[str, str]:
+    (tmp / "spec.json").write_text(
         json.dumps(
             {
                 "openapi": "3.0.0",
@@ -154,66 +156,48 @@ def recorded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Fixture]:
         ),
         encoding="utf-8",
     )
-    perf = _run_task(
-        "perf",
-        {"swagger": "spec.json", "base_url": "https://x.test", "script_format": "k6"},
-        _K6_SCRIPT,
-        tmp_perf,
-    )
-    perf.name = "perf-baseline-k6"
-    ensure_no_credentials(perf.to_dict())
-    record_fixture(perf)
-    out["perf-baseline-k6"] = perf
+    return {"swagger": "spec.json", "base_url": "https://x.test", "script_format": "k6"}
+
+
+#: fixture name -> (task package, scripted LLM output, input writer). The same
+#: builder runs for recording and for replay, so a "drift" can only come from
+#: the code under test.
+SCENARIOS: dict[str, tuple[str, str, Callable[[Path], dict[str, str]]]] = {
+    "gui-baseline": ("gui", _GUI_SCRIPT, _gui_inputs),
+    "perf-baseline-k6": ("perf", _K6_SCRIPT, _perf_inputs),
+}
+
+
+def _run_scenario(name: str, tmp: Path) -> Fixture:
+    task_name, script, write_inputs = SCENARIOS[name]
+    fixture = _run_task(task_name, write_inputs(tmp), script, tmp)
+    fixture.name = name
+    return fixture
+
+
+@pytest.fixture(scope="module")
+def recorded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Fixture]:
+    out: dict[str, Fixture] = {}
+    for name, (task_name, _, _) in SCENARIOS.items():
+
+        def _build(name: str = name) -> Fixture:
+            return _run_scenario(name, tmp_path_factory.mktemp(f"{name}-parity"))
+
+        out[name] = ensure_fixture(task_name, name, _build)
     return out
 
 
 class TestPerfGuiParity:
-    @pytest.mark.parametrize("name", ["gui-baseline", "perf-baseline-k6"])
-    def test_replay_diff_zero(
-        self, name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("TASKS_DIR", str(REPO / "tasks"))
-        recorded = load_fixture("gui" if name.startswith("gui") else "perf", name)
-        if name == "gui-baseline":
-            tmp = tmp_path / "gui"
-            tmp.mkdir()
-            (tmp / "req.md").write_text("# GUI\n\nLogin and logout flows.\n", encoding="utf-8")
-            replayed = _run_task(
-                "gui", {"requirements": "req.md", "url": "https://x.test"}, _GUI_SCRIPT, tmp
-            )
-        else:
-            tmp = tmp_path / "perf"
-            tmp.mkdir()
-            (tmp / "spec.json").write_text(
-                json.dumps(
-                    {
-                        "openapi": "3.0.0",
-                        "paths": {
-                            "/users": {
-                                "get": {
-                                    "tags": ["users"],
-                                    "responses": {"200": {"description": "OK"}},
-                                }
-                            }
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            replayed = _run_task(
-                "perf",
-                {"swagger": "spec.json", "base_url": "https://x.test", "script_format": "k6"},
-                _K6_SCRIPT,
-                tmp,
-            )
-        replayed.name = name
-        diff = minimal_diff(recorded, replayed)
+    @pytest.mark.parametrize("name", sorted(SCENARIOS))
+    def test_replay_diff_zero(self, name: str, tmp_path: Path) -> None:
+        recorded = load_fixture(SCENARIOS[name][0], name)
+        diff = minimal_diff(recorded, _run_scenario(name, tmp_path))
         assert diff == {}, f"{name} drifted: {list(diff)}"
 
     def test_gui_contract_compilable(self, recorded) -> None:
         artifact = recorded["gui-baseline"].artifact
         script = artifact if isinstance(artifact, str) else artifact[0]
-        assert "import pytest" in script
+        compile(script, "<gui-baseline>", "exec")
 
     def test_failure_semantics_observed(self, recorded) -> None:
         for name, fixture in recorded.items():

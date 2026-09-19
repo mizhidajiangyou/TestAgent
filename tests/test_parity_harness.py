@@ -7,14 +7,22 @@ from pathlib import Path
 import pytest
 
 from tests.parity_harness import (
+    RECORD_ENV,
     Fingerprint,
     Fixture,
+    ensure_fixture,
     load_fixture,
     minimal_diff,
     observable_failure_class,
     record_fixture,
     replay_diff,
 )
+
+
+@pytest.fixture(autouse=True)
+def _recording_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise the writer, and always into a tmp FIXTURE_ROOT."""
+    monkeypatch.setenv(RECORD_ENV, "1")
 
 
 def _sample_testcase_observation() -> Fixture:
@@ -120,3 +128,55 @@ class TestHarnessSelfTest:
     def test_json_serializable(self, tmp_path: Path) -> None:
         payload = json.loads(json.dumps(_sample_testcase_observation().to_dict()))
         assert payload["fixture_version"] == 1
+
+
+class TestRecordingIsOptIn:
+    """A default run must not be able to rewrite the baseline it is checked
+    against — otherwise "replay diff=0" is a self-proof, not a gate."""
+
+    def test_record_refused_without_opt_in(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("tests.parity_harness.FIXTURE_ROOT", tmp_path)
+        monkeypatch.delenv(RECORD_ENV, raising=False)
+        with pytest.raises(RuntimeError, match=RECORD_ENV):
+            record_fixture(_sample_testcase_observation())
+        assert list(tmp_path.rglob("*.json")) == []
+
+    def test_ensure_fixture_loads_baseline_without_building(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("tests.parity_harness.FIXTURE_ROOT", tmp_path)
+        record_fixture(_sample_testcase_observation())
+        monkeypatch.delenv(RECORD_ENV, raising=False)
+        built: list[str] = []
+
+        def _build() -> Fixture:
+            built.append("called")
+            return _sample_testcase_observation()
+
+        loaded = ensure_fixture("_selftest", "selftest-testcase", _build)
+        assert built == []
+        assert minimal_diff(loaded, _sample_testcase_observation()) == {}
+
+    def test_ensure_fixture_records_under_opt_in(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("tests.parity_harness.FIXTURE_ROOT", tmp_path)
+        built: list[str] = []
+
+        def _build() -> Fixture:
+            built.append("called")
+            return _sample_testcase_observation()
+
+        ensure_fixture("_selftest", "selftest-testcase", _build)
+        assert built == ["called"]
+        assert (tmp_path / "_selftest" / "selftest-testcase.json").exists()
+
+    def test_missing_baseline_fails_loudly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("tests.parity_harness.FIXTURE_ROOT", tmp_path)
+        monkeypatch.delenv(RECORD_ENV, raising=False)
+        with pytest.raises(AssertionError, match=RECORD_ENV):
+            ensure_fixture("_selftest", "selftest-absent", _sample_testcase_observation)

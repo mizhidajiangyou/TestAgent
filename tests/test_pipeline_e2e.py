@@ -78,6 +78,15 @@ class TestArchitectureGate:
                 for seam in seams:
                     assert seam not in src, f"{py.relative_to(REPO)} references legacy seam {seam}"
 
+    def test_pipeline_never_reads_the_settings_singleton(self) -> None:
+        """DI rule: the pipeline runs on the INJECTED Settings. Calling
+        ``get_settings()`` inside a pipeline module ignores every override and
+        makes behavior depend on which caller warmed the lru_cache first — the
+        defect that turned the 2026-09-19 parity suite red under a full run."""
+        for path in _pipeline_modules():
+            src = path.read_text(encoding="utf-8")
+            assert "get_settings(" not in src, f"{path.name} reads the settings singleton"
+
     # ------------------------------------------------------------------
     # plan-l L-1 — shared-model uniqueness machine checks (skeleton by T1,
     # the first settings.py writer). Owners extend the tracked sets as

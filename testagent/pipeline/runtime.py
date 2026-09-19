@@ -119,7 +119,7 @@ def build_generate_unit(llm: LLMClient) -> Any:
     return generate_unit
 
 
-def build_engine_generate_unit(llm: LLMClient) -> Any:
+def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
     """FH2.1: engine-backed unit generator (plan-d B6b.1).
 
     Drives the REAL :class:`TruncationEngine` (truncated salvage → slim
@@ -130,7 +130,10 @@ def build_engine_generate_unit(llm: LLMClient) -> Any:
       behavior contract (single call, no recovery) — rollback seam;
     - ``scope_key_field`` feeds ``make_dict_hooks``'s declared scope key;
     - ``policy.from_settings`` mirrors ``OPENAI_MAX_OUTPUT_TOKENS`` into
-      ``TruncationPolicy.output_token_cap``.
+      ``TruncationPolicy.output_token_cap`` — resolved by the composition
+      root and passed in as ``output_token_cap``, never re-read from the
+      settings singleton here (an injected Settings would be ignored, and
+      a cached singleton makes the run depend on test/process history).
 
     Outcome → UnitStatus mapping is the existing ``unit_status_from_outcome``
     table (B6a); EngineEvent semantics are untouched (golden diff=0 gate).
@@ -167,11 +170,10 @@ def build_engine_generate_unit(llm: LLMClient) -> Any:
             )
             return result
 
-        from testagent.config.settings import get_settings
         from testagent.engine.truncation import TruncationEngine, TruncationPolicy
         from testagent.pipeline.truncation_hooks import make_dict_hooks
 
-        policy = TruncationPolicy(output_token_cap=get_settings().llm.max_output_tokens)
+        policy = TruncationPolicy(output_token_cap=output_token_cap)
 
         def _extract(raw: str) -> list[dict[str, Any]] | None:
             items = _extract_json_list(raw)

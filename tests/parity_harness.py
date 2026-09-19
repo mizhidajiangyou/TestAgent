@@ -17,6 +17,9 @@ One shared harness for both parity lines (testcase / perf+gui). Provides:
 
 Recording discipline: fixtures are recorded BEFORE the change under test
 (provenance: recorded_utc + git sha); replay after a change must diff=0.
+Recording is opt-in via ``TESTAGENT_RECORD_PARITY=1`` — a default ``pytest``
+run must never rewrite a baseline, otherwise "replay == recorded" is a
+self-proof and the gate has no power to catch drift.
 """
 
 from __future__ import annotations
@@ -31,18 +34,25 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "RECORD_ENV",
     "TERMINAL_EVENTS",
     "Fingerprint",
     "Fixture",
+    "bare_settings",
+    "ensure_fixture",
     "fixture_path",
     "load_fixture",
     "minimal_diff",
     "observable_failure_class",
     "record_fixture",
+    "recording_enabled",
     "replay_fixture",
 ]
 
 FIXTURE_ROOT = Path(__file__).parents[1] / "tests" / "fixtures" / "migration"
+
+#: Opt-in switch for writing baselines (see module docstring).
+RECORD_ENV = "TESTAGENT_RECORD_PARITY"
 
 #: Terminal EngineEvent names (plan-e R5): exactly one per trajectory.
 TERMINAL_EVENTS = {"done", "fail"}
@@ -164,10 +174,39 @@ def _git_sha() -> str:
         return "unknown"
 
 
+def recording_enabled() -> bool:
+    """True only when the operator explicitly asked to (re)record baselines."""
+    return os.environ.get(RECORD_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def bare_settings(**overrides: Any) -> Any:
+    """Settings with no ``.env`` in ANY section — a baseline must not depend
+    on the recording machine's local config (or its cwd: every nested section
+    resolves ``env_file=".env"`` itself, so ``_env_file=None`` on the root
+    alone still picks up the developer's file)."""
+    from pydantic_settings import BaseSettings
+
+    from testagent.config.settings import Settings
+
+    kwargs: dict[str, Any] = {}
+    for name, model_field in Settings.model_fields.items():
+        annotation = model_field.annotation
+        if isinstance(annotation, type) and issubclass(annotation, BaseSettings):
+            kwargs[name] = annotation(_env_file=None)  # type: ignore[call-arg]
+    kwargs.update(overrides)
+    return Settings(_env_file=None, **kwargs)  # type: ignore[call-arg]
+
+
 def record_fixture(fixture: Fixture) -> Path:
     """Write the fixture with provenance; recording is legitimate only
     BEFORE the change under test (golden discipline). Credentials guard runs
     first - fixtures get committed, so no secret may enter."""
+    if not recording_enabled():
+        raise RuntimeError(
+            f"refusing to rewrite parity baseline {fixture.task}/{fixture.name}: "
+            f"set {RECORD_ENV}=1 to record. A default run must not overwrite the "
+            "baseline it is checking against (that would make diff=0 a self-proof)."
+        )
     ensure_no_credentials(fixture.to_dict())
     fixture.meta.setdefault("recorded_utc", _utc_now())
     fixture.meta.setdefault("git_sha", _git_sha())
@@ -178,6 +217,23 @@ def record_fixture(fixture: Fixture) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def ensure_fixture(task: str, name: str, build: Callable[[], Fixture]) -> Fixture:
+    """Return the committed baseline; build and record only under the opt-in."""
+    if recording_enabled():
+        fixture = build()
+        fixture.task = task
+        fixture.name = name
+        record_fixture(fixture)
+        return fixture
+    path = fixture_path(task, name)
+    if not path.exists():
+        raise AssertionError(
+            f"parity baseline {task}/{name} is missing. First-recording is a deliberate "
+            f"act: run with {RECORD_ENV}=1 and explain the provenance in the commit."
+        )
+    return load_fixture(task, name)
 
 
 def _utc_now() -> str:

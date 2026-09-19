@@ -153,12 +153,19 @@ class TestPipelineE2E:
             class LLM:
                 max_concurrency = 2
                 json_mode = False
+                max_output_tokens = 16000
 
             llm = LLM
             output_language = "english"
             output_dir = "./output"
 
-        executor = PipelineExecutor(fake, _Settings, generate_unit=build_engine_generate_unit(fake))
+        executor = PipelineExecutor(
+            fake,
+            _Settings,
+            generate_unit=build_engine_generate_unit(
+                fake, output_token_cap=_Settings.llm.max_output_tokens
+            ),
+        )
         Container.pipeline_executor.override(providers.Object(executor))
         yield fake
         Container.pipeline_executor.reset_override()
