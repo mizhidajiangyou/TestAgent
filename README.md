@@ -383,9 +383,35 @@ docker compose -f docker/docker-compose.yml up -d prometheus grafana
 
 ## 扩展路线
 
-- 管道迁移收尾：`tasks/testcase` 任务包 + 迁移 parity（计划见 `output/plan-k.md` / `plan-l.md`），完成后 links 接线（S5b/S6b，见 `output/plan-links-v15-implementation-status.md`）
+- 管道迁移收尾：web/conversation 已切新链（FH2.6/FH2.7），剩两个删除门 FH2.8（B5.4 / B6b.5）与 FH2.9；删除前须把"迁移期对比"固化成永久 golden（计划见 `output/plan-k.md` / `plan-l.md`），完成后 links 接线（S5b/S6b，见 `output/plan-links-v15-implementation-status.md`）
 - 性能结果分析：接入 `.jtl` / k6 JSON 结果，产出带指标的完整性能报告
 - 会话持久化：将会话状态序列化到磁盘/数据库，支持跨进程恢复
+
+
+### 任务包命令与迁移 parity 纪律
+
+除 `generate-tests` / `generate-perf` / `generate-gui`（迁移期保留、将被删除门移除）外，
+同一能力已有任务包版命令：
+
+```bash
+testagent tasks list && testagent tasks validate --strict   # 包契约门（CI 已内置为硬门）
+testagent testcase -r examples/bookstore_requirements.md -s examples/bookstore_swagger.json -o cases.json
+testagent perf   -s examples/bookstore_swagger.json --base-url https://api.example.com -o load.js
+testagent gui    -r examples/bookstore_requirements.md --url https://bookstore.example.com -o test_gui.py
+testagent review --doc cases.json -r requirements.md --rounds 2 -o cases_reviewed.json
+```
+
+**parity fixtures 纪律**（为什么不能随手重录）：
+
+- `tests/fixtures/migration/{testcase,perf,gui,web_contract,conversation_prompts}/*.json`
+  是"改动前录、改动后放"的基线；默认 `pytest` **只读**这些基线做比对。
+- 只有显式 `TESTAGENT_RECORD_PARITY=1` 才会写盘；重录必须在 commit message 里逐差异解释
+  （golden 一旦在改动后重录，就变成自我证明，门禁失去抓漂移的能力）。
+- 每个里程碑跑 `.venv/bin/python scripts/gate_archive.py --node <里程碑>`：逐门独立子进程
+  取真实退出码，归档 `output/gates/<日期>-<节点>-<sha>/{manifest.json,*.log}`；无归档视为门未过。
+- 会话审计与恢复：`<output_dir>/sessions/<session>/`（raw 原文 + reconciliation/义务/预算/去重/可执行性
+  报告）、`<output_dir>/<session>.pre_review_snapshot.json`（评审炸了用它恢复：`testagent checkpoint list|recover`）。
+  `--resume <session-id>` / `checkpoint recover <session-id>` 的 id 会做路径安全校验。
 
 ## License
 
