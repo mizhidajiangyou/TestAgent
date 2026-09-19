@@ -30,6 +30,7 @@ def _save_session_record(
     output: str,
     settings: Any,
     resumed_from: str | None,
+    capability_options: dict[str, Any] | None = None,
 ) -> None:
     """Persist a run's inputs + config so it can be resumed by ``--resume <id>``.
 
@@ -54,6 +55,8 @@ def _save_session_record(
         "json_mode": settings.llm.json_mode,
         "review_enabled": settings.review_enabled,
     }
+    if capability_options is not None:
+        record["capability_options"] = capability_options
     (out_dir / f"{session_id}.json").write_text(
         json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
     )

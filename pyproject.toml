@@ -81,6 +81,8 @@ ignore = ["E501"]
 "testagent/pipeline/links_r6.py" = ["RUF001", "RUF002"]
 # linkcheck's DECLARED_LEGEND is the v15 contract text verbatim (Chinese).
 "testagent/pipeline/linkcheck.py" = ["RUF001"]
+# Recursive JSONValue alias: PEP 604 form cannot self-reference here.
+"testagent/artifact/models.py" = ["UP007"]
 "tests/test_consistency.py" = ["RUF001"]
 "tests/test_binding.py" = ["RUF001"]
 "tests/test_links_r6.py" = ["RUF001"]

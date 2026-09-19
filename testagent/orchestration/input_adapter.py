@@ -33,7 +33,7 @@ def resolve_split_mode(requested: str | None, settings_value: str) -> SplitMode:
 
 def resolve_requirements(
     requirements_path: str,
-    mode: SplitMode,
+    mode: str,
     document_parser: DocumentParser | None = None,
 ) -> list[RequirementItem]:
     """Parse the requirement document in the resolved mode.
@@ -48,6 +48,8 @@ def resolve_requirements(
 
     if mode == "auto":
         return RequirementParser().parse(str(path))
+    if mode != "single":
+        raise ValueError(f"invalid split mode: {mode!r}")
 
     parser = document_parser or DocumentParser()
     text = parser.parse(path)
