@@ -79,6 +79,10 @@ def write_artifact(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ctx = ctx or {}
 
+    #: Package manifests name the structured format ``json_list`` (the artifact
+    #: is a JSON array); the writer branch is the same thing.
+    output_format = {"json_list": "json"}.get(output_format, output_format)
+
     if output_format == "json":
         output_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
     elif output_format == "csv":

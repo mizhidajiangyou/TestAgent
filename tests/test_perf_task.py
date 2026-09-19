@@ -31,6 +31,7 @@ Registered divergences (B5.3 failure-suite scope, see task.md):
 """
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -587,3 +588,63 @@ class TestPerfRunThrough:
             "Write all script comments, user-facing labels and summary text "
             "in Simplified Chinese (keep code keywords and identifiers in English)."
         )
+
+
+def test_cli_writes_raw_script_not_json_string(tmp_path: Path) -> None:
+    """Regression found by the 2026-09-20 real-model acceptance run.
+
+    ``testagent perf -o x.js`` wrote a JSON-encoded string instead of a script:
+    the dynamic CLI reads its format from a key the generated option never sets,
+    so the writer fell back to ``json`` and quoted the whole script (literal
+    ``\\n`` in the file). A .js file is not compilable Python, so nothing in the
+    suite noticed — the gui twin of this test asserts the same thing for .py.
+    """
+    from click.testing import CliRunner
+    from dependency_injector import providers
+
+    from testagent.cli import main
+    from testagent.container import Container
+    from testagent.pipeline.executor import PipelineExecutor
+    from testagent.pipeline.runtime import build_generate_unit
+    from tests.web_fakes import ScriptedLLM
+
+    class _ScriptLLM(ScriptedLLM):
+        async def achat_with_meta(self, system, user, response_format=None, max_tokens=None):  # type: ignore[override]
+            resp = await super().achat_with_meta(system, user, response_format, max_tokens)
+            resp.text = K6_SCRIPT
+            return resp
+
+    llm = _ScriptLLM([K6_SCRIPT])
+    settings = _settings(tmp_path, review_enabled=False)
+    executor = PipelineExecutor(llm, settings, generate_unit=build_generate_unit(llm))
+    Container.pipeline_executor.override(providers.Object(executor))
+    try:
+        spec = tmp_path / "spec.json"
+        spec.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "paths": {
+                        "/users": {
+                            "get": {"tags": ["u"], "responses": {"200": {"description": "ok"}}}
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        out = tmp_path / "perf.js"
+        result = CliRunner().invoke(
+            main,
+            ["perf", "-s", str(spec), "--base-url", "https://x.test", "-o", str(out)],
+            catch_exceptions=False,
+        )
+    finally:
+        Container.pipeline_executor.reset_override()
+
+    assert result.exit_code == 0, result.output
+    written = out.read_text(encoding="utf-8")
+    assert not written.startswith('"'), f"writer JSON-encoded the script: {written[:60]}"
+    assert chr(92) + "n" not in written, "JSON-escaped newlines in the file"
+    assert "import http" in written
+    assert written.splitlines() == K6_SCRIPT.splitlines(), written[:80]

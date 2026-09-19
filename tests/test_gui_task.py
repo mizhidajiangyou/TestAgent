@@ -104,6 +104,9 @@ class TestGuiPipelineE2E:
         )
         assert result.exit_code == 0, result.output
         script = out.read_text(encoding="utf-8")
+        assert not script.startswith('"'), "text artifact was JSON-encoded by the writer"
+        assert len(script.splitlines()) > 3, script[:80]
+        assert chr(92) + "n" not in script, "JSON-escaped newlines landed in the file verbatim"
         compile(script, "gui_test.py", "exec")  # python_compile validator parity
         # fingerprint: the fake saw the rendered prompt
         assert gui_fake_llm.calls, "LLM must have been called once (text contract)"

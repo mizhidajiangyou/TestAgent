@@ -106,7 +106,12 @@ def _run_task(task: TaskPackage, kwargs: Any, click_ctx: click.Context) -> None:
         container = Container()
     settings = container.settings()
     output = kwargs.pop("output", None) or f"./output/{task.name}"
-    output_format = kwargs.pop("output_format", None) or "json"
+    # The generated option is named ``format`` (click's reserved-name collision
+    # rule), and a package declares its own format names. Popping the wrong key
+    # silently fell back to "json", which made ``testagent perf -o x.js`` write
+    # json.dumps(script) — a quoted string with literal \n instead of a script.
+    declared = list(task.manifest.output.formats) or ["json"]
+    output_format = kwargs.pop("format", None) or declared[0]
     session_id = kwargs.pop("session", None)
 
     ctx = parse_inputs(task.manifest, {k: v for k, v in kwargs.items()}, settings)
