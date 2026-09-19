@@ -1,0 +1,9 @@
+$ /Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m ruff format --check testagent/ tests/ scripts/
+[cwd] /Users/zhangtianxin/Desktop/TestAgent
+[exit] 0
+
+--- stdout ---
+155 files already formatted
+
+--- stderr ---
+

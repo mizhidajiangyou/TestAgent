@@ -1,0 +1,12 @@
+$ /Users/zhangtianxin/Desktop/TestAgent/.venv/bin/testagent tasks validate --strict
+[cwd] /Users/zhangtianxin/Desktop/TestAgent
+[exit] 0
+
+--- stdout ---
+✓ _example
+✓ gui
+✓ perf
+✓ testcase
+
+--- stderr ---
+

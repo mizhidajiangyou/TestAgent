@@ -1,0 +1,11 @@
+$ /Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/benchmark_r6.py --stage graph
+[cwd] /Users/zhangtianxin/Desktop/TestAgent
+[exit] 0
+
+--- stdout ---
+[r6] module pairs: {'precision': 1.0, 'recall': 0.9167, 'predicted': 11, 'truth': 12, 'hits': 11}
+[r6] directed relations: {'precision': 1.0, 'recall': 0.8889, 'predicted': 16, 'truth': 18, 'hits': 16}
+[r6][PASS] graph stage
+
+--- stderr ---
+

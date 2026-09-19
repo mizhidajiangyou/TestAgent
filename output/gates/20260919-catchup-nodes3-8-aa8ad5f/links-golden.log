@@ -1,0 +1,11 @@
+$ /Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/golden_links.py --stage all
+[cwd] /Users/zhangtianxin/Desktop/TestAgent
+[exit] 0
+
+--- stdout ---
+[golden][PASS] graph
+[golden][PASS] planner
+[golden][PASS] fixture
+
+--- stderr ---
+
