@@ -49,8 +49,16 @@ class TestResolveProfile:
         assert any("not in the profile registry" in rec.message for rec in caplog.records)
 
     def test_unverified_profile_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """T14 backfilled qwen3.8 to VERIFIED; the warning must still fire
+        for profiles that remain UNVERIFIED."""
         with caplog.at_level(logging.WARNING):
             resolve_profile("qwen3.8-max")
+            assert not any("NOT been verified" in rec.message for rec in caplog.records)
+        from testagent.engine.model_profiles import _PROFILES
+
+        unverified = next(p for p in _PROFILES if p.verification == "UNVERIFIED")
+        with caplog.at_level(logging.WARNING):
+            resolve_profile(unverified.matchers[0].replace("*", "-x"))
         assert any("NOT been verified" in rec.message for rec in caplog.records)
 
     def test_verified_profile_logs_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:

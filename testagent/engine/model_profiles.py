@@ -168,7 +168,15 @@ QWEN_3_8 = ModelProfile(
     reasoning_signal="reasoning_content",
     empty_finish_reasons=("length",),
     max_output_cap=131072,
-    verification="UNVERIFIED",
+    # T14 doc backfill (2026-09-19, Alibaba Cloud Model Studio docs):
+    # enable_thinking true/false per request via extra_body on the
+    # OpenAI-compatible endpoint; thinking_budget bounds reasoning tokens
+    # (model-dependent, commonly 1024..131072, effective only when thinking
+    # is enabled); reasoning arrives as reasoning_content (streaming);
+    # temperature range [0, 2). Verified against the public docs plus a real
+    # qwen3.8-max run (reasoning stream, finish_reason, token metering);
+    # per-model budget caps still vary - keep max_output_cap conservative.
+    verification="VERIFIED",
     matchers=("qwen3.8*", "qwen3.7*", "qwen3.6*", "qwen3-max*", "qwen3-plus*"),
 )
 
