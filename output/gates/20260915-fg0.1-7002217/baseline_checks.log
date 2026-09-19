@@ -1,0 +1,33 @@
+# FG0.1 落档 · 首日基线核验（plan-k §11）
+date_utc: 2026-09-15T06:56:08Z
+commit: 70022172dc2b03daf21d0dfc6fd748cf49271d50
+
+== ls tasks/ ==
+_example
+perf
+
+== grep build_engine_generate_unit (期望 exit=1) ==
+exit=1
+
+== ls tests/fixtures/migration/ ==
+engine_events
+
+== grep pipeline_executor in web/app.py (期望 exit=1) ==
+exit=1
+
+== 质量线/links 新标识（期望零命中） ==
+exit=1
+
+== pipeline/ links 模块（期望零命中） ==
+exit=1
+
+== git check-ignore output/gates/.gitkeep (期望 exit=1) ==
+exit=1
+
+== git status --short ==
+?? bak-task.md
+?? dev.md
+?? overview.md
+?? renwu.md
+?? t.b.md
+?? task-summary.md

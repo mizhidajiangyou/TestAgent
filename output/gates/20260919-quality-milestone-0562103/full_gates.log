@@ -1,0 +1,26 @@
+# 节点② 质量里程碑门 + E2E 证据（真实模型）
+date_utc: 2026-09-19T02:28:23Z
+commit: 0562103de6fa35a71dbc1480b910e9b9143e056f
+
+== 全量门 ==
+786 passed, 7 warnings in 91.78s (0:01:31)
+All checks passed!
+format OK
+Success: no issues found in 80 source files
+✓ _example
+✓ perf
+
+== 引擎 golden ==
+16 passed in 0.43s
+
+== links golden replay ==
+[golden][PASS] graph
+[golden][PASS] planner
+[golden][PASS] fixture
+
+== R6 benchmark ==
+[r6][PASS] graph stage
+[r6][PASS] selected stage
+
+== arch ==
+7 passed in 0.52s
