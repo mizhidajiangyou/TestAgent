@@ -274,13 +274,19 @@ def recompute_covered_pending(
 
     ``covered`` aggregates produced items by their RESOLVED scope key
     (``scope_of``); ``pending[key] = max(0, expected[key] - covered[key])``.
+
+    Only keys ALREADY IN ``pending`` are recomputed: after a scope shrink
+    ``pending`` holds exactly the surviving endpoints, so iterating the full
+    ``expected`` map here would re-flow the quotas of shrunk-away endpoints
+    and make the ``all(pending <= 0)`` completion condition unreachable
+    (defect ②, 2026-09-19 review).
     """
     covered.clear()
     for it in produced:
         key = scope_of(it)
         covered[key] = covered.get(key, 0) + 1
-    for key in expected:
-        pending[key] = max(0, expected[key] - covered.get(key, 0))
+    for key in list(pending):
+        pending[key] = max(0, expected.get(key, 0) - covered.get(key, 0))
 
 
 def shrink_scope(
@@ -1116,6 +1122,9 @@ class TruncationEngine:
         items = self._hooks.salvage(raw)
         if not items:
             return produced
+        # Initialize unconditionally: pure-requirements batches have an empty
+        # batch_set and must not hit UnboundLocalError at the sink below.
+        _dropped: list[dict[str, Any]] = []
         if batch_set:
             filtered, _dropped = filter_to_scope(items, batch_set, expected, self._hooks.scope_key)
         else:

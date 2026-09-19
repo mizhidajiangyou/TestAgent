@@ -107,7 +107,7 @@
       "label": "baseline",
       "round": 3,
       "chars": 427,
-      "pending": 5,
+      "pending": 1,
       "covered": 1,
       "budget": 16000
     }
