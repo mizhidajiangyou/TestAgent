@@ -104,7 +104,16 @@ class TestArchitectureGate:
         ),
     }
     #: Planned shared Settings keys; T1 lands the first (AUDIT_DUMP_ENABLED).
-    _SHARED_SETTINGS_KEYS: tuple[str, ...] = ("audit_dump_enabled",)
+    _SHARED_SETTINGS_KEYS: tuple[str, ...] = (
+        "audit_dump_enabled",
+        "split_mode",
+        "single_doc_warn_tokens",
+        "review_chunk_size",
+        "review_max_chunk_failure_ratio",
+        "review_max_prompt_chars",
+        "gui_reference_max_cases",
+        "gui_reference_max_chars",
+    )
     #: Baseline field order snapshots — shared-model field slips must append,
     #: never reorder (plan-l L-1 hard constraint).
     _TESTCASE_BASELINE_FIELDS = (

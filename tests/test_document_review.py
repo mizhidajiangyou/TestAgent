@@ -21,7 +21,9 @@ class FakeLLM:
         self._responses = list(responses)
         self.calls = 0
 
-    async def achat_with_meta(self, system_prompt, user_prompt, response_format=None, max_tokens=None):
+    async def achat_with_meta(
+        self, system_prompt, user_prompt, response_format=None, max_tokens=None
+    ):
         self.calls += 1
         from testagent.engine.llm_client import LLMResponse
 
@@ -63,9 +65,13 @@ def _service(primary, secondary, rounds=2, ratio=0.5):
 
 def _one_chunk(tmp_path: Path, n_items: int = 10):
     src = tmp_path / "cases.json"
-    src.write_text(json.dumps([{"id": str(i), "title": f"t{i}"} for i in range(n_items)]), encoding="utf-8")
+    src.write_text(
+        json.dumps([{"id": str(i), "title": f"t{i}"} for i in range(n_items)]), encoding="utf-8"
+    )
     artifact = load_artifact(str(src))
-    plan = plan_chunks(artifact, chunk_size=20, char_budget=10**6, system_prompt_chars=100, reference_chars=0)
+    plan = plan_chunks(
+        artifact, chunk_size=20, char_budget=10**6, system_prompt_chars=100, reference_chars=0
+    )
     return artifact, plan.chunks
 
 
@@ -119,9 +125,9 @@ class TestChunkMatrix:
 
     def test_all_parse_failures_chunk_failed(self, tmp_path: Path) -> None:
         artifact, chunks = _one_chunk(tmp_path, 10)
-        outcome = _service(primary=FakeLLM([]), secondary=FakeLLM(["total garbage"])).review_document(
-            artifact, chunks, grounded=False
-        )
+        outcome = _service(
+            primary=FakeLLM([]), secondary=FakeLLM(["total garbage"])
+        ).review_document(artifact, chunks, grounded=False)
         assert outcome.chunk_results[0].status is ChunkStatus.REVIEW_FAILED
         assert outcome.status is DocumentStatus.REVIEW_FAILED
 
@@ -130,7 +136,9 @@ class TestChunkMatrix:
         src = tmp_path / "cases.json"
         src.write_text(json.dumps([{"id": str(i)} for i in range(2)]), encoding="utf-8")
         artifact = load_artifact(str(src))
-        plan = plan_chunks(artifact, chunk_size=1, char_budget=10**6, system_prompt_chars=10, reference_chars=0)
+        plan = plan_chunks(
+            artifact, chunk_size=1, char_budget=10**6, system_prompt_chars=10, reference_chars=0
+        )
         secondary = FakeLLM(["garbage", _envelope([{"id": "1"}])])
         outcome = _service(primary=FakeLLM([]), secondary=secondary, ratio=0.5).review_document(
             artifact, plan.chunks, grounded=False
@@ -143,7 +151,9 @@ class TestChunkMatrix:
         src = tmp_path / "cases.json"
         src.write_text(json.dumps([{"id": str(i)} for i in range(3)]), encoding="utf-8")
         artifact = load_artifact(str(src))
-        plan = plan_chunks(artifact, chunk_size=1, char_budget=10**6, system_prompt_chars=10, reference_chars=0)
+        plan = plan_chunks(
+            artifact, chunk_size=1, char_budget=10**6, system_prompt_chars=10, reference_chars=0
+        )
         secondary = FakeLLM(["garbage", "garbage", _envelope([{"id": "2"}])])
         outcome = _service(primary=FakeLLM([]), secondary=secondary, ratio=0.5).review_document(
             artifact, plan.chunks, grounded=False

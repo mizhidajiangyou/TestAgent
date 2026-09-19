@@ -226,7 +226,9 @@ class DocumentReviewService:
             elif result.status is ChunkStatus.REVIEW_REJECTED and result.parse_ok > 0:
                 candidate_reviewed += 1
         n = len(chunks)
-        if (n and failures / n > self._config.max_chunk_failure_ratio) or (adopted == 0 and failures > 0):
+        if (n and failures / n > self._config.max_chunk_failure_ratio) or (
+            adopted == 0 and failures > 0
+        ):
             outcome.status = DocumentStatus.REVIEW_FAILED
         elif adopted > 0:
             outcome.status = DocumentStatus.REVIEWED

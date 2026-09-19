@@ -149,3 +149,27 @@ class TestSettingsOverride:
         assert parse_capability_options({"capability_options": good}) == good
         with pytest.raises(ValueError, match="capability_options"):
             parse_capability_options({"capability_options": "corrupt"})
+
+
+class TestCapabilityLayerDirection:
+    """v4 s1.2: capability layers never import Container/generators/engine internals."""
+
+    def test_no_forbidden_imports(self) -> None:
+        import ast
+        import pathlib as pl
+
+        forbidden = ("testagent.container", "testagent.generators")
+        layer_dirs = ["testagent/review", "testagent/artifact", "testagent/orchestration"]
+        violations: list[str] = []
+        repo = pl.Path(__file__).parents[1]
+        for d in layer_dirs:
+            for py in sorted((repo / d).glob("*.py")):
+                tree = ast.parse(py.read_text(encoding="utf-8"))
+                for node in ast.walk(tree):
+                    if (
+                        isinstance(node, ast.ImportFrom)
+                        and node.module
+                        and node.module.startswith(forbidden)
+                    ):
+                        violations.append(f"{py.name}: {node.module}")
+        assert not violations, f"capability layer imports forbidden modules: {violations}"
