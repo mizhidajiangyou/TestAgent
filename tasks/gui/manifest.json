@@ -1,0 +1,81 @@
+{
+  "manifest_version": 1,
+  "name": "gui",
+  "display_name": "GUI test script (Playwright + pytest)",
+  "description": "FH1.1 / plan-k B5.2 migration of the legacy generate-gui command onto the task-package pipeline. requirements required, swagger optional (API-aware context), url from config/constants.DEFAULT_TARGET_URL by default. Template is a byte-identical migration of the frozen gui_test_prompt.j2 (sha256 equality proven by tests). Not engine-backed (plan-d D8: gui/perf do not adopt the truncation engine).",
+  "version": "1.0.0",
+  "aliases": [],
+  "examples": "  testagent gui --requirements examples/sample_requirements.md --url https://example.com\n  testagent gui -r requirements.md -s swagger.json -o output/gui_test.py",
+  "inputs": [
+    {
+      "name": "requirements",
+      "kind": "requirements",
+      "required": true,
+      "option": ["--requirements", "-r"],
+      "help": "Path to requirements document"
+    },
+    {
+      "name": "swagger",
+      "kind": "swagger",
+      "required": false,
+      "option": ["--swagger", "-s"],
+      "help": "Path or URL to Swagger/OpenAPI spec (optional API context)"
+    },
+    {
+      "name": "url",
+      "kind": "text",
+      "default": "from_settings:gui.target_url",
+      "option": ["--url"],
+      "help": "Target application URL (default from config/constants.DEFAULT_TARGET_URL)"
+    },
+    {
+      "name": "output_language",
+      "kind": "text",
+      "default": "from_settings:output_language",
+      "option": ["--output-language"],
+      "help": "Output language (chinese/english)"
+    }
+  ],
+  "require_any": ["requirements"],
+  "pipeline": {
+    "stages": [
+      {
+        "name": "script",
+        "template": "prompts/main.j2",
+        "system_prompt": "inline:You are a senior QA automation engineer specializing in Playwright and pytest. Generate complete, runnable, maintainable GUI test scripts. Output only valid Python code.",
+        "split": {
+          "by": "single"
+        },
+        "output": {
+          "contract": "text"
+        }
+      }
+    ]
+  },
+  "artifact": {
+    "type": "text",
+    "validators": [
+      {
+        "kind": "python_compile"
+      }
+    ]
+  },
+  "output": {
+    "default_path": "./output/gui_test.py",
+    "formats": {
+      "text": {
+        "extension": ".py"
+      }
+    }
+  },
+  "session": {
+    "record": true,
+    "resume": true
+  },
+  "template_context": {
+    "url": "https://example.com",
+    "requirements_text": "Sample requirement",
+    "endpoints_text": "GET /users - list",
+    "output_language": "chinese"
+  }
+}

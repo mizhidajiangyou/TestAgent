@@ -10,6 +10,8 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from testagent.config.constants import DEFAULT_TARGET_URL
+
 #: Valid logging levels accepted by ``LOG_LEVEL``. Kept as the single source
 #: of truth so both pydantic validation and ``setup_logging`` agree.
 VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
@@ -165,6 +167,25 @@ class PerfSettings(BaseSettings):
     auth_type: str = "none"
 
 
+class GuiSettings(BaseSettings):
+    """GUI test script generation configuration (FH1.1 / plan-k B5.2).
+
+    ``target_url`` defaults to the shared constant (config/constants
+    DEFAULT_TARGET_URL) — the same value the legacy generator used when no
+    ``--url`` was given; the manifest resolves it via
+    ``from_settings:gui.target_url``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="GUI_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    target_url: str = DEFAULT_TARGET_URL
+
+
 class Settings(BaseSettings):
     """Root application settings."""
 
@@ -177,6 +198,7 @@ class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     azure_llm: AzureLLMSettings = Field(default_factory=AzureLLMSettings)
     perf: PerfSettings = Field(default_factory=PerfSettings)
+    gui: GuiSettings = Field(default_factory=GuiSettings)
 
     output_dir: str = Field(default="./output", alias="OUTPUT_DIR")
     # Root log level for the ``testagent`` logger. Drives ``setup_logging``
