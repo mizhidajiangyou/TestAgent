@@ -24,7 +24,9 @@ from typing import TYPE_CHECKING, Any
 
 from testagent.engine.concurrency import gather_with_concurrency
 from testagent.engine.llm_client import CALL_LABEL, ReasoningBudgetExhaustedError
+from testagent.engine.truncation import TruncationPolicy
 from testagent.pipeline.merge import StageResult, apply_merge
+from testagent.pipeline.quality_pass import QualityPass, QualityRunConfig
 from testagent.pipeline.review_hooks import REVIEW_DISABLED
 from testagent.pipeline.split import evaluate_when, make_units
 from testagent.pipeline.status import (
@@ -33,8 +35,10 @@ from testagent.pipeline.status import (
     unit_result_from_engine,
     unit_status_from_exception,
 )
+from testagent.pipeline.testcase_adapter import dict_to_testcase, testcase_to_full_dict
 
 if TYPE_CHECKING:
+    from testagent.config.models import TestCase
     from testagent.config.settings import Settings
     from testagent.engine.llm_client import MultiModelLLMClient
     from testagent.engine.model_profiles import Outcome
@@ -55,6 +59,11 @@ def _reduce_text_artifact(items: list[dict[str, Any]]) -> str:
     scripts in unit order (deterministic, documented)."""
     scripts = [str(it.get("script", "")) for it in items if isinstance(it, dict)]
     return "\n\n".join(scripts)
+
+
+def _cases_of(items: list[dict[str, Any]]) -> list[TestCase]:
+    """Artifact dicts → case objects (tolerant converter; junk entries drop)."""
+    return [tc for tc in (dict_to_testcase(item) for item in items) if tc]
 
 
 @dataclass
@@ -95,6 +104,35 @@ class PipelineExecutor:
 
     # -- public API ----------------------------------------------------
 
+    def _start_quality(
+        self, task: TaskPackage, ctx: TaskContext, session_id: str
+    ) -> QualityPass | None:
+        """Attach the per-run case quality line when the package opts in.
+
+        Everything the pass needs comes from the injected Settings (never the
+        singleton), and its state — obligation ledger, dedup ledger, raw
+        dumper — is per-session by construction (defect ⑨'s lesson: session
+        state on a shared object cross-pollutes concurrent runs).
+        """
+        if not task.manifest.pipeline.quality.enabled:
+            ctx.quality = None
+            return None
+        quality = QualityPass(
+            QualityRunConfig.from_settings(
+                self._settings,
+                default_expected_per_endpoint=(
+                    TruncationPolicy().default_expected_cases_per_endpoint
+                ),
+            ),
+            session_id=session_id,
+        )
+        quality.start_session(
+            list(ctx.parsed.get("requirements") or []),
+            list(ctx.parsed.get("endpoints") or []),
+        )
+        ctx.quality = quality
+        return quality
+
     async def arun(
         self,
         task: TaskPackage,
@@ -105,6 +143,7 @@ class PipelineExecutor:
         """Run the task's stages, merge, snapshot, (review), return."""
         session_id = session_id or uuid.uuid4().hex[:12]
         self._llm.set_session_id(session_id)
+        quality = self._start_quality(task, ctx, session_id)
 
         if self._llm.intent_capable and self._resolve_flag(
             task.manifest.pipeline.verify_model, default=True
@@ -148,6 +187,17 @@ class PipelineExecutor:
             else merged_items
         )
 
+        # Quality line (QL-1): the deterministic case passes the legacy chain
+        # ran on the merged, pre-review artifact. They run BEFORE the snapshot
+        # so the snapshot stays the "content that survived to review" truth.
+        if quality is not None and isinstance(merged, list):
+            merged = [
+                testcase_to_full_dict(tc)
+                for tc in quality.post_merge(
+                    _cases_of(merged), list(ctx.parsed.get("endpoints") or [])
+                )
+            ]
+
         # Pre-review snapshot (review P0-3): the artifact survives a review
         # explosion; recover does NOT re-run anything (no --resume illusion).
         snapshot_artifact = merged
@@ -166,6 +216,15 @@ class PipelineExecutor:
             merged = outcome.artifact
             if outcome.status != REVIEW_DISABLED:
                 review_meta = dict(outcome.meta)
+            # T13: review output is not trusted blind — the degenerate-stub
+            # cleanup re-runs on whatever the reviewer returned.
+            if quality is not None and isinstance(merged, list):
+                merged = [
+                    testcase_to_full_dict(tc) for tc in quality.after_review(_cases_of(merged))
+                ]
+
+        if quality is not None:
+            quality.finish_session(_cases_of(merged) if isinstance(merged, list) else [])
 
         return PipelineResult(
             task=task.name,
