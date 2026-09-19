@@ -507,6 +507,21 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                     lines.append(f"- {tc.id}: {tc.executability}")
             self._raw_dumper.write_report("executability_report.md", "\n".join(lines) + "\n")
 
+    def _account_obligations(self, cases: list[TestCase]) -> None:
+        """T5 accounting with FINAL (renumbered) case ids: the model emits a
+        literal "TC-XXX" id (template rule 11), so id-keyed accounting at
+        conversion time put only "TC-XXX" into covered_by (defect ⑥)."""
+        registry = self._obligation_registry
+        if registry is None:
+            return
+        for tc in cases:
+            if not tc.covers_obligations:
+                continue
+            try:
+                registry.cover_many(tc.id, tc.covers_obligations)
+            except KeyError as exc:
+                logger.warning("Case %s declares unknown obligation: %s", tc.id, exc)
+
     def _enforce_cases_budget(self, cases: list[TestCase]) -> list[TestCase]:
         """T7: session cap on total cases with per-item trim accounting.
 
@@ -518,8 +533,12 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         budget = self._cases_budget
         if budget <= 0 or len(cases) <= budget:
             return cases
-        covering = [c for c in cases if self._case_obligations.get(c.id)]
-        plain = [c for c in cases if not self._case_obligations.get(c.id)]
+        # Obligation preference reads the case's OWN covers_obligations
+        # (defect ⑥: the LLM emits a literal "TC-XXX" id per the template and
+        # real ids only exist after renumbering, so an id-keyed map could
+        # never match — obligation-covering cases were never preferred).
+        covering = [c for c in cases if c.covers_obligations]
+        plain = [c for c in cases if not c.covers_obligations]
         kept = (covering + plain)[:budget]
         trimmed = (covering + plain)[budget:]
         lines = [
@@ -530,7 +549,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         ]
         for case in trimmed:
             reason = "surplus beyond CASES_BUDGET"
-            if self._case_obligations.get(case.id):
+            if case.covers_obligations:
                 reason = "surplus beyond CASES_BUDGET (obligation-covering kept preferentially)"
             lines.append(f"- {case.id} {case.title!r}: {reason}")
             logger.warning("Budget trim: dropped %s %r (%s)", case.id, case.title, reason)
@@ -648,6 +667,7 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         # Re-number sequentially
         for idx, tc in enumerate(all_cases, 1):
             tc.id = f"TC-{idx:03d}"
+        self._account_obligations(all_cases)
 
         logger.info("Total: %d test cases", len(all_cases))
 
@@ -756,8 +776,10 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         # T10: executability gates (grades land on the artifacts).
         self._run_executability_gates(all_cases, endpoints)
 
+        # Re-number sequentially
         for idx, tc in enumerate(all_cases, 1):
             tc.id = f"TC-{idx:03d}"
+        self._account_obligations(all_cases)
 
         logger.info("Total: %d test cases", len(all_cases))
 
@@ -1898,15 +1920,6 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
                 covers_obligations=[str(c) for c in item.get("covers_obligations") or []],
             )
             test_cases.append(case)
-            # T5/T7: account the case against its declared obligations.
-            covers = item.get("covers_obligations") or []
-            if covers and self._obligation_registry is not None:
-                try:
-                    self._obligation_registry.cover_many(case.id, [str(c) for c in covers])
-                except KeyError as exc:
-                    logger.warning("Case %s declares unknown obligation: %s", case.id, exc)
-                else:
-                    self._case_obligations[case.id] = [str(c) for c in covers]
         self._session_case_count += len(test_cases)
         # T11b: semantic validation (structural issues already normalized).
         known: set[str] | None = None

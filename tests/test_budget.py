@@ -97,7 +97,7 @@ class TestBudgetEnforcement:
         )
         reg.cover("REQ-001-AC1", "TC-005")
         cases = [_case(i, f"case {i}") for i in range(1, 13)]
-        gen._case_obligations = {"TC-005": ["REQ-001-AC1"]}
+        cases[4].covers_obligations = ["REQ-001-AC1"]  # TC-005 covers an obligation
         kept = gen._enforce_cases_budget(cases)
         assert len(kept) == 3
         assert "TC-005" in [c.id for c in kept], "obligation-covering case must survive trim"
