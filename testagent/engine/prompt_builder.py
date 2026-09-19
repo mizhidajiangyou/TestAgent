@@ -847,7 +847,7 @@ def endpoints_to_signature(endpoints: list[APIEndpoint]) -> str:
         body = ep.request_body or {}
         props = (body.get("schema") or {}).get("properties", {}) if isinstance(body, dict) else {}
         if isinstance(props, dict) and props:
-            req_set = set((body.get("schema") or {}).get("required", []))
+            req_set = set((body.get("schema") or {}).get("required") or [])
             bparts = [_format_param(k, v or {}, k in req_set) for k, v in props.items()]
             line += f" body:[{', '.join(sorted(bparts))}]"
         lines.append(line)
@@ -952,7 +952,7 @@ def endpoints_to_rich_signature(endpoints: list[APIEndpoint]) -> str:
         body = ep.request_body or {}
         props = (body.get("schema") or {}).get("properties", {}) if isinstance(body, dict) else {}
         if isinstance(props, dict) and props:
-            req_set = set((body.get("schema") or {}).get("required", []))
+            req_set = set((body.get("schema") or {}).get("required") or [])
             bparts = [_format_param_rich(k, v or {}, k in req_set) for k, v in props.items()]
             line += f" body:[{', '.join(sorted(bparts))}]"
         line += _render_response_schemas(ep)

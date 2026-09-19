@@ -33,6 +33,12 @@ jobs:
       - run: mypy testagent/
       - run: pytest tests/ -q
 
+      # FH2.10 (plan-k B8'): the task-package contract gate is a hard CI step,
+      # not just a manual habit. links golden / R6 benchmark / engine golden are
+      # already inside `pytest tests/` (subprocess tests), so they need no step.
+      - name: Validate task packages (strict)
+        run: testagent tasks validate --strict
+
   docker:
     name: Build & Push Docker Image (amd64 + arm64)
     needs: test
@@ -73,8 +79,14 @@ jobs:
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
           echo "Resolved tags: ${TAGS}"
 
+      # B-group fix: -p puts the secret in the process argv (visible in `ps` and
+      # in the step's echoed command line); the stdin form never does.
       - name: Login to Docker Hub
-        run: docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD2 }}
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD2 }}
+        run: docker login -u "$DOCKER_USERNAME" --password-stdin <<<"$DOCKER_PASSWORD"
+        timeout: 60
 
       - name: Build and push multi-platform image
         uses: docker/build-push-action@v6

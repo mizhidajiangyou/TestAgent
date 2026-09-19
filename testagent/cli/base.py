@@ -38,6 +38,9 @@ def _save_session_record(
     to re-run the exact same generation (input paths + model/Token config) after
     an interruption or a partial failure.
     """
+    from testagent.pipeline.executor import validate_session_id
+
+    validate_session_id(session_id)  # never build a path from an unvalidated id
     out_dir = Path("output/sessions")
     out_dir.mkdir(parents=True, exist_ok=True)
     record = {

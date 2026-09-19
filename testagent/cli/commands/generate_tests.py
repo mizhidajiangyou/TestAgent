@@ -97,6 +97,9 @@ def generate_tests(
     # --- capability resolution (v4 §3.3): resume saved > settings > CLI ---
     saved_capabilities = None
     if resume:
+        from testagent.pipeline.executor import validate_session_id
+
+        validate_session_id(resume)  # the id becomes a file path below
         record_path = Path("output/sessions") / f"{resume}.json"
         if record_path.exists():
             record = json.loads(record_path.read_text(encoding="utf-8"))

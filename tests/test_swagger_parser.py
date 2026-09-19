@@ -405,3 +405,34 @@ class TestRichSignature:
         assert "responses:" not in text
         assert "response schema undefined" not in text
         assert text.startswith("- GET /users/{id} params:[id(integer,req)]")
+
+
+def test_signature_survives_null_required() -> None:
+    """B-group fix: ``required: null`` is legal OpenAPI ("no required params")
+    but ``set(None)`` raised TypeError and killed the whole prompt build — both
+    the compact and the rich signature renderer hit it."""
+    from testagent.engine.prompt_builder import endpoints_to_rich_signature
+
+    spec = {
+        "paths": {
+            "/x": {
+                "post": {
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": None,
+                                    "properties": {"a": {"type": "string"}},
+                                }
+                            }
+                        }
+                    },
+                    "parameters": [{"name": "q", "in": "query", "required": None}],
+                }
+            }
+        }
+    }
+    endpoints = SwaggerParser().parse(spec)
+    assert "POST /x" in endpoints_to_signature(endpoints)
+    assert "POST /x" in endpoints_to_rich_signature(endpoints)

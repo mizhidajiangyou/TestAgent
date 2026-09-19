@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -422,9 +423,29 @@ def list_snapshots(output_dir: str) -> list[dict[str, Any]]:
     return sorted(found, key=lambda c: str(c["created_at"]), reverse=True)
 
 
+#: Session ids come from the command line (``--resume``, ``checkpoint recover``)
+#: and are interpolated into file paths, so an unchecked value is a path
+#: traversal vector. One holder for the rule, used by every caller that turns an
+#: id into a path. Path separators are what makes a value dangerous, so they
+#: are what is rejected (ids we mint are ``uuid4().hex[:12]``; hand-written
+#: fixtures legitimately use shorter names).
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def validate_session_id(session_id: str) -> str:
+    """Return the id unchanged, or raise ``ValueError`` when it could escape
+    the directory it is joined into."""
+    if not SESSION_ID_RE.fullmatch(session_id or ""):
+        raise ValueError(
+            f"invalid session id: {session_id!r} "
+            "(expected 1-64 chars of [A-Za-z0-9._-], no path separators)"
+        )
+    return session_id
+
+
 def recover_snapshot(session_id: str, output_dir: str) -> dict[str, Any] | None:
     """Load one snapshot payload by session id (None when absent)."""
-    path = Path(output_dir) / f"{session_id}{SNAPSHOT_SUFFIX}"
+    path = Path(output_dir) / f"{validate_session_id(session_id)}{SNAPSHOT_SUFFIX}"
     if not path.exists():
         return None
     payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))

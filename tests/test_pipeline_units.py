@@ -283,3 +283,31 @@ class TestSyntheticContext:
         ctx = build_synthetic_context(m)
         for key in ("output_language", "json_mode", "historical_cases"):
             assert key in ctx
+
+
+class TestSessionIdGuard:
+    """B-group fix: session ids arrive from the command line and are interpolated
+    into file paths (``--resume``, ``checkpoint recover``), so they must not be
+    able to escape the directory they are joined into."""
+
+    def test_minted_and_handwritten_ids_pass(self) -> None:
+        from testagent.pipeline.executor import validate_session_id
+
+        assert validate_session_id("41e4ae12ab34") == "41e4ae12ab34"
+        assert validate_session_id("rec1") == "rec1"  # fixtures use short names
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["../../etc/passwd", "a/b", "a\\b", "", "x" * 65, "id with space", "../x"],
+    )
+    def test_path_escaping_ids_rejected(self, bad: str) -> None:
+        from testagent.pipeline.executor import validate_session_id
+
+        with pytest.raises(ValueError, match="invalid session id"):
+            validate_session_id(bad)
+
+    def test_recover_snapshot_rejects_before_touching_the_filesystem(self, tmp_path: Path) -> None:
+        from testagent.pipeline.executor import recover_snapshot
+
+        with pytest.raises(ValueError, match="invalid session id"):
+            recover_snapshot("../../outside", str(tmp_path))
