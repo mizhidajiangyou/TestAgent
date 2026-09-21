@@ -23,6 +23,8 @@ from testagent.pipeline.status import (
 )
 from testagent.pipeline.synthetic import build_synthetic_context
 
+REPO = Path(__file__).parents[1]
+
 # ----------------------------------------------------------------------
 # Manifest strictness (B1.4/B4.2)
 # ----------------------------------------------------------------------
@@ -311,3 +313,80 @@ class TestSessionIdGuard:
 
         with pytest.raises(ValueError, match="invalid session id"):
             recover_snapshot("../../outside", str(tmp_path))
+
+
+class TestValidators:
+    """Direct coverage for the text validators.
+
+    The legacy chain tested these through its own generators; those files go
+    away with the generators (B5.4), and a validator nobody calls directly is a
+    validator whose error strings can change without anyone noticing — they feed
+    the targeted re-ask prompt.
+    """
+
+    @staticmethod
+    def _ctx(**parsed: object) -> object:
+        from testagent.pipeline.inputs import TaskContext
+
+        return TaskContext(parsed=dict(parsed))
+
+    def test_strip_fences_handles_language_tag_and_prose_edges(self) -> None:
+        from testagent.pipeline.validators import strip_fences
+
+        assert strip_fences("```python\ndef f():\n    return 1\n```") == "def f():\n    return 1"
+        assert strip_fences("  import os\n") == "import os"
+        assert strip_fences("```\nx=1\n```trailing prose```").startswith("x=1")
+
+    def test_python_compile_error_string_names_the_file(self) -> None:
+        from testagent.pipeline.manifest import ValidatorSpec
+        from testagent.pipeline.validators import validate_text
+
+        problems = validate_text(
+            "def broken(:\n    pass\n", [ValidatorSpec(kind="python_compile")], self._ctx()
+        )
+        assert len(problems) == 1
+        assert problems[0].startswith("python_compile: invalid syntax")
+
+    def test_xml_validator_checks_declaration_closing_and_root_in_order(self) -> None:
+        from testagent.pipeline.manifest import ValidatorSpec
+        from testagent.pipeline.validators import validate_text
+
+        spec = ValidatorSpec(
+            kind="xml",
+            root="jmeterTestPlan",
+            declaration="<?xml",
+            closing="</jmeterTestPlan>",
+        )
+        whole = '<?xml version="1.0"?><jmeterTestPlan><foo/></jmeterTestPlan>'
+        assert validate_text(whole, [spec], self._ctx()) == []
+        problems = validate_text("<jmeterTestPlan/>", [spec], self._ctx())
+        assert any("declaration" in p for p in problems)
+        assert any("closing" in p for p in problems)
+        wrong_root = validate_text('<?xml version="1.0"?><other/>{', [spec], self._ctx())
+        assert any("root tag" in p or "xml:" in p for p in wrong_root)
+
+    def test_when_guard_skips_the_validator(self) -> None:
+        from testagent.pipeline.manifest import ValidatorSpec
+        from testagent.pipeline.validators import validate_text
+
+        spec = ValidatorSpec(kind="xml", root="x", when={"script_format": "jmeter"})
+        assert validate_text("<not xml", [spec], self._ctx(script_format="k6")) == []
+        assert validate_text("<not xml", [spec], self._ctx(script_format="jmeter")) != []
+
+
+class TestNoSilentTemplateFallback:
+    """The legacy builders caught every template error and dropped to an inline
+    prompt; the task-package chain must NOT, because ``tasks/<pkg>/prompts`` is
+    the declared source of truth and a silently substituted prompt is a silent
+    behavior change."""
+
+    def test_missing_template_raises_instead_of_rendering_a_fallback(self) -> None:
+        from jinja2 import TemplateNotFound
+
+        from testagent.pipeline.registry import get_registry
+
+        task = get_registry(REPO / "tasks").get("gui")
+        with pytest.raises(TemplateNotFound):
+            task.render("prompts/definitely_not_here.j2", {})
+        with pytest.raises(TemplateNotFound):
+            task.system_prompt("file:prompts/definitely_not_here.j2", {})
