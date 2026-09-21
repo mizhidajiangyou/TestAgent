@@ -1,0 +1,31 @@
+{
+  "artifact": {
+    "artifact": "import http from 'k6/http';\nexport default function () {}",
+    "review_status": null
+  },
+  "events": [],
+  "failure_semantics": {},
+  "fixture_version": 1,
+  "input": {
+    "omit_format": false,
+    "output_language": "chinese",
+    "overrides": false,
+    "review_enabled": false,
+    "script_format": "k6"
+  },
+  "meta": {
+    "git_sha": "95b4074c3d43",
+    "recorded_from": "legacy PerformanceGenerator.generate (live comparison below)",
+    "recorded_utc": "2026-09-21T03:49:11.281176+00:00"
+  },
+  "name": "k6-noreview-chinese-fenced",
+  "request_trace": [
+    {
+      "index": 0,
+      "role": "primary",
+      "system": "You are an expert k6 performance engineer. Output only complete, runnable k6 JavaScript. Write all script comments, user-facing labels and summary text in Simplified Chinese (keep code keywords and identifiers in English).",
+      "user": "Generate a complete, production-ready k6 JavaScript test script.\n\n## API Endpoints\nGET /products - List products with pagination and filters (params: page, limit, category, status)\nPOST /products - Create a product (admin only) [body: application/json]\nGET /products/{id} - Get product by ID (params: id)\nPUT /products/{id} - Update a product (admin only) (params: id) [body: application/json]\nDELETE /products/{id} - Delete a product (admin only) (params: id)\nGET /cart/items - List current user's cart items\nPOST /cart/items - Add product to cart (merge and accumulate quantity if exists) [body: application/json]\nPUT /cart/items/{itemId} - Update cart item quantity (params: itemId) [body: application/json]\nDELETE /cart/items/{itemId} - Remove cart item (params: itemId)\nGET /orders - List current user's orders (params: page, limit, status)\nPOST /orders - Create order from cart (requires non-empty cart, decrements stock) [body: application/json]\nGET /orders/{id} - Get order by ID (owner only) (params: id)\nPOST /orders/{id}/cancel - Cancel an unpaid order (params: id)\n\n## Configuration\n- Virtual Users: 100\n- Duration: 300 seconds\n- Ramp-Up: 60 seconds\n- Think Time: 500 ms\n- Base URL: https://api.example.com\n- Auth: none\n\n## Requirements (all mandatory for a runnable, meaningful script)\n1. `import http from 'k6/http'; import { check, sleep, group } from 'k6';` and `export const options` with `stages` implementing ramp-up then steady state (use Duration/Ramp-Up from Configuration; e.g. ramp 60s to 100 VUs, hold for the remainder).\n2. NEVER hardcode the host. Build URLs from `const BASE_URL = __ENV.BASE_URL || 'https://api.example.com';`. Document: run with `k6 run -e BASE_URL=https://api.example.com/v1 script.js`.\n3. If Auth != none: obtain a token in `setup()` (login call) and pass it to the default function; send it as `headers: { Authorization: 'Bearer ' + token }` on protected endpoints. Document obtaining `AUTH_TOKEN` via `-e AUTH_TOKEN=...` when the token cannot be fetched inside the script.\n4. Cover EVERY listed endpoint. For POST/PUT include a realistic request `body` taken from the endpoint schema (e.g. `{\"name\":\"...\",\"email\":\"...\",\"age\":30}`). Use `group('endpoint name', () => { ... })` per endpoint.\n5. `check()` assertions: ALWAYS assert `res.status` against the expected code, AND assert at least one key response field (e.g. `res.json('email') !== null`). For error paths assert the error code field.\n6. `thresholds`: set `http_req_duration: ['p(95)<500']` and `http_req_failed: ['rate<0.01']` (tune the 500ms to the agreed SLO if known).\n7. Pacing: use `sleep(0 )` between requests to match Think Time; do not use long fixed sleeps as the only control.\n8. `setup()` / `teardown()`: create any needed test data in `setup()` and DELETE it in `teardown()` so the environment is not polluted across runs.\n9. No secrets hardcoded; never commit real tokens.\n\nOutput ONLY raw JavaScript. No markdown.\n"
+    }
+  ],
+  "task": "perf_parity"
+}

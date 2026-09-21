@@ -1,0 +1,31 @@
+{
+  "artifact": {
+    "artifact": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<jmeterTestPlan version=\"1.2\">\n</jmeterTestPlan>",
+    "review_status": null
+  },
+  "events": [],
+  "failure_semantics": {},
+  "fixture_version": 1,
+  "input": {
+    "omit_format": false,
+    "output_language": "english",
+    "overrides": false,
+    "review_enabled": false,
+    "script_format": "jmeter"
+  },
+  "meta": {
+    "git_sha": "95b4074c3d43",
+    "recorded_from": "legacy PerformanceGenerator.generate (live comparison below)",
+    "recorded_utc": "2026-09-21T03:49:11.323963+00:00"
+  },
+  "name": "jmeter-noreview-english-plain",
+  "request_trace": [
+    {
+      "index": 0,
+      "role": "primary",
+      "system": "You are an expert JMeter performance engineer. Output only complete, valid JMeter JMX XML.",
+      "user": "Generate a complete, production-ready JMeter JMX test plan.\n\n## API Endpoints\nGET /products - List products with pagination and filters (params: page, limit, category, status)\nPOST /products - Create a product (admin only) [body: application/json]\nGET /products/{id} - Get product by ID (params: id)\nPUT /products/{id} - Update a product (admin only) (params: id) [body: application/json]\nDELETE /products/{id} - Delete a product (admin only) (params: id)\nGET /cart/items - List current user's cart items\nPOST /cart/items - Add product to cart (merge and accumulate quantity if exists) [body: application/json]\nPUT /cart/items/{itemId} - Update cart item quantity (params: itemId) [body: application/json]\nDELETE /cart/items/{itemId} - Remove cart item (params: itemId)\nGET /orders - List current user's orders (params: page, limit, status)\nPOST /orders - Create order from cart (requires non-empty cart, decrements stock) [body: application/json]\nGET /orders/{id} - Get order by ID (owner only) (params: id)\nPOST /orders/{id}/cancel - Cancel an unpaid order (params: id)\n\n## Configuration\n- Virtual Users: 100\n- Duration: 300 seconds\n- Ramp-Up: 60 seconds\n- Think Time: 500 ms\n- Base URL: https://api.example.com\n- Auth: none\n\n## Requirements\n1. Complete XML from <?xml ...?> to </jmeterTestPlan>\n2. ThreadGroup with configured users/ramp-up/duration (ramp-up then steady state)\n3. HTTP Request Defaults (server + port from Base URL), Cookie Manager, Cache Manager\n4. HTTP Header Manager with Content-Type: application/json (and Authorization when Auth != none)\n5. HTTP Samplers for EACH listed endpoint with realistic request bodies (from schema) for POST/PUT\n6. Response Assertions for success status codes AND at least one key field\n7. If Auth != none: a login sampler that extracts a token (JSON Extractor / Regular Expression Extractor) and reuses it via a Header Manager for subsequent samplers\n8. Summary Report and Simple Data Writer listeners\n9. (Cleanup) if any sampler creates data, add a teardown step that deletes it\n\nOutput ONLY raw JMX XML. Start with: <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    }
+  ],
+  "task": "perf_parity"
+}

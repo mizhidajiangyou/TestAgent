@@ -1,22 +1,16 @@
-"""B5.1 tasks/perf — fingerprint parity + run-through tests (plan-d B5.1 gate).
+"""B5.1 tasks/perf — package discipline + run-through tests (plan-d B5.1 gate).
 
-Gate definition (plan-d v3 B5.1): ``validate --strict`` + **fingerprint
-parity zero-diff (I2 whitelist)** + fake-LLM run-through.
+The fingerprint-parity half moved out, because it needs the legacy
+``PerformanceGenerator`` as its oracle: ``test_perf_parity_legacy.py`` holds the
+live comparison (and is the only place allowed to record cells), and
+``test_perf_parity_oracle.py`` replays the recorded cells with no legacy import
+so the guard survives plan-k B5.4. Shared doubles and the cells live in
+``tests/perf_parity_capture.py``.
 
-What "fingerprint parity" means here concretely: driving the LEGACY
-``PerformanceGenerator`` and the NEW pipeline (executor + runtime +
-tasks/perf package) with equivalent inputs and scripted responses, the
-observable LLM-request boundary — the ordered sequence of
-``(system_prompt, user_prompt)`` pairs, per client role — must be
-IDENTICAL, and so must the final artifact. That is exactly the I2
-whitelist (model + prompt pair; params are bare at this boundary and
-logical labels never leak into requests — see the label-mapping test).
-
-Template migration discipline is pinned by reverse-rename diffs: the
-task-package templates must be byte-identical to the frozen legacy
-templates after undoing the documented variable renames
-(``endpoints``→``endpoints_text``, ``config.X``→``X``,
-``script_kind``→``script_format``).
+What stays here only ever talks to the task package: strict validation, the
+reverse-rename template discipline (pinned against the FROZEN legacy template
+bytes, recorded at commit 4f73474, so it outlives the templates too), the
+fingerprint recording machinery, and the fake-LLM run-through.
 
 Registered divergences (B5.3 failure-suite scope, see task.md):
 - invalid jmeter generation: legacy raises ValueError; pipeline records
@@ -30,18 +24,13 @@ Registered divergences (B5.3 failure-suite scope, see task.md):
   empty-response semantics: no re-ask).
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
-from testagent.config.models import PerfGenInput, PerformanceConfig
-from testagent.engine.llm_client import LLMResponse
-from testagent.engine.prompt_builder import PromptBuilder
-from testagent.generators.performance_generator import PerformanceGenerator
-from testagent.parsers.swagger_parser import SwaggerParser
 from testagent.pipeline.executor import PipelineExecutor
 from testagent.pipeline.fingerprint import FingerprintLog
 from testagent.pipeline.inputs import parse_inputs
@@ -54,124 +43,19 @@ from testagent.pipeline.runtime import (
     build_review_runner,
 )
 from testagent.pipeline.writers import write_artifact
-
-
-def _sha(text: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
-
-
-REPO = Path(__file__).parents[1]
-TASK_ROOT = REPO / "tasks" / "perf"
-SWAGGER = REPO / "examples" / "ecommerce_swagger.json"
-
-#: One source of truth for the perf parameters on both sides.
-PERF_KW: dict[str, Any] = {
-    "base_url": "https://api.example.com",
-    "virtual_users": 100,
-    "duration_seconds": 300,
-    "ramp_up_seconds": 60,
-    "think_time_ms": 500,
-    "auth_type": "none",
-}
-
-#: Script constants double as EXPECTED artifacts — both the legacy
-#: ``_extract_script`` and the pipeline ``strip_fences`` strip surrounding
-#: whitespace, so the constants are the post-strip forms.
-K6_SCRIPT = "import http from 'k6/http';\nexport default function () {}"
-K6_SCRIPT_FENCED = f"```javascript\n{K6_SCRIPT}\n```"
-K6_REVISED = "import http from 'k6/http';\nexport default function () { sleep(1); }"
-JMX_SCRIPT = (
-    '<?xml version="1.0" encoding="UTF-8"?>\n<jmeterTestPlan version="1.2">\n</jmeterTestPlan>'
+from tests.perf_parity_capture import (
+    JMX_REVISED,
+    JMX_SCRIPT,
+    K6_REVISED,
+    K6_SCRIPT,
+    SWAGGER,
+    TASK_ROOT,
+    ParityFakeLLM,
+    Settings,
 )
-JMX_SCRIPT_FENCED = f"```xml\n{JMX_SCRIPT}\n```"
-JMX_REVISED = (
-    '<?xml version="1.0" encoding="UTF-8"?>\n'
-    '<jmeterTestPlan version="1.2">\n'
-    "  <hashTree/>\n"
-    "</jmeterTestPlan>"
+from tests.perf_parity_capture import (
+    sha12 as _sha,
 )
-
-
-# ----------------------------------------------------------------------
-# Fake LLM: records the (role, system, user) boundary on every path the
-# legacy generator (sync chat/chat_with_meta) and the pipeline (async
-# achat_with_meta) use.
-# ----------------------------------------------------------------------
-
-
-class _SubClient:
-    def __init__(self, script: list[Any], role: str, sink: list[tuple[str, str, str]]) -> None:
-        self._script = list(script)
-        self._role = role
-        self._sink = sink
-        self.model_name = f"{role}-m"
-
-    def _respond(self, system: str, user: str) -> Any:
-        self._sink.append((self._role, system, user))
-        idx = sum(1 for r, *_ in self._sink if r == self._role) - 1
-        return self._script[min(idx, len(self._script) - 1)]
-
-    @staticmethod
-    def _as_response(item: Any) -> LLMResponse:
-        if isinstance(item, LLMResponse):
-            return item
-        if isinstance(item, Exception):
-            raise item
-        return LLMResponse(text=str(item), finish_reason="stop")
-
-    def chat(self, system: str, user: str) -> str:
-        return self._as_response(self._respond(system, user)).text
-
-    def chat_with_meta(self, system: str, user: str) -> LLMResponse:
-        return self._as_response(self._respond(system, user))
-
-    async def achat_with_meta(self, system: str, user: str) -> LLMResponse:
-        return self.chat_with_meta(system, user)
-
-
-class ParityFakeLLM:
-    """Multi-model-shaped double: primary + secondary sub-clients."""
-
-    intent_capable = True
-    primary_model = "primary-m"
-
-    def __init__(self, primary_script: list[Any], secondary_script: list[Any] | None = None):
-        self.calls: list[tuple[str, str, str]] = []
-        self.primary = _SubClient(primary_script, "primary", self.calls)
-        self._secondary = _SubClient(
-            secondary_script if secondary_script is not None else primary_script,
-            "secondary",
-            self.calls,
-        )
-        self.session_id = ""
-
-    @property
-    def pairs(self) -> list[tuple[str, str]]:
-        return [(system, user) for _, system, user in self.calls]
-
-    @property
-    def roles(self) -> list[str]:
-        return [role for role, *_ in self.calls]
-
-    def secondary_client(self) -> _SubClient:
-        return self._secondary
-
-    def set_session_id(self, sid: str) -> None:
-        self.session_id = sid
-
-    async def averify(self) -> None:
-        return None
-
-    def chat(self, system: str, user: str) -> str:
-        return self.primary.chat(system, user)
-
-    def chat_with_meta(self, system: str, user: str) -> LLMResponse:
-        return self.primary.chat_with_meta(system, user)
-
-    async def achat_with_meta(self, system: str, user: str) -> LLMResponse:
-        return await self.primary.achat_with_meta(system, user)
 
 
 def _settings(
@@ -180,63 +64,18 @@ def _settings(
     review_enabled: bool = False,
     output_language: str = "english",
     script_format: str = "k6",
-) -> type:
-    class Perf:
-        base_url = PERF_KW["base_url"]
-        virtual_users = PERF_KW["virtual_users"]
-        duration_seconds = PERF_KW["duration_seconds"]
-        ramp_up_seconds = PERF_KW["ramp_up_seconds"]
-        think_time_ms = PERF_KW["think_time_ms"]
-        auth_type = PERF_KW["auth_type"]
-
-    class LLM:
-        max_concurrency = 2
-        json_mode = False
-
-    fmt = script_format  # class bodies cannot see the enclosing name directly
-    lang = output_language
-    review = review_enabled
-    out_dir = str(tmp_path)
-
-    class Settings:
-        llm = LLM
-        perf = Perf
-        script_format = fmt
-        output_dir = out_dir
-        output_language = lang
-        review_enabled = review
-        review_max_rounds = 2
-
-    return Settings
+) -> Any:
+    return Settings(
+        str(tmp_path),
+        review_enabled=review_enabled,
+        output_language=output_language,
+        script_format=script_format,
+    )
 
 
 def _task() -> TaskPackage:
     manifest = load_manifest(TASK_ROOT / "manifest.json")
     return TaskPackage(manifest.name, manifest, TASK_ROOT)
-
-
-_ENDPOINTS = SwaggerParser().parse(str(SWAGGER))
-
-
-def _run_legacy(
-    fake: ParityFakeLLM,
-    *,
-    script_format: str,
-    output_language: str,
-    review_enabled: bool,
-) -> str:
-    generator = PerformanceGenerator(
-        llm_client=fake,
-        prompt_builder=PromptBuilder(),
-        script_format=script_format,
-        output_language=output_language,
-        review_enabled=review_enabled,
-        review_llm_client=fake.secondary_client(),
-        review_max_rounds=2,
-    )
-    return generator.generate(
-        PerfGenInput(endpoints=_ENDPOINTS, config=PerformanceConfig(**PERF_KW))
-    )
 
 
 async def _run_pipeline(
@@ -312,151 +151,12 @@ class TestTemplateDiscipline:
         assert task.validate_references() == []
 
 
-# ----------------------------------------------------------------------
-# Fingerprint parity matrix (the B5.1 hard gate)
-# ----------------------------------------------------------------------
+class TestFingerprintRecording:
+    """The recording machinery itself (label, model, pair hashes).
 
-
-class TestFingerprintParity:
-    @pytest.mark.parametrize("script_format", ["k6", "jmeter"])
-    @pytest.mark.parametrize("review_enabled", [False, True])
-    @pytest.mark.parametrize("output_language", ["english", "chinese"])
-    @pytest.mark.parametrize("fenced", [False, True], ids=["plain", "fenced"])
-    async def test_request_sequences_and_artifacts_match(
-        self,
-        tmp_path: Path,
-        script_format: str,
-        review_enabled: bool,
-        output_language: str,
-        fenced: bool,
-    ) -> None:
-        if script_format == "k6":
-            gen = K6_SCRIPT_FENCED if fenced else K6_SCRIPT
-            r1, r2 = K6_REVISED, K6_SCRIPT
-        else:
-            gen = JMX_SCRIPT_FENCED if fenced else JMX_SCRIPT
-            r1, r2 = JMX_REVISED, JMX_SCRIPT
-
-        if review_enabled:
-            primary_script: list[Any] = [gen, r2]
-            secondary_script: list[Any] = [r1]
-        else:
-            primary_script, secondary_script = [gen], None
-
-        legacy_fake = ParityFakeLLM(primary_script, secondary_script)
-        legacy_artifact = _run_legacy(
-            legacy_fake,
-            script_format=script_format,
-            output_language=output_language,
-            review_enabled=review_enabled,
-        )
-
-        pipe_fake = ParityFakeLLM(primary_script, secondary_script)
-        settings = _settings(
-            tmp_path, review_enabled=review_enabled, output_language=output_language
-        )
-        result = await _run_pipeline(
-            pipe_fake, settings, script_format=script_format, tmp_path=tmp_path
-        )
-
-        # The hard gate: identical ordered (system, user) request pairs.
-        assert pipe_fake.pairs == legacy_fake.pairs, (
-            f"request mismatch for fmt={script_format} review={review_enabled} "
-            f"lang={output_language} fenced={fenced}"
-        )
-        # Client-role assignment matches too (generation=primary, odd review
-        # rounds=secondary, even=primary — the alternation contract).
-        assert pipe_fake.roles == legacy_fake.roles
-        # Request counts: 1 generation (+2 review rounds when enabled).
-        assert len(pipe_fake.calls) == (3 if review_enabled else 1)
-        # Artifact parity.
-        assert result.artifact == legacy_artifact
-
-    async def test_from_settings_defaults_parity(self, tmp_path: Path) -> None:
-        """No CLI overrides: the pipeline resolves every default from
-        settings (script_format, perf.*) exactly as the legacy CLI did
-        (``value or settings.perf.x`` / ``settings.script_format``)."""
-        legacy_fake = ParityFakeLLM([JMX_SCRIPT])
-        legacy_artifact = _run_legacy(
-            legacy_fake, script_format="jmeter", output_language="english", review_enabled=False
-        )
-        pipe_fake = ParityFakeLLM([JMX_SCRIPT])
-        settings = _settings(tmp_path, script_format="jmeter")  # raw omits script_format
-        task = _task()
-        ctx = parse_inputs(task.manifest, {"swagger": str(SWAGGER)}, settings)
-        executor = PipelineExecutor(
-            pipe_fake,
-            settings,
-            generate_unit=build_generate_unit(pipe_fake),
-            review_runner=build_review_runner(pipe_fake),
-        )
-        result = await executor.arun(task, ctx, session_id="parity3")
-        assert pipe_fake.pairs == legacy_fake.pairs
-        assert result.artifact == legacy_artifact == JMX_SCRIPT
-        # The jmeter branch actually rendered (not the k6 default).
-        assert "JMeter JMX test plan" in pipe_fake.pairs[0][1]
-
-    async def test_non_default_params_parity(self, tmp_path: Path) -> None:
-        """CLI-level parameter overrides must reach the prompts identically
-        (pipeline raw inputs vs legacy PerformanceConfig)."""
-        overrides = {
-            "base_url": "https://staging.example.dev",
-            "virtual_users": 42,
-            "duration_seconds": 120,
-            "ramp_up_seconds": 15,
-            "think_time_ms": 1500,
-            "auth_type": "bearer",
-        }
-        legacy_fake = ParityFakeLLM([K6_SCRIPT])
-        generator = PerformanceGenerator(
-            llm_client=legacy_fake,
-            prompt_builder=PromptBuilder(),
-            script_format="k6",
-            output_language="english",
-            review_enabled=False,
-        )
-        legacy_artifact = generator.generate(
-            PerfGenInput(endpoints=_ENDPOINTS, config=PerformanceConfig(**overrides))
-        )
-
-        pipe_fake = ParityFakeLLM([K6_SCRIPT])
-        settings = _settings(tmp_path)
-        task = _task()
-        ctx = parse_inputs(
-            task.manifest,
-            {"swagger": str(SWAGGER), "script_format": "k6", **overrides},
-            settings,
-        )
-        executor = PipelineExecutor(
-            pipe_fake,
-            settings,
-            generate_unit=build_generate_unit(pipe_fake),
-            review_runner=build_review_runner(pipe_fake),
-        )
-        result = await executor.arun(task, ctx, session_id="parity2")
-        assert pipe_fake.pairs == legacy_fake.pairs
-        assert result.artifact == legacy_artifact == K6_SCRIPT
-        # The overrides actually reached the prompt (not just equal-equal).
-        assert "- Virtual Users: 42" in pipe_fake.pairs[0][1]
-        assert "- Base URL: https://staging.example.dev" in pipe_fake.pairs[0][1]
-        assert "sleep(1 )" in pipe_fake.pairs[0][1]  # think_time_ms 1500 // 1000
-
-    async def test_empty_response_parity_k6(self, tmp_path: Path) -> None:
-        """Empty first response (k6): both sides make exactly ONE request,
-        return an empty artifact and burn no review round (registered
-        divergence is jmeter-only: legacy raises, pipeline INVALID)."""
-        legacy_fake = ParityFakeLLM([""], [])
-        legacy_artifact = _run_legacy(
-            legacy_fake, script_format="k6", output_language="english", review_enabled=True
-        )
-        pipe_fake = ParityFakeLLM([""], [])
-        settings = _settings(tmp_path, review_enabled=True)
-        result = await _run_pipeline(pipe_fake, settings, script_format="k6", tmp_path=tmp_path)
-        assert legacy_artifact == ""
-        assert result.artifact == ""
-        assert len(legacy_fake.calls) == len(pipe_fake.calls) == 1
-        assert pipe_fake.pairs == legacy_fake.pairs
-        assert result.review_meta is None
+    The request-boundary parity it used to sit next to now lives in
+    ``test_perf_parity_legacy.py`` / ``test_perf_parity_oracle.py``.
+    """
 
     async def test_fingerprint_log_matches_captured_pairs(self, tmp_path: Path) -> None:
         """The B4.10 FingerprintLog machinery stays honest on the new side:
