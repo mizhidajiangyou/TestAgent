@@ -25,19 +25,30 @@ jobs:
         with:
           enable-cache: false
 
-      - name: Install dependencies
-        run: uv pip install --system -e ".[dev,documents,web]"
+      # FH2.10 (plan-k B8'): install FROM the lockfile. Before this, CI resolved
+      # "latest matching version" on every run, so a green build said nothing
+      # about reproducibility — and the committed uv.lock was missing
+      # dependencies outright (e.g. dependency-injector), which `uv lock --check`
+      # now catches.
+      # A stale or incomplete lock is a hard failure, not a surprise later:
+      # the committed uv.lock was missing runtime deps (dependency-injector) and
+      # resolved differently from pyproject until 2026-09-20.
+      - name: Lockfile is current
+        run: uv lock --check
 
-      - run: ruff check testagent/ tests/
-      - run: ruff format --check testagent/ tests/
-      - run: mypy testagent/
-      - run: pytest tests/ -q
+      - name: Install dependencies (locked)
+        run: uv sync --frozen --all-extras
 
-      # FH2.10 (plan-k B8'): the task-package contract gate is a hard CI step,
-      # not just a manual habit. links golden / R6 benchmark / engine golden are
-      # already inside `pytest tests/` (subprocess tests), so they need no step.
+      - run: uv run ruff check testagent/ tests/ scripts/
+      - run: uv run ruff format --check testagent/ tests/ scripts/
+      - run: uv run mypy testagent/
+      - run: uv run pytest tests/ -q
+
+      # The task-package contract gate is a hard CI step, not a manual habit.
+      # links golden / R6 benchmark / engine golden / repo hygiene already run
+      # inside `pytest tests/` (subprocess tests), so they need no step.
       - name: Validate task packages (strict)
-        run: testagent tasks validate --strict
+        run: uv run testagent tasks validate --strict
 
   docker:
     name: Build & Push Docker Image (amd64 + arm64)
