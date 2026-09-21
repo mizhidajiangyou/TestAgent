@@ -1,0 +1,9 @@
+$ .venv/bin/python -m mypy testagent/
+[cwd] <repo>
+[exit] 0
+
+--- stdout ---
+Success: no issues found in 98 source files
+
+--- stderr ---
+
