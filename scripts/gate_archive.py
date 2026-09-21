@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -29,7 +30,7 @@ GATES_ROOT = REPO / "output" / "gates"
 
 def _gate_list(py: str) -> list[tuple[str, list[str]]]:
     """(id, argv) — plan-k §9.1 全量门 + task.md §五 追加的 links 两道门."""
-    testagent = [str(REPO / ".venv" / "bin" / "testagent")]
+    testagent = [str(Path(".venv") / "bin" / "testagent")]
     return [
         ("ruff", [py, "-m", "ruff", "check", "testagent/", "tests/", "scripts/"]),
         ("format", [py, "-m", "ruff", "format", "--check", "testagent/", "tests/", "scripts/"]),
@@ -41,7 +42,41 @@ def _gate_list(py: str) -> list[tuple[str, list[str]]]:
         ("links-golden", [py, "scripts/golden_links.py", "--stage", "all"]),
         ("r6-graph", [py, "scripts/benchmark_r6.py", "--stage", "graph"]),
         ("r6-selected", [py, "scripts/benchmark_r6.py", "--stage", "selected"]),
+        # LINK-S7 stage-exit commands (v15 §9/§10): the 13-endpoint baseline
+        # measurement and the links-off rollback proof. The second one is the
+        # only gate that can show "links wired" and "links-off bytes unchanged"
+        # in the same archive.
+        ("links-baseline", [py, "scripts/measure_baseline.py"]),
+        ("links-parity-off", [py, "scripts/parity_links_off.py"]),
     ]
+
+
+def _rel_py() -> str:
+    """Interpreter path relative to the repo: evidence files are tracked, so an
+    absolute ``/Users/<name>/...`` in them leaks the operator's machine and
+    reads differently on every other clone (rule: 入库正文只引用仓库内路径)."""
+    # Unresolved: sys.executable is the venv launcher (a symlink), and that is
+    # the identity worth recording. Resolving it lands on a homebrew interpreter
+    # outside the repo and erases the venv from the evidence.
+    exe = Path(sys.executable)
+    try:
+        return str(exe.relative_to(REPO))
+    except ValueError:
+        return "<python>"
+
+
+def _sanitize(text: str) -> str:
+    """Strip the operator's machine out of tracked evidence.
+
+    Logs embed pytest's own paths (warning headers, docs URLs); an absolute
+    ``/Users/<name>/...`` inside a committed artifact reads differently on every
+    other clone and names a person who is not part of the measurement.
+    """
+    home = str(Path.home())
+    for needle, replacement in ((str(REPO), "<repo>"), (home, "~")):
+        if needle and needle != str(Path(__file__).root):
+            text = text.replace(needle, replacement)
+    return text
 
 
 def _git(*args: str) -> str:
@@ -58,7 +93,7 @@ def main() -> int:
     args = parser.parse_args()
 
     only = {part.strip() for part in args.only.split(",") if part.strip()}
-    py = sys.executable
+    py = _rel_py()
     gates = [gate for gate in _gate_list(py) if not only or gate[0] in only]
     if not gates:
         print(f"[gate][FAIL] --only matched nothing (known: {_gate_list(py)})")
@@ -69,8 +104,19 @@ def main() -> int:
     # dirty, which would make every archive self-report as not-HEAD-exact.
     dirty = bool(_git("status", "--porcelain"))
     started = datetime.now(UTC)
-    target = GATES_ROOT / f"{started:%Y%m%d}-{args.node}-{sha[:7]}"
-    target.mkdir(parents=True, exist_ok=True)
+    name = f"{started:%Y%m%d}-{args.node}-{sha[:7]}"
+    target = GATES_ROOT / name
+    if target.exists():
+        print(f"[gate][FAIL] {target} already exists — archives are immutable evidence")
+        return 2
+    # Stage OUTSIDE output/gates and move into place only once the manifest is
+    # written. Writing the logs in place made the half-finished archive visible
+    # to the pytest gate inside the very same run (tests/test_repo_hygiene
+    # rejects a gate dir without a manifest), so every archive self-reported
+    # FAIL — the observer contaminated the observation.
+    staged = REPO / "output" / ".gates-staging" / name
+    staged.mkdir(parents=True, exist_ok=True)
+    target = staged  # every write below goes to the staging copy
 
     results: list[dict[str, Any]] = []
     for gate_id, argv in gates:
@@ -84,11 +130,13 @@ def main() -> int:
         )
         log = target / f"{gate_id}.log"
         log.write_text(
-            f"$ {' '.join(argv)}\n[cwd] {REPO}\n[exit] {proc.returncode}\n\n"
-            f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}\n",
+            _sanitize(
+                f"$ {' '.join(argv)}\n[cwd] <repo>\n[exit] {proc.returncode}\n\n"
+                f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}\n"
+            ),
             encoding="utf-8",
         )
-        tail = (proc.stdout or proc.stderr).strip().splitlines()
+        tail = _sanitize(proc.stdout or proc.stderr).strip().splitlines()
         results.append(
             {
                 "id": gate_id,
@@ -110,7 +158,9 @@ def main() -> int:
         "working_tree_dirty": dirty,
         "python": platform.python_version(),
         "os": f"{platform.system()} {platform.release()} {platform.machine()}",
-        "executor": "agent (Qoder session) + " + os.environ.get("USER", "unknown"),
+        # No operator name: this file is tracked, and "who ran it" is not part
+        # of what makes the evidence replayable.
+        "executor": "agent session (Qoder)",
         "gates": results,
         "note": args.note,
         "verdict": "PASS" if verdict else "FAIL",
@@ -118,7 +168,12 @@ def main() -> int:
     (target / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    print(f"[gate] archive: {target.relative_to(REPO)} verdict={manifest['verdict']}")
+    final = GATES_ROOT / name
+    shutil.move(str(target), str(final))
+    staging_parent = target.parent
+    if not any(staging_parent.iterdir()):
+        staging_parent.rmdir()
+    print(f"[gate] archive: {final.relative_to(REPO)} verdict={manifest['verdict']}")
     if dirty:
         print("[gate][WARN] working tree dirty — the archive does not describe HEAD exactly")
     return 0 if verdict else 1
