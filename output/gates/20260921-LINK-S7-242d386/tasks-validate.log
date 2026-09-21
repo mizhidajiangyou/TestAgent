@@ -1,0 +1,12 @@
+$ .venv/bin/testagent tasks validate --strict
+[cwd] <repo>
+[exit] 0
+
+--- stdout ---
+✓ _example
+✓ gui
+✓ perf
+✓ testcase
+
+--- stderr ---
+

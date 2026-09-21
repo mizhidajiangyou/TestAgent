@@ -1,0 +1,9 @@
+$ .venv/bin/python -m ruff check testagent/ tests/ scripts/
+[cwd] <repo>
+[exit] 0
+
+--- stdout ---
+All checks passed!
+
+--- stderr ---
+

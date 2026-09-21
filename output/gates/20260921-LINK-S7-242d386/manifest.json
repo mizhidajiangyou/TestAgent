@@ -1,0 +1,110 @@
+{
+  "milestone": "LINK-S7",
+  "date_utc": "2026-09-21T02:48:33Z",
+  "commit_sha": "242d386",
+  "branch": "dev",
+  "working_tree_dirty": true,
+  "python": "3.14.2",
+  "os": "Darwin 25.5.0 arm64",
+  "executor": "agent session (Qoder)",
+  "gates": [
+    {
+      "id": "ruff",
+      "cmd": ".venv/bin/python -m ruff check testagent/ tests/ scripts/",
+      "exit": 0,
+      "result": "PASS",
+      "log": "ruff.log",
+      "summary_tail": "All checks passed!"
+    },
+    {
+      "id": "format",
+      "cmd": ".venv/bin/python -m ruff format --check testagent/ tests/ scripts/",
+      "exit": 0,
+      "result": "PASS",
+      "log": "format.log",
+      "summary_tail": "169 files already formatted"
+    },
+    {
+      "id": "mypy",
+      "cmd": ".venv/bin/python -m mypy testagent/",
+      "exit": 0,
+      "result": "PASS",
+      "log": "mypy.log",
+      "summary_tail": "Success: no issues found in 98 source files"
+    },
+    {
+      "id": "pytest",
+      "cmd": ".venv/bin/python -m pytest tests/ -q",
+      "exit": 0,
+      "result": "PASS",
+      "log": "pytest.log",
+      "summary_tail": " | -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html | 1010 passed, 7 warnings in 95.11s (0:01:35)"
+    },
+    {
+      "id": "arch",
+      "cmd": ".venv/bin/python -m pytest tests/test_pipeline_e2e.py::TestArchitectureGate -q",
+      "exit": 0,
+      "result": "PASS",
+      "log": "arch.log",
+      "summary_tail": ".......                                                                  [100%] | 7 passed in 0.66s"
+    },
+    {
+      "id": "engine-golden",
+      "cmd": ".venv/bin/python -m pytest tests/test_engine_event_baseline.py -q",
+      "exit": 0,
+      "result": "PASS",
+      "log": "engine-golden.log",
+      "summary_tail": "................                                                         [100%] | 16 passed in 0.40s"
+    },
+    {
+      "id": "tasks-validate",
+      "cmd": ".venv/bin/testagent tasks validate --strict",
+      "exit": 0,
+      "result": "PASS",
+      "log": "tasks-validate.log",
+      "summary_tail": "✓ gui | ✓ perf | ✓ testcase"
+    },
+    {
+      "id": "links-golden",
+      "cmd": ".venv/bin/python scripts/golden_links.py --stage all",
+      "exit": 0,
+      "result": "PASS",
+      "log": "links-golden.log",
+      "summary_tail": "[golden][PASS] graph | [golden][PASS] planner | [golden][PASS] fixture"
+    },
+    {
+      "id": "r6-graph",
+      "cmd": ".venv/bin/python scripts/benchmark_r6.py --stage graph",
+      "exit": 0,
+      "result": "PASS",
+      "log": "r6-graph.log",
+      "summary_tail": "[r6] module pairs: {'precision': 1.0, 'recall': 0.9167, 'predicted': 11, 'truth': 12, 'hits': 11} | [r6] directed relations: {'precision': 1.0, 'recall': 0.8889, 'predicted': 16, 'truth': 18, 'hits': 16} | [r6][PASS] graph stage"
+    },
+    {
+      "id": "r6-selected",
+      "cmd": ".venv/bin/python scripts/benchmark_r6.py --stage selected",
+      "exit": 0,
+      "result": "PASS",
+      "log": "r6-selected.log",
+      "summary_tail": "[r6] selected R6 hops: [('POST /coupons', 'POST /orders', 'DATA_FLOW'), ('POST /coupons', 'POST /orders/{id}/payment', 'DATA_FLOW'), ('POST /coupons/{id}/apply', 'POST /orders', 'DATA_FLOW')] | [r6][PASS] selected stage"
+    },
+    {
+      "id": "links-baseline",
+      "cmd": ".venv/bin/python scripts/measure_baseline.py",
+      "exit": 0,
+      "result": "PASS",
+      "log": "links-baseline.log",
+      "summary_tail": "[measure] modules: {\"cart\": 4, \"orders\": 4, \"products\": 5} | [measure] l0_chars: 725 | [measure][PASS]"
+    },
+    {
+      "id": "links-parity-off",
+      "cmd": ".venv/bin/python scripts/parity_links_off.py",
+      "exit": 0,
+      "result": "PASS",
+      "log": "links-parity-off.log",
+      "summary_tail": "PASS tc-a4-empty-unit (links config ON, package OFF) | PASS tc-a5-review-on (links config ON, package OFF) | parity_links_off: 0 failed cell(s)"
+    }
+  ],
+  "note": "links 上链 S5b/S6b/T12b/S7：开关矩阵、run sidecar、links-check CLI、web 同对象展示、parity_links_off 回退证明、真机 E2E（Gate 给 REJECTED 非假绿）",
+  "verdict": "PASS"
+}

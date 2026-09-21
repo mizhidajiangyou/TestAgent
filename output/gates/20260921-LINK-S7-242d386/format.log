@@ -1,0 +1,9 @@
+$ .venv/bin/python -m ruff format --check testagent/ tests/ scripts/
+[cwd] <repo>
+[exit] 0
+
+--- stdout ---
+169 files already formatted
+
+--- stderr ---
+

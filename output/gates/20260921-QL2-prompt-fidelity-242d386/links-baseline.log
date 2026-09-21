@@ -1,0 +1,12 @@
+$ .venv/bin/python scripts/measure_baseline.py
+[cwd] <repo>
+[exit] 0
+
+--- stdout ---
+[measure] endpoints: 13
+[measure] modules: {"cart": 4, "orders": 4, "products": 5}
+[measure] l0_chars: 725
+[measure][PASS]
+
+--- stderr ---
+

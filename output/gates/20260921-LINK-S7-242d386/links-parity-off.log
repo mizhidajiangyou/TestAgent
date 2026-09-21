@@ -1,0 +1,51 @@
+$ .venv/bin/python scripts/parity_links_off.py
+[cwd] <repo>
+[exit] 0
+
+--- stdout ---
+PASS tc-a1-baseline (links config ON, package OFF)
+PASS tc-a2-historical (links config ON, package OFF)
+PASS tc-a3-truncation (links config ON, package OFF)
+PASS tc-a4-empty-unit (links config ON, package OFF)
+PASS tc-a5-review-on (links config ON, package OFF)
+parity_links_off: 0 failed cell(s)
+
+--- stderr ---
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+[phase2_api batch 1/1] empty streak exhausted (produced=0)
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+[phase2_api batch 1/1] empty streak exhausted (produced=0)
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+[phase2_api batch 1/1] empty streak exhausted (produced=0)
+[phase1 1/3] empty streak exhausted (produced=2)
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+[phase1 2/3] empty streak exhausted (produced=0)
+[phase1 3/3] empty streak exhausted (produced=0)
+[phase1 2/3] empty streak exhausted (produced=0)
+[phase1 3/3] empty streak exhausted (produced=0)
+[phase2_api batch 1/1] empty streak exhausted (produced=0)
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+Case TC-XXX semantic gaps (re-ask eligible): ['identity-missing: scenario identity incomplete']
+
