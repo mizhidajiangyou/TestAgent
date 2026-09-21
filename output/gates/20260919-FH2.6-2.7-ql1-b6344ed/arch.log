@@ -1,5 +1,5 @@
-$ /Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m pytest tests/test_pipeline_e2e.py::TestArchitectureGate -q
-[cwd] /Users/zhangtianxin/Desktop/TestAgent
+$ <repo>/.venv/bin/python -m pytest tests/test_pipeline_e2e.py::TestArchitectureGate -q
+[cwd] <repo>
 [exit] 0
 
 --- stdout ---

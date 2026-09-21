@@ -1,0 +1,2305 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Create book with valid data returns 201",
+    "description": "Happy path: valid author, title, price returns 201 with integer id. Cleanup via DELETE /books/{id}.",
+    "endpoint": "POST /books",
+    "test_type": "functional",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "happy-path",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "BOOK_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.75",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json} and body {\"title\":\"Test Book <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":19.99}",
+      "Capture response.body.id as <BOOK_ID>",
+      "DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.id is present and is an integer"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-002",
+    "title": "Create book with price below minimum returns 400",
+    "description": "Boundary: price=0.00 violates min=0.01 constraint, expects 400 VALIDATION_ERROR.",
+    "endpoint": "POST /books",
+    "test_type": "boundary",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "price-below-min",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json} and body {\"title\":\"Cheap Book <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":0.00}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "response.body.error.details.price is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-003",
+    "title": "List books with page=0 returns 400",
+    "description": "Boundary: page param below min=1 is rejected with INVALID_PAGE.",
+    "endpoint": "GET /books",
+    "test_type": "boundary",
+    "scenario_operation": "GET /books",
+    "scenario_scene": "pagination",
+    "scenario_variant": "page-below-min",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "GET /books?page=0"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_PAGE'"
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-004",
+    "title": "Get book by valid id returns 200",
+    "description": "Happy path: GET /books/{id} with existing id returns the book resource.",
+    "endpoint": "GET /books/{id}",
+    "test_type": "functional",
+    "scenario_operation": "GET /books/{id}",
+    "scenario_scene": "read",
+    "scenario_variant": "happy-path",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json} and body {\"title\":\"GetMe <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":12.50} and capture response.body.id as <BOOK_ID>",
+      "GET /books/<BOOK_ID>",
+      "DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body contains title matching 'GetMe <RUN_ID>'"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-005",
+    "title": "Get book by non-existent id returns 404",
+    "description": "Negative: unknown integer id returns 404 NOT_FOUND.",
+    "endpoint": "GET /books/{id}",
+    "test_type": "negative",
+    "scenario_operation": "GET /books/{id}",
+    "scenario_scene": "read",
+    "scenario_variant": "not-found",
+    "equivalence_class": "negative",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "GET /books/999999999"
+    ],
+    "expected_results": [
+      "Status 404"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-006",
+    "title": "Delete book by valid id returns success",
+    "description": "Happy path: DELETE /books/{id} removes the resource; subsequent GET returns 404.",
+    "endpoint": "DELETE /books/{id}",
+    "test_type": "functional",
+    "scenario_operation": "DELETE /books/{id}",
+    "scenario_scene": "delete",
+    "scenario_variant": "happy-path",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json} and body {\"title\":\"DelMe <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":5.00} and capture response.body.id as <BOOK_ID>",
+      "DELETE /books/<BOOK_ID>",
+      "GET /books/<BOOK_ID> to verify deletion"
+    ],
+    "expected_results": [
+      "Status 200 on DELETE",
+      "Status 404 on subsequent GET /books/<BOOK_ID>"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-007",
+    "title": "Delete book by non-existent id returns 404",
+    "description": "Negative: DELETE with unknown id returns 404.",
+    "endpoint": "DELETE /books/{id}",
+    "test_type": "negative",
+    "scenario_operation": "DELETE /books/{id}",
+    "scenario_scene": "delete",
+    "scenario_variant": "not-found",
+    "equivalence_class": "negative",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [],
+    "steps": [
+      "DELETE /books/999999999"
+    ],
+    "expected_results": [
+      "Status 404"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-008",
+    "title": "Add item to cart with quantity=0 returns 400",
+    "description": "Boundary: quantity below min=1 is rejected with VALIDATION_ERROR.",
+    "endpoint": "POST /cart/items",
+    "test_type": "boundary",
+    "scenario_operation": "POST /cart/items",
+    "scenario_scene": "create",
+    "scenario_variant": "quantity-below-min",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json} and body {\"title\":\"CartBound <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":10.00} and capture response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json} and body {\"bookId\":<BOOK_ID>,\"quantity\":0}",
+      "DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "response.body.error.details.quantity is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-009",
+    "title": "Delete cart item by valid id succeeds",
+    "description": "Happy path: removing an existing cart item succeeds; subsequent operations confirm removal.",
+    "endpoint": "DELETE /cart/items/{id}",
+    "test_type": "functional",
+    "scenario_operation": "DELETE /cart/items/{id}",
+    "scenario_scene": "delete",
+    "scenario_variant": "happy-path",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json} and body {\"title\":\"DelCart <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":8.00} and capture response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json} and body {\"bookId\":<BOOK_ID>,\"quantity\":1} and capture response body id as <CART_ITEM_ID>",
+      "DELETE /cart/items/<CART_ITEM_ID>",
+      "DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 200 on DELETE /cart/items/<CART_ITEM_ID>"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-010",
+    "title": "Create order returns 201 with orderId",
+    "description": "Happy path: POST /orders creates an order and returns orderId. Cleanup is implicit (no DELETE endpoint for orders).",
+    "endpoint": "POST /orders",
+    "test_type": "functional",
+    "scenario_operation": "POST /orders",
+    "scenario_scene": "create",
+    "scenario_variant": "happy-path",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "ORDER_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.8333",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "At least one item in cart (seed via POST /cart/items)"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json} and body {\"title\":\"OrderBook <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":15.00} and capture response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json} and body {\"bookId\":<BOOK_ID>,\"quantity\":1}",
+      "POST /orders with headers {Content-Type: application/json}",
+      "Capture response.body.orderId as <ORDER_ID>",
+      "DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.orderId is present and is an integer"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-011",
+    "title": "Integration: create book, add to cart, create order, pay, ship",
+    "description": "End-to-end flow verifying cross-endpoint data consistency from book creation through shipment.",
+    "endpoint": "POST /orders/{id}/payment",
+    "test_type": "integration",
+    "scenario_operation": "POST /orders/{id}/payment",
+    "scenario_scene": "other",
+    "scenario_variant": "full-order-lifecycle",
+    "equivalence_class": "integration",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json} and body {\"title\":\"E2E Book <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":25.00} and capture response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json} and body {\"bookId\":<BOOK_ID>,\"quantity\":1} and capture response body id as <CART_ITEM_ID>",
+      "POST /orders with headers {Content-Type: application/json} and capture response.body.orderId as <ORDER_ID>",
+      "POST /orders/<ORDER_ID>/payment",
+      "POST /orders/<ORDER_ID>/shipment",
+      "DELETE /cart/items/<CART_ITEM_ID> to clean up",
+      "DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 201 on POST /books",
+      "Status 201 on POST /orders",
+      "Status 200 on POST /orders/<ORDER_ID>/payment",
+      "Status 200 on POST /orders/<ORDER_ID>/shipment"
+    ],
+    "tags": [
+      "smoke",
+      "integration",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-012",
+    "title": "Pay non-existent order returns 404",
+    "description": "Negative: payment on unknown order id returns 404.",
+    "endpoint": "POST /orders/{id}/payment",
+    "test_type": "negative",
+    "scenario_operation": "POST /orders/{id}/payment",
+    "scenario_scene": "error-handling",
+    "scenario_variant": "not-found",
+    "equivalence_class": "negative",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [],
+    "steps": [
+      "POST /orders/999999999/payment"
+    ],
+    "expected_results": [
+      "Status 404"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-013",
+    "title": "Ship non-existent order returns 404",
+    "description": "Negative: shipment on unknown order id returns 404.",
+    "endpoint": "POST /orders/{id}/shipment",
+    "test_type": "negative",
+    "scenario_operation": "POST /orders/{id}/shipment",
+    "scenario_scene": "error-handling",
+    "scenario_variant": "not-found",
+    "equivalence_class": "negative",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [],
+    "steps": [
+      "POST /orders/999999999/shipment"
+    ],
+    "expected_results": [
+      "Status 404"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-014",
+    "title": "Create book with valid data returns 201 and ID",
+    "description": "Happy path: POST /books with all required fields returns 201 and response contains integer id. Cleanup deletes the created book.",
+    "endpoint": "POST /books",
+    "test_type": "functional",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "happy-path-all-fields",
+    "equivalence_class": "positive",
+    "covers_obligations": [
+      "REQ-002-AC1"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "BOOK_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.8333",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire admin Bearer token via documented auth flow (no login endpoint in spec — use environment-provided <TOKEN>)"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"Book_<RUN_ID>\",\"author\":\"Author_<RUN_ID>\",\"price\":19.99}",
+      "Capture response.body.id as <BOOK_ID>",
+      "DELETE /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.id is present and is an integer"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-015",
+    "title": "Get book by existing ID returns 200",
+    "description": "Happy path: GET /books/{id} with a known ID returns 200. Cleanup deletes the created book.",
+    "endpoint": "GET /books/{id}",
+    "test_type": "functional",
+    "scenario_operation": "GET /books/{id}",
+    "scenario_scene": "read",
+    "scenario_variant": "existing-id",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "BOOK_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.8889",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire admin Bearer token",
+      "Seed a book via POST /books"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"ReadTest_<RUN_ID>\",\"author\":\"Author_<RUN_ID>\",\"price\":9.99}",
+      "Capture response.body.id as <BOOK_ID>",
+      "GET /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>}",
+      "DELETE /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.title == \"ReadTest_<RUN_ID>\""
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-016",
+    "title": "Get non-existent book ID returns 404",
+    "description": "Negative: querying a book ID that does not exist returns 404 per AC2.",
+    "endpoint": "GET /books/{id}",
+    "test_type": "negative",
+    "scenario_operation": "GET /books/{id}",
+    "scenario_scene": "error-handling",
+    "scenario_variant": "not-found-id",
+    "equivalence_class": "negative",
+    "covers_obligations": [
+      "REQ-002-AC2"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token",
+      "Ensure no book exists with id 999999999"
+    ],
+    "steps": [
+      "GET /books/999999999 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 404"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-017",
+    "title": "Create book missing title returns 400 VALIDATION_ERROR",
+    "description": "Negative: POST /books without required title field returns 400 with error.code VALIDATION_ERROR and details.title per AC3.",
+    "endpoint": "POST /books",
+    "test_type": "negative",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "error-handling",
+    "scenario_variant": "missing-required:title",
+    "equivalence_class": "negative",
+    "covers_obligations": [
+      "REQ-002-AC3"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire admin Bearer token"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"author\":\"Author_<RUN_ID>\",\"price\":10.00}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"VALIDATION_ERROR\"",
+      "response.body.error.details.title is present"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-018",
+    "title": "List books with limit=51 returns 400 INVALID_LIMIT",
+    "description": "Boundary: limit exceeds documented max of 50, expecting 400 with INVALID_LIMIT.",
+    "endpoint": "GET /books",
+    "test_type": "boundary",
+    "scenario_operation": "GET /books",
+    "scenario_scene": "boundary",
+    "scenario_variant": "limit-exceeds-max",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token"
+    ],
+    "steps": [
+      "GET /books?limit=51 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"INVALID_LIMIT\""
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-019",
+    "title": "Add item to cart with valid bookId and quantity returns success",
+    "description": "Happy path: POST /cart/items with valid bookId and quantity>=1 succeeds. Cleanup removes cart item.",
+    "endpoint": "POST /cart/items",
+    "test_type": "functional",
+    "scenario_operation": "POST /cart/items",
+    "scenario_scene": "create",
+    "scenario_variant": "happy-path-valid-item",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "CART_ITEM_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.9091",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token",
+      "Seed a book via POST /books and capture its id as <BOOK_ID>"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"CartBook_<RUN_ID>\",\"author\":\"Author_<RUN_ID>\",\"price\":12.00}",
+      "Capture response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"bookId\":<BOOK_ID>,\"quantity\":2}",
+      "Capture cart item id from response as <CART_ITEM_ID>",
+      "DELETE /cart/items/<CART_ITEM_ID> with headers {Authorization: Bearer <TOKEN>} to clean up",
+      "DELETE /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 201 on POST /cart/items",
+      "response.body contains an identifier for the cart item"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-020",
+    "title": "Add cart item with quantity=0 returns 400",
+    "description": "Boundary: quantity min is 1; sending 0 must return 400 VALIDATION_ERROR.",
+    "endpoint": "POST /cart/items",
+    "test_type": "boundary",
+    "scenario_operation": "POST /cart/items",
+    "scenario_scene": "boundary",
+    "scenario_variant": "quantity-below-min",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire Bearer token",
+      "Seed a book and capture id as <BOOK_ID>"
+    ],
+    "steps": [
+      "POST /cart/items with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"bookId\":1,\"quantity\":0}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"VALIDATION_ERROR\"",
+      "response.body.error.details.quantity is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-021",
+    "title": "Create order returns 201 with orderId",
+    "description": "Happy path: POST /orders with valid cart state returns 201 and orderId.",
+    "endpoint": "POST /orders",
+    "test_type": "functional",
+    "scenario_operation": "POST /orders",
+    "scenario_scene": "create",
+    "scenario_variant": "happy-path-create-order",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [],
+      "forward_references": [
+        "BOOK_ID"
+      ],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.8889",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token",
+      "Cart contains at least one item (seed via POST /cart/items)"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"OrderBook_<RUN_ID>\",\"author\":\"Author_<RUN_ID>\",\"price\":15.00}",
+      "Capture response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"bookId\":<BOOK_ID>,\"quantity\":1}",
+      "POST /orders with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>}",
+      "DELETE /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.orderId is present and is an integer"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-022",
+    "title": "Create book with missing required field returns 400",
+    "description": "Negative: omitting required field 'title' yields 400 VALIDATION_ERROR. NOTE: conflict_unresolved between 400 (error contract) and 401 (REQ-003 AC2) — asserting 400 per error contract.",
+    "endpoint": "POST /books",
+    "test_type": "negative",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "missing-required:title",
+    "equivalence_class": "negative",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire a Bearer token via the documented auth flow and store as <TOKEN>"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"author\":\"Author_<RUN_ID>\",\"price\":9.99}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "response.body.error.details.title is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-023",
+    "title": "List books with default pagination returns 200",
+    "description": "Happy path: GET /books without params returns 200 with items array and total count using defaults (limit=20, page=1).",
+    "endpoint": "GET /books",
+    "test_type": "functional",
+    "scenario_operation": "GET /books",
+    "scenario_scene": "list",
+    "scenario_variant": "default-pagination",
+    "equivalence_class": "positive",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "At least one book exists in the system"
+    ],
+    "steps": [
+      "GET /books with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.items is an array",
+      "response.body.total is an integer >= 0",
+      "response.body.items.length <= 20"
+    ],
+    "tags": [
+      "smoke",
+      "pagination",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-024",
+    "title": "List books with limit=0 returns 400",
+    "description": "Boundary: limit=0 violates min=1 constraint on query param.",
+    "endpoint": "GET /books",
+    "test_type": "boundary",
+    "scenario_operation": "GET /books",
+    "scenario_scene": "boundary",
+    "scenario_variant": "limit-below-min",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire a Bearer token via the documented auth flow and store as <TOKEN>"
+    ],
+    "steps": [
+      "GET /books?limit=0 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_LIMIT'"
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-025",
+    "title": "Create then delete book, subsequent GET returns 404",
+    "description": "Integration: full lifecycle create→read→delete→read(404) verifies data consistency across endpoints.",
+    "endpoint": "DELETE /books/{id}",
+    "test_type": "integration",
+    "scenario_operation": "DELETE /books/{id}",
+    "scenario_scene": "delete",
+    "scenario_variant": "delete-then-read-404",
+    "equivalence_class": "integration",
+    "covers_obligations": [],
+    "binds": {
+      "BOOK_ID": {
+        "producer": "POST /books response.body.id",
+        "consumer": "DELETE /books/{id} path.id"
+      }
+    },
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire a Bearer token via the documented auth flow and store as <TOKEN>"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"Lifecycle_<RUN_ID>\",\"author\":\"Author_<RUN_ID>\",\"price\":5.00}",
+      "Capture response.body.id as <BOOK_ID>",
+      "GET /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>}",
+      "DELETE /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>}",
+      "GET /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Step 1: Status 201",
+      "response.body.id is an integer",
+      "Step 3: Status 200",
+      "Step 4: Status 200 or 204",
+      "Step 5: Status 404"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-026",
+    "title": "Add item to cart with valid bookId returns success",
+    "description": "Integration: create a book then add it to cart; verifies cross-endpoint data flow. Cleanup deletes cart item and book.",
+    "endpoint": "POST /cart/items",
+    "test_type": "integration",
+    "scenario_operation": "POST /cart/items",
+    "scenario_scene": "create",
+    "scenario_variant": "happy-path",
+    "equivalence_class": "integration",
+    "covers_obligations": [],
+    "binds": {
+      "BOOK_ID": {
+        "producer": "POST /books response.body.id",
+        "consumer": "POST /cart/items body.bookId"
+      }
+    },
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "CART_ITEM_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.9091",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire a Bearer token via the documented auth flow and store as <TOKEN>"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"CartBook_<RUN_ID>\",\"author\":\"Author_<RUN_ID>\",\"price\":12.50}",
+      "Capture response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"bookId\":<BOOK_ID>,\"quantity\":2}",
+      "Capture response body cart item id as <CART_ITEM_ID>",
+      "DELETE /cart/items/<CART_ITEM_ID> with headers {Authorization: Bearer <TOKEN>} to clean up",
+      "DELETE /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Step 1: Status 201",
+      "response.body.id is an integer",
+      "Step 3: Status 200 or 201"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-027",
+    "title": "Account lockout after 5 failed logins (out_of_spec)",
+    "description": "REQ-003 AC3: 5 consecutive failures lock account 10 min. Marked out_of_spec per authoritative table — no login endpoint exists in the API spec. This case documents the requirement gap.",
+    "endpoint": "GET /books",
+    "test_type": "security",
+    "scenario_operation": "N/A",
+    "scenario_scene": "lockout",
+    "scenario_variant": "five-failed-logins",
+    "equivalence_class": "security",
+    "covers_obligations": [
+      "REQ-003-AC3"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "A valid user account exists",
+      "No login endpoint is documented in the API spec — this case is out_of_spec and cannot be executed until the endpoint is defined"
+    ],
+    "steps": [
+      "BLOCKED: No login endpoint available in API spec. Once available: send 5 consecutive POST requests with wrong password for user <UNIQ_USER>",
+      "On 6th attempt with correct password, expect 429 TOO_MANY_REQUESTS indicating lockout"
+    ],
+    "expected_results": [
+      "Status 429",
+      "response.body.error.code == 'TOO_MANY_REQUESTS' (on 6th attempt after 5 failures)"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-028",
+    "title": "Login with correct credentials returns 200 and token (spec gap)",
+    "description": "REQ-003 AC1: correct username+password returns 200 with access token. Marked as spec_gap — no login endpoint in API list. Case documents expected behavior once endpoint is available.",
+    "endpoint": "GET /books",
+    "test_type": "functional",
+    "scenario_operation": "N/A",
+    "scenario_scene": "auth",
+    "scenario_variant": "valid-credentials",
+    "equivalence_class": "positive",
+    "covers_obligations": [
+      "REQ-003-AC1"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "A user with known username and password exists",
+      "No login endpoint documented — spec_gap per authoritative table"
+    ],
+    "steps": [
+      "BLOCKED: No login endpoint in API spec. Once available: POST <LOGIN_ENDPOINT> with headers {Content-Type: application/json} and body {\"username\":\"<UNIQ_USER>\",\"password\":\"<UNIQ_PASS>\"}"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body contains access_token as a non-empty string"
+    ],
+    "tags": [
+      "smoke",
+      "auth",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-029",
+    "title": "Login with wrong credentials returns 401 (conflict_unresolved: 400 vs 401)",
+    "description": "REQ-003 AC2: wrong password returns 401 per requirement. Authoritative table marks 400-vs-401 as conflict_unresolved — requirement says 401, error contract says 400 for client-input errors. Asserting 401 per requirement but flagging conflict.",
+    "endpoint": "GET /books",
+    "test_type": "negative",
+    "scenario_operation": "N/A",
+    "scenario_scene": "auth",
+    "scenario_variant": "invalid-credentials",
+    "equivalence_class": "negative",
+    "covers_obligations": [
+      "REQ-003-AC2"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "A user with known username exists",
+      "No login endpoint documented — spec_gap per authoritative table"
+    ],
+    "steps": [
+      "BLOCKED: No login endpoint in API spec. Once available: POST <LOGIN_ENDPOINT> with headers {Content-Type: application/json} and body {\"username\":\"<UNIQ_USER>\",\"password\":\"wrong_password_<RUN_ID>\"}"
+    ],
+    "expected_results": [
+      "Status 401 (per REQ-003 AC2",
+      "conflict_unresolved with error contract 400 — see description)"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-030",
+    "title": "Add cart item with valid bookId and quantity returns 201",
+    "description": "Verifies AC1: adding a cart item with valid data returns 201. Cleanup removes the cart item.",
+    "endpoint": "POST /cart/items",
+    "test_type": "functional",
+    "scenario_operation": "POST /cart/items",
+    "scenario_scene": "create",
+    "scenario_variant": "valid-add",
+    "equivalence_class": "positive",
+    "covers_obligations": [
+      "REQ-004-AC1"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "CART_ITEM_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.8889",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)",
+      "A book exists with id <BOOK_ID> (created via POST /books in setup)"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"Cart Test Book <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":19.99} — store response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"bookId\":<BOOK_ID>,\"quantity\":2}",
+      "Capture response as <CART_ITEM_ID> if returned",
+      "DELETE /cart/items/<CART_ITEM_ID> to clean up (if id returned); DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body contains cart item identifier or confirmation"
+    ],
+    "tags": [
+      "smoke",
+      "cart",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-031",
+    "title": "Submit order returns 201 with orderId",
+    "description": "Verifies AC2: submitting an order after adding cart items returns 201 and generates an orderId.",
+    "endpoint": "POST /orders",
+    "test_type": "functional",
+    "scenario_operation": "POST /orders",
+    "scenario_scene": "create",
+    "scenario_variant": "valid-submit",
+    "equivalence_class": "positive",
+    "covers_obligations": [
+      "REQ-004-AC2"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "ORDER_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.8889",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)",
+      "At least one item exists in the user's cart"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"Order Book <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":25.00} — store response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"bookId\":<BOOK_ID>,\"quantity\":1}",
+      "POST /orders with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {}",
+      "Capture response.body.orderId as <ORDER_ID>",
+      "DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.orderId is present and is an integer"
+    ],
+    "tags": [
+      "smoke",
+      "orders",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-032",
+    "title": "Remove non-existent cart item returns 404",
+    "description": "Verifies AC3: deleting a cart item with an id that does not exist returns 404.",
+    "endpoint": "DELETE /cart/items/{id}",
+    "test_type": "negative",
+    "scenario_operation": "DELETE /cart/items/{id}",
+    "scenario_scene": "delete",
+    "scenario_variant": "not-found",
+    "equivalence_class": "negative",
+    "covers_obligations": [
+      "REQ-004-AC3"
+    ],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)"
+    ],
+    "steps": [
+      "DELETE /cart/items/999999 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 404",
+      "response.body.error is present or response indicates resource not found"
+    ],
+    "tags": [
+      "smoke",
+      "cart",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-033",
+    "title": "GET /books with page=0 returns 400",
+    "description": "Boundary: page below min=1 is rejected with 400 INVALID_PAGE.",
+    "endpoint": "GET /books",
+    "test_type": "boundary",
+    "scenario_operation": "GET /books",
+    "scenario_scene": "boundary",
+    "scenario_variant": "page-below-min",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)"
+    ],
+    "steps": [
+      "GET /books?page=0 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_PAGE'"
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-034",
+    "title": "GET /books with limit=51 returns 400",
+    "description": "Boundary: limit above max=50 is rejected with 400 INVALID_LIMIT.",
+    "endpoint": "GET /books",
+    "test_type": "boundary",
+    "scenario_operation": "GET /books",
+    "scenario_scene": "boundary",
+    "scenario_variant": "limit-above-max",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)"
+    ],
+    "steps": [
+      "GET /books?limit=51 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_LIMIT'"
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-035",
+    "title": "Create book with price=0 returns 400",
+    "description": "Boundary: price below min=0.01 is rejected with 400 VALIDATION_ERROR.",
+    "endpoint": "POST /books",
+    "test_type": "boundary",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "boundary",
+    "scenario_variant": "price-below-min",
+    "equivalence_class": "boundary",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"Zero Price <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":0}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "response.body.error.details.price is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-036",
+    "title": "Full order lifecycle: book → cart → order → payment → shipment",
+    "description": "Integration: verifies the complete fulfillment flow from book creation through shipment.",
+    "endpoint": "POST /orders/{id}/shipment",
+    "test_type": "integration",
+    "scenario_operation": "POST /orders/{id}/shipment",
+    "scenario_scene": "other",
+    "scenario_variant": "full-lifecycle",
+    "equivalence_class": "integration",
+    "covers_obligations": [
+      "REQ-004-AC1",
+      "REQ-004-AC2"
+    ],
+    "binds": {
+      "BOOK_ID": {
+        "producer": "POST /books response.body.id",
+        "consumer": "POST /cart/items body.bookId"
+      },
+      "ORDER_ID": {
+        "producer": "POST /orders response.body.orderId",
+        "consumer": "POST /orders/{id}/payment path.id"
+      }
+    },
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"Lifecycle Book <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":30.00} — store response.body.id as <BOOK_ID>",
+      "POST /cart/items with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"bookId\":<BOOK_ID>,\"quantity\":1} — assert Status 201",
+      "POST /orders with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {} — store response.body.orderId as <ORDER_ID>, assert Status 201",
+      "POST /orders/<ORDER_ID>/payment with headers {Authorization: Bearer <TOKEN>} — assert Status 200",
+      "POST /orders/<ORDER_ID>/shipment with headers {Authorization: Bearer <TOKEN>} — assert Status 200",
+      "DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Step 1: Status 201",
+      "response.body.id is an integer",
+      "Step 2: Status 201",
+      "Step 3: Status 201",
+      "response.body.orderId is an integer",
+      "Step 4: Status 200",
+      "Step 5: Status 200"
+    ],
+    "tags": [
+      "smoke",
+      "orders",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-037",
+    "title": "Delete book then GET returns 404",
+    "description": "Integration: after deleting a book, fetching it by id returns 404.",
+    "endpoint": "GET /books/{id}",
+    "test_type": "integration",
+    "scenario_operation": "GET /books/{id}",
+    "scenario_scene": "read",
+    "scenario_variant": "read-after-delete",
+    "equivalence_class": "integration",
+    "covers_obligations": [],
+    "binds": {
+      "BOOK_ID": {
+        "producer": "POST /books response.body.id",
+        "consumer": "DELETE /books/{id} path.id"
+      }
+    },
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"Delete Me <RUN_ID>\",\"author\":\"Author <RUN_ID>\",\"price\":10.00} — store response.body.id as <BOOK_ID>",
+      "DELETE /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>} — assert Status 200 or 204",
+      "GET /books/<BOOK_ID> with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Step 3: Status 404",
+      "response.body indicates resource not found"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-038",
+    "title": "SQL injection in book title returns 400 or is sanitized",
+    "description": "Security: SQL injection payload in title field must not cause server error; expect 400 VALIDATION_ERROR or safe handling.",
+    "endpoint": "POST /books",
+    "test_type": "security",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "sql-injection-title",
+    "equivalence_class": "security",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "DRAFT",
+      "orphans": [
+        "BOOK_ID"
+      ],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "0.6667",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)"
+    ],
+    "steps": [
+      "POST /books with headers {Content-Type: application/json, Authorization: Bearer <TOKEN>} and body {\"title\":\"' OR '1'='1\",\"author\":\"Author <RUN_ID>\",\"price\":9.99}",
+      "If Status 201, DELETE /books/<BOOK_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "OR Status 201 with response.body.id present (injection stored as literal, not executed) — if 201, cleanup applies"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-039",
+    "title": "Payment on non-existent order returns 404",
+    "description": "Negative: paying an order that does not exist returns 404.",
+    "endpoint": "POST /orders/{id}/payment",
+    "test_type": "negative",
+    "scenario_operation": "POST /orders/{id}/payment",
+    "scenario_scene": "error-handling",
+    "scenario_variant": "not-found-order",
+    "equivalence_class": "negative",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire a valid Bearer token (auth flow not documented; use <TOKEN>)"
+    ],
+    "steps": [
+      "POST /orders/999999/payment with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 404",
+      "response.body.error is present or response indicates resource not found"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-040",
+    "title": "GET /books — limit=50 returns 200 (max valid boundary)",
+    "description": "Verifies the upper boundary of limit parameter is accepted.",
+    "endpoint": "GET /books",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Obtain valid user token"
+    ],
+    "steps": [
+      "GET /books?limit=50&page=1 — Headers: Authorization: Bearer <TOKEN>"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.items is array with length <= 50",
+      "Status 200",
+      "response.body.total is integer >= 0"
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-041",
+    "title": "GET /books — limit=1 returns 200 (min valid boundary)",
+    "description": "Verifies the lower boundary of limit parameter is accepted.",
+    "endpoint": "GET /books",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Obtain valid user token"
+    ],
+    "steps": [
+      "GET /books?limit=1&page=1 — Headers: Authorization: Bearer <TOKEN>"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.items is array with length <= 1",
+      "Status 200",
+      "response.body.total is integer >= 0"
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-042",
+    "title": "POST /books — missing author returns 400 VALIDATION_ERROR",
+    "description": "Verifies omission of required author field is rejected with field-level detail.",
+    "endpoint": "POST /books",
+    "test_type": "negative",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Obtain admin token"
+    ],
+    "steps": [
+      "POST /books — Headers: Authorization: Bearer <ADMIN_TOKEN>, Content-Type: application/json — Body: {\"title\":\"P2-005-Book\",\"price\":9.99}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "Status 400",
+      "response.body.error.details.author is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-043",
+    "title": "POST /books — missing price returns 400 VALIDATION_ERROR",
+    "description": "Verifies omission of required price field is rejected with field-level detail.",
+    "endpoint": "POST /books",
+    "test_type": "negative",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Obtain admin token"
+    ],
+    "steps": [
+      "POST /books — Headers: Authorization: Bearer <ADMIN_TOKEN>, Content-Type: application/json — Body: {\"title\":\"P2-006-Book\",\"author\":\"Author-P2-006\"}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "Status 400",
+      "response.body.error.details.price is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-044",
+    "title": "GET /books/{id} — non-numeric id returns 400 INVALID_ID",
+    "description": "Boundary: path param id must be integer; a string value is rejected.",
+    "endpoint": "GET /books/{id}",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Obtain valid user token via login"
+    ],
+    "steps": [
+      "GET /books/abc HTTP/1.1 | Authorization: Bearer <TOKEN>"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-045",
+    "title": "GET /books/{id} — id=0 returns 400 INVALID_ID",
+    "description": "Boundary: zero is not a valid resource identifier.",
+    "endpoint": "GET /books/{id}",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Obtain valid user token via login"
+    ],
+    "steps": [
+      "GET /books/0 HTTP/1.1 | Authorization: Bearer <TOKEN>"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-046",
+    "title": "DELETE /books/{id} — missing Authorization header returns 401",
+    "description": "Security: unauthenticated delete is rejected.",
+    "endpoint": "DELETE /books/{id}",
+    "test_type": "security",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Create a book via POST /books (admin token) to obtain a target id"
+    ],
+    "steps": [
+      "DELETE /books/<CREATED_BOOK_ID> HTTP/1.1 | (no Authorization header)"
+    ],
+    "expected_results": [
+      "Status 401",
+      "response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-047",
+    "title": "DELETE /books/{id} — non-admin user returns 403",
+    "description": "Security: REQ-002 restricts delete to admin role; a regular user is forbidden.",
+    "endpoint": "DELETE /books/{id}",
+    "test_type": "security",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Create a book via POST /books with admin token → obtain bookId",
+      "Obtain a non-admin user token via login"
+    ],
+    "steps": [
+      "DELETE /books/<CREATED_BOOK_ID> HTTP/1.1 | Authorization: Bearer <USER_TOKEN>"
+    ],
+    "expected_results": [
+      "Status 403",
+      "response.body.error.code == 'FORBIDDEN'"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-048",
+    "title": "POST /cart/items — missing required field bookId returns 400",
+    "description": "Omitting required bookId field triggers validation error with field-level detail.",
+    "endpoint": "POST /cart/items",
+    "test_type": "negative",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire valid auth token via login"
+    ],
+    "steps": [
+      "POST /cart/items | Authorization: Bearer <TOKEN> | Content-Type: application/json | {\"quantity\": 2}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "Status 400",
+      "response.body.error.details.bookId is present"
+    ],
+    "tags": [
+      "regression",
+      "cart",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-049",
+    "title": "POST /cart/items — missing required field quantity returns 400",
+    "description": "Omitting required quantity field triggers validation error with field-level detail.",
+    "endpoint": "POST /cart/items",
+    "test_type": "negative",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Acquire valid auth token via login",
+      "Create a book via POST /books to obtain a valid bookId"
+    ],
+    "steps": [
+      "POST /cart/items | Authorization: Bearer <TOKEN> | Content-Type: application/json | {\"bookId\": <CREATED_BOOK_ID>}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "Status 400",
+      "response.body.error.details.quantity is present"
+    ],
+    "tags": [
+      "regression",
+      "cart",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-050",
+    "title": "DELETE /cart/items/{id} — missing auth token returns 401",
+    "description": "DELETE without Authorization header is rejected as unauthenticated.",
+    "endpoint": "DELETE /cart/items/{id}",
+    "test_type": "security",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "DELETE /cart/items/1"
+    ],
+    "expected_results": [
+      "Status 401",
+      "response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "regression",
+      "cart",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-051",
+    "title": "DELETE /cart/items/{id} — non-integer id returns 400",
+    "description": "Path parameter 'abc' is not a valid integer; API rejects with INVALID_ID.",
+    "endpoint": "DELETE /cart/items/{id}",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire valid auth token via login"
+    ],
+    "steps": [
+      "DELETE /cart/items/abc | Authorization: Bearer <TOKEN>"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "cart",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-052",
+    "title": "POST /orders — missing Authorization header returns 401",
+    "description": "Verifies that creating an order without any auth token is rejected with 401.",
+    "endpoint": "POST /orders",
+    "test_type": "security",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "No authentication token acquired"
+    ],
+    "steps": [
+      "POST /orders Content-Type: application/json Body: {}"
+    ],
+    "expected_results": [
+      "Status 401",
+      "response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-053",
+    "title": "POST /orders — expired token returns 401",
+    "description": "Verifies that an expired JWT is rejected when creating an order.",
+    "endpoint": "POST /orders",
+    "test_type": "security",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Obtain a valid token then wait or forge an expired token (exp in past)"
+    ],
+    "steps": [
+      "POST /orders Content-Type: application/json Authorization: Bearer <EXPIRED_TOKEN> Body: {}"
+    ],
+    "expected_results": [
+      "Status 401",
+      "response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-054",
+    "title": "POST /orders/{id}/payment — id=0 returns 400 INVALID_ID",
+    "description": "Boundary: path param id at zero is below valid range and must be rejected.",
+    "endpoint": "POST /orders/{id}/payment",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "high",
+    "preconditions": [
+      "Valid auth token acquired"
+    ],
+    "steps": [
+      "POST /orders/0/payment Content-Type: application/json Authorization: Bearer <TOKEN> Body: {}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-055",
+    "title": "POST /orders/{id}/payment — negative id returns 400 INVALID_ID",
+    "description": "Boundary: negative integer path param is invalid and must be rejected.",
+    "endpoint": "POST /orders/{id}/payment",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Valid auth token acquired"
+    ],
+    "steps": [
+      "POST /orders/-1/payment Content-Type: application/json Authorization: Bearer <TOKEN> Body: {}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-056",
+    "title": "POST /orders/{id}/shipment — id=0 returns 400 INVALID_ID",
+    "description": "Boundary: path param id=0 is below valid resource range; expects 400 INVALID_ID.",
+    "endpoint": "POST /orders/{id}/shipment",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire valid Bearer token via login"
+    ],
+    "steps": [
+      "POST /orders/0/shipment HTTP/1.1 | Authorization: Bearer <TOKEN> | Content-Type: application/json"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-057",
+    "title": "POST /orders/{id}/shipment — negative id returns 400 INVALID_ID",
+    "description": "Boundary: negative integer id is not a valid resource identifier.",
+    "endpoint": "POST /orders/{id}/shipment",
+    "test_type": "boundary",
+    "scenario_operation": "",
+    "scenario_scene": "",
+    "scenario_variant": "",
+    "equivalence_class": "",
+    "covers_obligations": [],
+    "binds": {},
+    "executability": {
+      "grade": "INTEGRATION",
+      "orphans": [],
+      "forward_references": [],
+      "bind_violations": [],
+      "spec_blind": [],
+      "closure_rate": "1.0",
+      "setup_dependency_completeness": "n/a"
+    },
+    "priority": "medium",
+    "preconditions": [
+      "Acquire valid Bearer token via login"
+    ],
+    "steps": [
+      "POST /orders/-1/shipment HTTP/1.1 | Authorization: Bearer <TOKEN> | Content-Type: application/json"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "boundary"
+    ]
+  }
+]

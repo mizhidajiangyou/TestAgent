@@ -1,0 +1,527 @@
+[
+  {
+    "id": "TC-001",
+    "title": "Create valid book returns 201 (REQ-002)",
+    "description": "Happy path: Admin creates a book with valid title, author, and price. Verifies 201 status and response body structure.",
+    "endpoint": "N/A N/A",
+    "test_type": "functional",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "valid-input",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-002"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token for an admin user."
+    ],
+    "steps": [
+      "POST /books with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"title\":\"Test Book\",\"author\":\"Author\",\"price\":9.99}",
+      "Capture created id from response.body.id as <BOOK_ID>"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.id is present",
+      "response.body.title == \"Test Book\""
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "positive",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-002",
+    "title": "Delete book by ID (REQ-002)",
+    "description": "Admin deletes a previously created book to verify deletion capability and subsequent 404.",
+    "endpoint": "N/A N/A",
+    "test_type": "functional",
+    "scenario_operation": "DELETE /books/{bookId}",
+    "scenario_scene": "delete",
+    "scenario_variant": "valid-id",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-002"
+    ],
+    "binds": {
+      "bookId": "<BOOK_ID>"
+    },
+    "executability": {},
+    "priority": "medium",
+    "preconditions": [
+      "A book exists with id <BOOK_ID>."
+    ],
+    "steps": [
+      "DELETE /books/<BOOK_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>}",
+      "GET /books/<BOOK_ID> expecting 404 to confirm deletion"
+    ],
+    "expected_results": [
+      "Status 204",
+      "Subsequent GET returns Status 404"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-003",
+    "title": "List books with pagination defaults (REQ-002)",
+    "description": "Functional: Retrieving the book list without specifying page/limit uses default values and returns a page of results.",
+    "endpoint": "N/A N/A",
+    "test_type": "integration",
+    "scenario_operation": "GET /books",
+    "scenario_scene": "list",
+    "scenario_variant": "default-pagination",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-002"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "medium",
+    "preconditions": [
+      "Database contains at least one book."
+    ],
+    "steps": [
+      "GET /books"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.data is an array",
+      "response.body.total is present"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "positive",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-004",
+    "title": "View non-existent book returns 404 (REQ-002-AC2)",
+    "description": "Negative: Querying a book ID that does not exist returns 404 NOT_FOUND.",
+    "endpoint": "N/A N/A",
+    "test_type": "negative",
+    "scenario_operation": "GET /books/{bookId}",
+    "scenario_scene": "read",
+    "scenario_variant": "not-found-id",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-002-AC2"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "None"
+    ],
+    "steps": [
+      "GET /books/99999999"
+    ],
+    "expected_results": [
+      "Status 404"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-005",
+    "title": "Create book missing title returns 400 (REQ-002-AC3)",
+    "description": "Negative: Creating a book without the required 'title' field returns 400 VALIDATION_ERROR.",
+    "endpoint": "N/A N/A",
+    "test_type": "negative",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "missing-required:title",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-002-AC3"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token for an admin user via POST /auth/login"
+    ],
+    "steps": [
+      "POST /books with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"author\":\"Author\",\"price\":5.00}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"VALIDATION_ERROR\"",
+      "response.body.error.details.title is present"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-006",
+    "title": "Non-admin attempts to create book returns 403",
+    "description": "Security: Authenticated user with non-admin role cannot create books, returns 403 FORBIDDEN.",
+    "endpoint": "N/A N/A",
+    "test_type": "security",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "wrong-role",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-002"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token for a non-admin user via POST /auth/login"
+    ],
+    "steps": [
+      "POST /books with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"title\":\"Book\",\"author\":\"Auth\",\"price\":5.00}"
+    ],
+    "expected_results": [
+      "Status 403"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-007",
+    "title": "Create book with invalid price returns 400",
+    "description": "Boundary: Price must be >= 0.01; submitting 0.00 or negative returns 400 VALIDATION_ERROR.",
+    "endpoint": "N/A N/A",
+    "test_type": "boundary",
+    "scenario_operation": "POST /books",
+    "scenario_scene": "create",
+    "scenario_variant": "price-below-min",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-002"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "medium",
+    "preconditions": [
+      "Acquire Bearer token for an admin user via POST /auth/login"
+    ],
+    "steps": [
+      "POST /books with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"title\":\"Bad Price Book\",\"author\":\"Author\",\"price\":0.00}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"VALIDATION_ERROR\"",
+      "response.body.error.details.price is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-008",
+    "title": "Invalid limit parameter returns 400",
+    "description": "Boundary: Passing limit > 50 should return 400 INVALID_LIMIT.",
+    "endpoint": "N/A N/A",
+    "test_type": "boundary",
+    "scenario_operation": "GET /books",
+    "scenario_scene": "list",
+    "scenario_variant": "invalid-limit",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-002"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "medium",
+    "preconditions": [
+      "None"
+    ],
+    "steps": [
+      "GET /books?limit=100"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"INVALID_LIMIT\""
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-009",
+    "title": "Access profile with invalid token returns 401",
+    "description": "Security: Accessing protected resource without a valid Bearer token results in unauthorized access. No cleanup needed.",
+    "endpoint": "N/A N/A",
+    "test_type": "security",
+    "scenario_operation": "GET /users/me",
+    "scenario_scene": "read",
+    "scenario_variant": "invalid-token",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-003"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "None"
+    ],
+    "steps": [
+      "GET /users/me with headers {Authorization: Bearer invalid_token_xyz}"
+    ],
+    "expected_results": [
+      "Status 401"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-010",
+    "title": "Login with invalid credentials returns 401",
+    "description": "Verifies that incorrect username or password results in a 401 Unauthorized status code.",
+    "endpoint": "N/A N/A",
+    "test_type": "negative",
+    "scenario_operation": "POST /auth/login",
+    "scenario_scene": "auth",
+    "scenario_variant": "invalid-credentials",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-003-AC2"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "A valid user exists in the system"
+    ],
+    "steps": [
+      "POST /auth/login with headers {Content-Type: application/json} and body {\"username\": \"<USERNAME>\", \"password\": \"wrong_password\"}"
+    ],
+    "expected_results": [
+      "Status 401"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-011",
+    "title": "Add valid book to cart (201)",
+    "description": "Happy path: adding a book with valid ID and quantity returns 201 and creates the cart entry.",
+    "endpoint": "N/A N/A",
+    "test_type": "functional",
+    "scenario_operation": "POST /cart/items",
+    "scenario_scene": "create",
+    "scenario_variant": "valid-addition",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-004-AC1"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "User is authenticated. Acquire Bearer token via login endpoint and store as <TOKEN>. A valid book exists with id <BOOK_ID>."
+    ],
+    "steps": [
+      "POST /cart/items with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"bookId\": <BOOK_ID>, \"quantity\": 1}",
+      "Capture response.body.id as <CART_ITEM_ID>"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.bookId == <BOOK_ID>",
+      "response.body.quantity == 1"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "positive"
+    ]
+  },
+  {
+    "id": "TC-012",
+    "title": "Remove non-existent cart item (404)",
+    "description": "Negative: removing a cart item that does not exist returns 404 as specified in acceptance criteria.",
+    "endpoint": "N/A N/A",
+    "test_type": "negative",
+    "scenario_operation": "DELETE /cart/items/{itemId}",
+    "scenario_scene": "delete",
+    "scenario_variant": "not-found-item",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-004-AC3"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "medium",
+    "preconditions": [
+      "User is authenticated. Acquire Bearer token via login endpoint and store as <TOKEN>."
+    ],
+    "steps": [
+      "DELETE /cart/items/99999999 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 404"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-013",
+    "title": "Submit order from cart (201)",
+    "description": "Integration: submitting an order from the cart returns 201 and generates a unique order number.",
+    "endpoint": "N/A N/A",
+    "test_type": "integration",
+    "scenario_operation": "POST /orders",
+    "scenario_scene": "create",
+    "scenario_variant": "submit-order",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-004-AC2"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "User is authenticated. Acquire Bearer token via login endpoint and store as <TOKEN>. Cart must have at least one item."
+    ],
+    "steps": [
+      "POST /orders with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {}",
+      "Capture response.body.orderNo as <ORDER_NO>"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.orderNo is present",
+      "response.body.status == \"PENDING_PAYMENT\""
+    ],
+    "tags": [
+      "smoke",
+      "order",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-014",
+    "title": "Validate missing cart fields returns 400",
+    "description": "Boundary/Negative: sending empty body to add-to-cart returns 400 VALIDATION_ERROR.",
+    "endpoint": "N/A N/A",
+    "test_type": "boundary",
+    "scenario_operation": "POST /cart/items",
+    "scenario_scene": "create",
+    "scenario_variant": "missing-required-fields",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-004"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "medium",
+    "preconditions": [
+      "User is authenticated. Acquire Bearer token via login endpoint and store as <TOKEN>."
+    ],
+    "steps": [
+      "POST /cart/items with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"VALIDATION_ERROR\"",
+      "response.body.error.details.bookId is present OR response.body.error.details.quantity is present"
+    ],
+    "tags": [
+      "regression",
+      "validation",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-015",
+    "title": "Account lockout after 5 failed logins (REQ-003)",
+    "description": "Security: After 5 consecutive failed login attempts, the account is locked for 10 minutes. Attempt 6 returns 401 or 429.",
+    "endpoint": "N/A N/A",
+    "test_type": "security",
+    "scenario_operation": "POST /auth/login",
+    "scenario_scene": "auth",
+    "scenario_variant": "lockout",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-003-AC3"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "A valid user exists in the system with known credentials."
+    ],
+    "steps": [
+      "Perform 5 successful failed login attempts with wrong password",
+      "Attempt 6th login with correct credentials"
+    ],
+    "expected_results": [
+      "Status 401 OR Status 429",
+      "Account is unavailable for 10 minutes"
+    ],
+    "tags": [
+      "security",
+      "auth",
+      "boundary",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-016",
+    "title": "Correct login returns 200 and token (REQ-003-AC1)",
+    "description": "Happy path: Valid credentials return 200 and an access token.",
+    "endpoint": "N/A N/A",
+    "test_type": "functional",
+    "scenario_operation": "POST /auth/login",
+    "scenario_scene": "auth",
+    "scenario_variant": "valid-login",
+    "equivalence_class": "",
+    "covers_obligations": [
+      "REQ-003-AC1"
+    ],
+    "binds": {},
+    "executability": {},
+    "priority": "high",
+    "preconditions": [
+      "A valid user exists in the system."
+    ],
+    "steps": [
+      "POST /auth/login with headers {Content-Type: application/json} and body {\"username\": \"<USERNAME>\", \"password\": \"<CORRECT_PASSWORD>\"}"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.token is present"
+    ],
+    "tags": [
+      "smoke",
+      "auth",
+      "positive"
+    ]
+  }
+]

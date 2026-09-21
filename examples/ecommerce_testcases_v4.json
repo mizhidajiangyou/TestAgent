@@ -1,0 +1,1275 @@
+[
+  {
+    "id": "TC-001",
+    "title": "List products with valid pagination and category filter (200)",
+    "description": "Happy path: valid page/limit/category returns paginated filtered list. Cleanup: none needed (read-only).",
+    "endpoint": "GET /products",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire a Bearer token (see login flow) and store it as <TOKEN>",
+      "Seed 2 products with category 'electronics' and 1 with category 'books'"
+    ],
+    "steps": [
+      "GET /products?page=1&limit=10&category=electronics with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.data is an array",
+      "response.body.data.length <= 10",
+      "response.body.data[*].category == \"electronics\""
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "pagination"
+    ]
+  },
+  {
+    "id": "TC-002",
+    "title": "List products with limit > 100 returns 400 VALIDATION_ERROR (400)",
+    "description": "Boundary: limit exceeds max 100 triggers validation error. Cleanup: none needed.",
+    "endpoint": "GET /products",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire a Bearer token (see login flow) and store it as <TOKEN>"
+    ],
+    "steps": [
+      "GET /products?page=1&limit=101 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"VALIDATION_ERROR\"",
+      "response.body.error.details.limit is present"
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-003",
+    "title": "Create product as admin with valid data returns 201 (201)",
+    "description": "Happy path: admin creates product with valid name/price/stock/SKU. Cleanup deletes created product.",
+    "endpoint": "POST /products",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire an admin Bearer token (see login flow) and store it as <ADMIN_TOKEN>",
+      "Ensure no product with SKU 'SKU-UNIQUE-<uniq>' exists"
+    ],
+    "steps": [
+      "POST /products with headers {Authorization: Bearer <ADMIN_TOKEN>, Content-Type: application/json} and body {\"name\":\"Test Product <uniq>\",\"price\":29.99,\"stock\":100,\"sku\":\"SKU-UNIQUE-<uniq>\",\"category\":\"electronics\",\"status\":\"active\"}",
+      "Capture created id from response.body.id as <PROD_ID>",
+      "DELETE /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.name == \"Test Product <uniq>\"",
+      "response.body.sku == \"SKU-UNIQUE-<uniq>\"",
+      "response.body.id is present and is an integer"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-004",
+    "title": "Create product as non-admin user returns 403 (403)",
+    "description": "Security: non-admin user cannot create product. Cleanup: none needed.",
+    "endpoint": "POST /products",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [
+      "Acquire a non-admin user Bearer token (see login flow) and store it as <USER_TOKEN>"
+    ],
+    "steps": [
+      "POST /products with headers {Authorization: Bearer <USER_TOKEN>, Content-Type: application/json} and body {\"name\":\"Forbidden Product\",\"price\":10.00,\"stock\":5,\"sku\":\"SKU-FORBIDDEN\",\"category\":\"books\",\"status\":\"active\"}"
+    ],
+    "expected_results": [
+      "Status 403",
+      "response.body.error.code == \"FORBIDDEN\""
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-005",
+    "title": "Get product by ID returns 200 (200)",
+    "description": "Happy path: retrieve existing product by ID. Cleanup: deletes the seeded product.",
+    "endpoint": "GET /products/{id}",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire a Bearer token (see login flow) and store it as <TOKEN>",
+      "Create a product with SKU 'SKU-GET-<uniq>' and capture its id as <PROD_ID>"
+    ],
+    "steps": [
+      "GET /products/<PROD_ID> with headers {Authorization: Bearer <TOKEN>}",
+      "DELETE /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.id == <PROD_ID>",
+      "response.body.sku == \"SKU-GET-<uniq>\""
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-006",
+    "title": "Get product by unknown ID returns 404 (404)",
+    "description": "Negative: unknown product ID returns not found. Cleanup: none needed.",
+    "endpoint": "GET /products/{id}",
+    "test_type": "negative",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire a Bearer token (see login flow) and store it as <TOKEN>"
+    ],
+    "steps": [
+      "GET /products/999999 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 404",
+      "response.body.error.code == \"NOT_FOUND\""
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-007",
+    "title": "Update product as admin returns 200 (200)",
+    "description": "Happy path: admin updates product name and price. Cleanup deletes the updated product.",
+    "endpoint": "PUT /products/{id}",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire an admin Bearer token (see login flow) and store it as <ADMIN_TOKEN>",
+      "Create a product with SKU 'SKU-UPD-<uniq>' and capture its id as <PROD_ID>"
+    ],
+    "steps": [
+      "PUT /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>, Content-Type: application/json} and body {\"name\":\"Updated Product <uniq>\",\"price\":39.99,\"stock\":50}",
+      "DELETE /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.name == \"Updated Product <uniq>\"",
+      "response.body.price == 39.99"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-008",
+    "title": "Delete product as admin returns 204 (204)",
+    "description": "Happy path: admin deletes product and subsequent GET returns 404. Cleanup: none needed (already deleted).",
+    "endpoint": "DELETE /products/{id}",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire an admin Bearer token (see login flow) and store it as <ADMIN_TOKEN>",
+      "Create a product with SKU 'SKU-DEL-<uniq>' and capture its id as <PROD_ID>"
+    ],
+    "steps": [
+      "DELETE /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>}",
+      "GET /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 204",
+      "Status 404; response.body.error.code == \"NOT_FOUND\""
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-009",
+    "title": "Add product to cart merges quantity (200)",
+    "description": "Integration: adding same product twice accumulates quantity. Cleanup removes the cart item.",
+    "endpoint": "POST /cart/items",
+    "test_type": "integration",
+    "priority": "high",
+    "preconditions": [
+      "Acquire a user Bearer token (see login flow) and store it as <USER_TOKEN>",
+      "Create a product with SKU 'SKU-CART-<uniq>' and capture its id as <PROD_ID>"
+    ],
+    "steps": [
+      "POST /cart/items with headers {Authorization: Bearer <USER_TOKEN>, Content-Type: application/json} and body {\"productId\":<PROD_ID>,\"quantity\":2}",
+      "POST /cart/items with headers {Authorization: Bearer <USER_TOKEN>, Content-Type: application/json} and body {\"productId\":<PROD_ID>,\"quantity\":3}",
+      "GET /cart/items with headers {Authorization: Bearer <USER_TOKEN>}",
+      "Capture cart item id from response.body.data[0].id as <CART_ITEM_ID>",
+      "DELETE /cart/items/<CART_ITEM_ID> with headers {Authorization: Bearer <USER_TOKEN>} to clean up",
+      "DELETE /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.data[0].quantity == 5"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-010",
+    "title": "Create order from cart decrements stock (201)",
+    "description": "Integration: creating order decrements product stock. Cleanup cancels the order and deletes the product.",
+    "endpoint": "POST /orders",
+    "test_type": "integration",
+    "priority": "high",
+    "preconditions": [
+      "Acquire a user Bearer token (see login flow) and store it as <USER_TOKEN>",
+      "Create a product with SKU 'SKU-ORDER-<uniq>', stock=10, and capture its id as <PROD_ID>",
+      "Add product to cart with quantity=2"
+    ],
+    "steps": [
+      "POST /orders with headers {Authorization: Bearer <USER_TOKEN>, Content-Type: application/json} and body {\"address\":\"123 Test St\"}",
+      "Capture order id from response.body.id as <ORDER_ID>",
+      "GET /products/<PROD_ID> with headers {Authorization: Bearer <USER_TOKEN>}",
+      "POST /orders/<ORDER_ID>/cancel with headers {Authorization: Bearer <USER_TOKEN>}",
+      "DELETE /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.id is present and is an integer",
+      "Status 200; response.body.stock == 8"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-011",
+    "title": "Cancel unpaid order returns 200 (200)",
+    "description": "Happy path: cancel an unpaid order. Cleanup deletes the product.",
+    "endpoint": "POST /orders/{id}/cancel",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire a user Bearer token (see login flow) and store it as <USER_TOKEN>",
+      "Create a product with SKU 'SKU-CANCEL-<uniq>', stock=10, and capture its id as <PROD_ID>",
+      "Add product to cart with quantity=1",
+      "Create order and capture its id as <ORDER_ID>"
+    ],
+    "steps": [
+      "POST /orders/<ORDER_ID>/cancel with headers {Authorization: Bearer <USER_TOKEN>}",
+      "DELETE /products/<PROD_ID> with headers {Authorization: Bearer <ADMIN_TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.status == \"cancelled\""
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-012",
+    "title": "Add product to cart merges quantity on duplicate (201)",
+    "description": "Adding same product twice merges entries and accumulates quantity. Cleanup deletes created cart item.",
+    "endpoint": "POST /cart/items",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token for valid user",
+      "Product with id=1 exists with stock>=10"
+    ],
+    "steps": [
+      "POST /cart/items with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"productId\":1,\"quantity\":2}",
+      "Capture created itemId from response.body.id as <ITEM_ID>",
+      "POST /cart/items with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"productId\":1,\"quantity\":3}",
+      "DELETE /cart/items/<ITEM_ID> to clean up"
+    ],
+    "expected_results": [
+      "Status 201 on first POST",
+      "response.body.quantity == 2 on first POST",
+      "Status 201 on second POST",
+      "response.body.quantity == 5 on second POST"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-013",
+    "title": "Cart quantity below 1 returns 400 VALIDATION_ERROR (400)",
+    "description": "Quantity < 1 violates range constraint 1-99 and returns field-level error.",
+    "endpoint": "POST /cart/items",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token for valid user",
+      "Product with id=1 exists"
+    ],
+    "steps": [
+      "POST /cart/items with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"productId\":1,\"quantity\":0}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "response.body.error.details.quantity is present"
+    ],
+    "tags": [
+      "regression",
+      "boundary",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-014",
+    "title": "Unauthenticated cart access returns 401 (401)",
+    "description": "Accessing cart without token returns 401 UNAUTHORIZED.",
+    "endpoint": "GET /cart/items",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "GET /cart/items with no Authorization header"
+    ],
+    "expected_results": [
+      "Status 401",
+      "response.headers contains WWW-Authenticate"
+    ],
+    "tags": [
+      "smoke",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-015",
+    "title": "Update cart item quantity within range succeeds (200)",
+    "description": "Updating quantity to valid value returns 200 with updated quantity. Cleanup deletes cart item.",
+    "endpoint": "PUT /cart/items/{itemId}",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token for valid user",
+      "Cart item with id=10 exists for user with quantity=2"
+    ],
+    "steps": [
+      "PUT /cart/items/10 with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"quantity\":5}",
+      "DELETE /cart/items/10 to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.quantity == 5"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-016",
+    "title": "Update cart item with quantity 0 returns 400 VALIDATION_ERROR (400)",
+    "description": "Quantity 0 violates range constraint 1-99.",
+    "endpoint": "PUT /cart/items/{itemId}",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire Bearer token for valid user",
+      "Cart item with id=10 exists for user"
+    ],
+    "steps": [
+      "PUT /cart/items/10 with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"quantity\":0}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == 'VALIDATION_ERROR'",
+      "response.body.error.details.quantity is present"
+    ],
+    "tags": [
+      "regression",
+      "boundary",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-017",
+    "title": "Delete cart item removes entry (204)",
+    "description": "Deleting cart item returns 204 and item is no longer present.",
+    "endpoint": "DELETE /cart/items/{itemId}",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token for valid user",
+      "Cart item with id=10 exists for user"
+    ],
+    "steps": [
+      "DELETE /cart/items/10 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 204",
+      "response.body is empty"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-018",
+    "title": "Delete non-existent cart item returns 404 (404)",
+    "description": "Deleting unknown itemId returns 404 NOT_FOUND.",
+    "endpoint": "DELETE /cart/items/{itemId}",
+    "test_type": "negative",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire Bearer token for valid user"
+    ],
+    "steps": [
+      "DELETE /cart/items/9999 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 404",
+      "response.body.error.code == 'NOT_FOUND'"
+    ],
+    "tags": [
+      "regression",
+      "negative",
+      "crud"
+    ]
+  },
+  {
+    "id": "TC-019",
+    "title": "List cart items returns user's items (200)",
+    "description": "Authenticated user retrieves their cart items successfully.",
+    "endpoint": "GET /cart/items",
+    "test_type": "functional",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire Bearer token for valid user",
+      "User has 2 cart items"
+    ],
+    "steps": [
+      "GET /cart/items with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.items is an array",
+      "response.body.items.length == 2"
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-020",
+    "title": "Create order from non-empty cart succeeds (201)",
+    "description": "Happy path: cart has items, order is created, stock decremented, response includes orderId and totalAmount. Cleanup cancels or deletes the order.",
+    "endpoint": "POST /orders",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token via login flow and store as <TOKEN>",
+      "Create a product with stock=10 via POST /products (admin) and capture <PRODUCT_ID>",
+      "Add product to cart via POST /cart/items with productId=<PRODUCT_ID>, quantity=2",
+      "Ensure cart has at least one item for the user"
+    ],
+    "steps": [
+      "POST /orders with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {}",
+      "Capture orderId from response.body.orderId as <ORDER_ID>",
+      "POST /orders/<ORDER_ID>/cancel with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.orderId is present and is a string",
+      "response.body.totalAmount is present and is a number",
+      "response.body.status == \"created\""
+    ],
+    "tags": [
+      "smoke",
+      "integration",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-021",
+    "title": "Create order with empty cart returns 400",
+    "description": "Negative: empty cart triggers 400 VALIDATION_ERROR per acceptance criteria.",
+    "endpoint": "POST /orders",
+    "test_type": "negative",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token via login flow and store as <TOKEN>",
+      "Ensure user cart is empty (delete all cart items via DELETE /cart/items/{itemId})"
+    ],
+    "steps": [
+      "POST /orders with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {}"
+    ],
+    "expected_results": [
+      "Status 400",
+      "response.body.error.code == \"VALIDATION_ERROR\"",
+      "response.body.error.details contains field referencing cart or items"
+    ],
+    "tags": [
+      "regression",
+      "negative",
+      "crud"
+    ]
+  },
+  {
+    "id": "TC-022",
+    "title": "Cancel unpaid order succeeds (204)",
+    "description": "Happy path: order in created state can be cancelled, returns 204. Cleanup is inherent (order is cancelled).",
+    "endpoint": "POST /orders/{id}/cancel",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token via login flow and store as <TOKEN>",
+      "Create a product via POST /products (admin) and capture <PRODUCT_ID>",
+      "Add product to cart via POST /cart/items",
+      "Create order via POST /orders and capture <ORDER_ID> (status=created)"
+    ],
+    "steps": [
+      "POST /orders/<ORDER_ID>/cancel with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 204"
+    ],
+    "tags": [
+      "smoke",
+      "functional",
+      "crud"
+    ]
+  },
+  {
+    "id": "TC-023",
+    "title": "Cancel paid order returns 409",
+    "description": "Negative: order already paid cannot be cancelled; no error.code defined in contract, assert status only.",
+    "endpoint": "POST /orders/{id}/cancel",
+    "test_type": "negative",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token via login flow and store as <TOKEN>",
+      "Create a product via POST /products (admin) and capture <PRODUCT_ID>",
+      "Add product to cart, create order via POST /orders and capture <ORDER_ID>",
+      "Simulate payment to transition order status to paid"
+    ],
+    "steps": [
+      "POST /orders/<ORDER_ID>/cancel with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 409"
+    ],
+    "tags": [
+      "regression",
+      "negative",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-024",
+    "title": "Get order by ID for owner succeeds (200)",
+    "description": "Happy path: authenticated owner retrieves own order. Cleanup cancels the order.",
+    "endpoint": "GET /orders/{id}",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire Bearer token via login flow and store as <TOKEN>",
+      "Create product, add to cart, create order via POST /orders and capture <ORDER_ID>"
+    ],
+    "steps": [
+      "GET /orders/<ORDER_ID> with headers {Authorization: Bearer <TOKEN>}",
+      "POST /orders/<ORDER_ID>/cancel with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.orderId == \"<ORDER_ID>\"",
+      "response.body.status == \"created\""
+    ],
+    "tags": [
+      "smoke",
+      "crud",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-025",
+    "title": "Get non-existent order returns 404",
+    "description": "Negative: requesting an order ID that does not exist returns 404.",
+    "endpoint": "GET /orders/{id}",
+    "test_type": "negative",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire Bearer token via login flow and store as <TOKEN>"
+    ],
+    "steps": [
+      "GET /orders/999999 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 404",
+      "response.body.error.code == \"NOT_FOUND\""
+    ],
+    "tags": [
+      "regression",
+      "negative",
+      "crud"
+    ]
+  },
+  {
+    "id": "TC-026",
+    "title": "List user orders with pagination returns 200",
+    "description": "Functional: list orders with page and limit params; verifies pagination structure.",
+    "endpoint": "GET /orders",
+    "test_type": "functional",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire Bearer token via login flow and store as <TOKEN>",
+      "Create at least one order via POST /orders and capture <ORDER_ID>"
+    ],
+    "steps": [
+      "GET /orders?page=1&limit=10 with headers {Authorization: Bearer <TOKEN>}",
+      "POST /orders/<ORDER_ID>/cancel with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 200",
+      "response.body.data is an array",
+      "response.body.data.length <= 10"
+    ],
+    "tags": [
+      "regression",
+      "pagination",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-027",
+    "title": "Create order with valid coupon code applies discount",
+    "description": "Happy path: valid coupon applied during order creation. Cleanup cancels the order.",
+    "endpoint": "POST /orders",
+    "test_type": "functional",
+    "priority": "high",
+    "preconditions": [
+      "Acquire a Bearer token (see login flow) and store it as <TOKEN>",
+      "Add a product to cart via POST /cart/items with body {\"productId\": 1, \"quantity\": 1}",
+      "Seed a valid coupon code \"ABC123XYZ789\" (12 chars, uppercase+digits, not expired, not redeemed)"
+    ],
+    "steps": [
+      "POST /orders with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"couponCode\": \"ABC123XYZ789\"}",
+      "Capture created order id from response.body.id as <ORDER_ID>",
+      "POST /orders/<ORDER_ID>/cancel with headers {Authorization: Bearer <TOKEN>} to clean up"
+    ],
+    "expected_results": [
+      "Status 201",
+      "response.body.couponCode == \"ABC123XYZ789\"",
+      "response.body.id is present and is an integer"
+    ],
+    "tags": [
+      "smoke",
+      "integration",
+      "functional"
+    ]
+  },
+  {
+    "id": "TC-028",
+    "title": "Redeem same coupon code twice returns 409 DUPLICATE_COUPON_CODE",
+    "description": "Negative: reusing an already-redeemed coupon returns 409 with DUPLICATE_COUPON_CODE.",
+    "endpoint": "POST /orders",
+    "test_type": "negative",
+    "priority": "high",
+    "preconditions": [
+      "Acquire a Bearer token (see login flow) and store it as <TOKEN>",
+      "Add a product to cart via POST /cart/items with body {\"productId\": 2, \"quantity\": 1}",
+      "Seed a valid coupon code \"REUSE1234567\" and redeem it in a prior order"
+    ],
+    "steps": [
+      "POST /orders with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body {\"couponCode\": \"REUSE1234567\"}"
+    ],
+    "expected_results": [
+      "Status 409",
+      "response.body.error.code == \"DUPLICATE_COUPON_CODE\""
+    ],
+    "tags": [
+      "regression",
+      "negative",
+      "integration"
+    ]
+  },
+  {
+    "id": "TC-029",
+    "title": "POST /products — name exceeds 200 chars returns 400 VALIDATION_ERROR",
+    "description": "Boundary: product name over 200 characters triggers field-level validation error.",
+    "endpoint": "POST /products",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "Acquire valid admin token via POST /auth/login"
+    ],
+    "steps": [
+      "POST /products | Headers: Authorization: Bearer <ADMIN_TOKEN>, Content-Type: application/json | Body: {\"name\":\"<201 chars>\",\"price\":10.00,\"stock\":5,\"sku\":\"SKU-OVER-001\",\"category\":\"electronics\",\"status\":\"draft\"}"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'VALIDATION_ERROR'; response.body.error.details.name is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-030",
+    "title": "POST /products — price=0 returns 400 VALIDATION_ERROR",
+    "description": "Boundary: price must be greater than 0; zero value triggers validation error.",
+    "endpoint": "POST /products",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "Acquire valid admin token via POST /auth/login"
+    ],
+    "steps": [
+      "POST /products | Headers: Authorization: Bearer <ADMIN_TOKEN>, Content-Type: application/json | Body: {\"name\":\"ZeroPrice\",\"price\":0,\"stock\":5,\"sku\":\"SKU-ZERO-001\",\"category\":\"electronics\",\"status\":\"draft\"}"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'VALIDATION_ERROR'; response.body.error.details.price is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-031",
+    "title": "GET /products — missing auth token returns 401",
+    "description": "Security: listing products without Authorization header returns 401 UNAUTHORIZED.",
+    "endpoint": "GET /products",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [],
+    "steps": [
+      "GET /products?page=1&limit=10"
+    ],
+    "expected_results": [
+      "Status 401; response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-032",
+    "title": "GET /products/{id} — non-integer ID returns 400",
+    "description": "Boundary: non-integer path parameter triggers validation error",
+    "endpoint": "GET /products/{id}",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "No authentication required for public product retrieval"
+    ],
+    "steps": [
+      "GET /products/abc123"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "boundary",
+      "regression",
+      "crud"
+    ]
+  },
+  {
+    "id": "TC-033",
+    "title": "GET /products/{id} — negative ID returns 400",
+    "description": "Boundary: negative integer ID violates positive constraint",
+    "endpoint": "GET /products/{id}",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "No authentication required for public product retrieval"
+    ],
+    "steps": [
+      "GET /products/-1"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "boundary",
+      "regression",
+      "crud"
+    ]
+  },
+  {
+    "id": "TC-034",
+    "title": "PUT /products/{id} — non-admin user returns 403",
+    "description": "Security: authenticated non-admin user cannot update product",
+    "endpoint": "PUT /products/{id}",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [
+      "Acquire admin token and create product with valid data (name='Test Product', price=99.99, stock=10, sku='SKU-TEST-001')",
+      "Acquire non-admin user token"
+    ],
+    "steps": [
+      "PUT /products/{createdProductId} with headers: Authorization: Bearer {nonAdminToken}, Content-Type: application/json",
+      "Body: {\"name\": \"Updated Name\", \"price\": 149.99, \"stock\": 20}"
+    ],
+    "expected_results": [
+      "Status 403; response.body.error.code == 'FORBIDDEN'"
+    ],
+    "tags": [
+      "security",
+      "regression",
+      "auth"
+    ]
+  },
+  {
+    "id": "TC-035",
+    "title": "PUT /products/{id} — missing auth token returns 401",
+    "description": "Security: unauthenticated request to protected endpoint returns 401",
+    "endpoint": "PUT /products/{id}",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [
+      "Acquire admin token and create product with valid data"
+    ],
+    "steps": [
+      "PUT /products/{createdProductId} with headers: Content-Type: application/json",
+      "Body: {\"name\": \"Updated Name\", \"price\": 149.99, \"stock\": 20}"
+    ],
+    "expected_results": [
+      "Status 401; response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "security",
+      "regression",
+      "auth"
+    ]
+  },
+  {
+    "id": "TC-036",
+    "title": "DELETE /products/{id} — negative integer ID",
+    "description": "Boundary: passing a negative integer as product ID returns 400 INVALID_ID.",
+    "endpoint": "DELETE /products/{id}",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "Obtain admin JWT token"
+    ],
+    "steps": [
+      "DELETE /products/-1 | Headers: Authorization: Bearer <ADMIN_TOKEN>"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-037",
+    "title": "DELETE /products/{id} — missing Authorization header",
+    "description": "Security: attempting to delete a product without a token returns 401 UNAUTHORIZED.",
+    "endpoint": "DELETE /products/{id}",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [
+      "Seed a valid product ID"
+    ],
+    "steps": [
+      "DELETE /products/<PRODUCT_ID> | Headers: none"
+    ],
+    "expected_results": [
+      "Status 401; response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-038",
+    "title": "GET /cart/items — expired JWT token",
+    "description": "Security: accessing cart with an expired token returns 401 UNAUTHORIZED.",
+    "endpoint": "GET /cart/items",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [
+      "Generate an expired JWT token for a user"
+    ],
+    "steps": [
+      "GET /cart/items | Headers: Authorization: Bearer <EXPIRED_TOKEN>"
+    ],
+    "expected_results": [
+      "Status 401; response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-039",
+    "title": "GET /cart/items — malformed JWT token",
+    "description": "Security: accessing cart with a malformed token string returns 401 UNAUTHORIZED.",
+    "endpoint": "GET /cart/items",
+    "test_type": "security",
+    "priority": "medium",
+    "preconditions": [
+      "Obtain user context"
+    ],
+    "steps": [
+      "GET /cart/items | Headers: Authorization: Bearer not.a.valid.jwt"
+    ],
+    "expected_results": [
+      "Status 401; response.body.error.code == 'UNAUTHORIZED'"
+    ],
+    "tags": [
+      "regression",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-040",
+    "title": "POST /cart/items — quantity exactly 99 succeeds",
+    "description": "Boundary: max allowed quantity 99 is accepted.",
+    "endpoint": "POST /cart/items",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "Create product with stock >= 99 via admin token; obtain user token"
+    ],
+    "steps": [
+      "POST /cart/items with Authorization: Bearer <USER_TOKEN>, Content-Type: application/json, body: {\"productId\": <PRODUCT_ID>, \"quantity\": 99}"
+    ],
+    "expected_results": [
+      "Status 200; response.body.quantity == 99",
+      "Status 200; response.body.productId == <PRODUCT_ID>"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-041",
+    "title": "POST /cart/items — quantity 100 returns 400 VALIDATION_ERROR",
+    "description": "Boundary: quantity exceeds max 99 triggers field-level validation error.",
+    "endpoint": "POST /cart/items",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "Create product with stock >= 100 via admin token; obtain user token"
+    ],
+    "steps": [
+      "POST /cart/items with Authorization: Bearer <USER_TOKEN>, Content-Type: application/json, body: {\"productId\": <PRODUCT_ID>, \"quantity\": 100}"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'VALIDATION_ERROR'",
+      "Status 400; response.body.error.details.quantity is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-042",
+    "title": "PUT /cart/items/{itemId} — quantity 100 returns 400 VALIDATION_ERROR",
+    "description": "Boundary: updating quantity to 100 exceeds max 99 and triggers field-level error.",
+    "endpoint": "PUT /cart/items/{itemId}",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "Create product and add to cart; obtain user token; capture itemId"
+    ],
+    "steps": [
+      "PUT /cart/items/<ITEM_ID> with Authorization: Bearer <USER_TOKEN>, Content-Type: application/json, body: {\"quantity\": 100}"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'VALIDATION_ERROR'",
+      "Status 400; response.body.error.details.quantity is present"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-043",
+    "title": "PUT /cart/items/{itemId} — quantity 1 succeeds",
+    "description": "Boundary: min allowed quantity 1 is accepted.",
+    "endpoint": "PUT /cart/items/{itemId}",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "Create product and add to cart with quantity 5; obtain user token; capture itemId"
+    ],
+    "steps": [
+      "PUT /cart/items/<ITEM_ID> with Authorization: Bearer <USER_TOKEN>, Content-Type: application/json, body: {\"quantity\": 1}"
+    ],
+    "expected_results": [
+      "Status 200; response.body.quantity == 1"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-044",
+    "title": "DELETE /cart/items/{itemId} — IDOR attempt to delete another user's cart item",
+    "description": "Verifies that a user cannot delete a cart item belonging to another user, returning 404 to prevent enumeration.",
+    "endpoint": "DELETE /cart/items/{itemId}",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [
+      "User A authenticates and adds a product to cart, obtaining itemId '999999'.",
+      "User B authenticates and obtains a valid Bearer token."
+    ],
+    "steps": [
+      "DELETE /cart/items/999999 Headers: Authorization: Bearer <USER_B_TOKEN>"
+    ],
+    "expected_results": [
+      "Status 404; response.body.error.code == 'NOT_FOUND'"
+    ],
+    "tags": [
+      "security",
+      "regression",
+      "auth"
+    ]
+  },
+  {
+    "id": "TC-045",
+    "title": "DELETE /cart/items/{itemId} — boundary with SQL injection and negative itemId",
+    "description": "Verifies that non-integer, negative, or SQL-injected itemId values return 400 INVALID_ID.",
+    "endpoint": "DELETE /cart/items/{itemId}",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "Authenticated user obtains a valid Bearer token."
+    ],
+    "steps": [
+      "DELETE /cart/items/' OR '1'='1 Headers: Authorization: Bearer <TOKEN>"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "boundary",
+      "regression",
+      "crud"
+    ]
+  },
+  {
+    "id": "TC-046",
+    "title": "GET /orders — boundary with zero and negative pagination parameters",
+    "description": "Verifies that page=0 or limit=0 returns 400 with specific INVALID_PAGE or INVALID_LIMIT codes.",
+    "endpoint": "GET /orders",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "Authenticated user obtains a valid Bearer token."
+    ],
+    "steps": [
+      "GET /orders?page=0&limit=10 Headers: Authorization: Bearer <TOKEN>"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_PAGE'"
+    ],
+    "tags": [
+      "boundary",
+      "regression",
+      "pagination"
+    ]
+  },
+  {
+    "id": "TC-047",
+    "title": "GET /orders — boundary with limit exceeding maximum allowed value",
+    "description": "Verifies that requesting limit > 100 returns 400 INVALID_LIMIT based on system-wide pagination rules.",
+    "endpoint": "GET /orders",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "Authenticated user obtains a valid Bearer token."
+    ],
+    "steps": [
+      "GET /orders?page=1&limit=101 Headers: Authorization: Bearer <TOKEN>"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_LIMIT'"
+    ],
+    "tags": [
+      "boundary",
+      "smoke",
+      "pagination"
+    ]
+  },
+  {
+    "id": "TC-048",
+    "title": "POST /orders — malformed JSON body",
+    "description": "Verifies that unparseable JSON body returns 400 MALFORMED_JSON.",
+    "endpoint": "POST /orders",
+    "test_type": "negative",
+    "priority": "high",
+    "preconditions": [
+      "Acquire valid user token for user_a1b2c3"
+    ],
+    "steps": [
+      "POST /orders with headers {Authorization: Bearer <TOKEN>, Content-Type: application/json} and body `{\"couponCode\": \"ABC123`"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'MALFORMED_JSON'"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-049",
+    "title": "POST /orders — wrong Content-Type header",
+    "description": "Verifies that sending a non-JSON Content-Type returns 415 UNSUPPORTED_MEDIA_TYPE.",
+    "endpoint": "POST /orders",
+    "test_type": "negative",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire valid user token for user_d4e5f6"
+    ],
+    "steps": [
+      "POST /orders with headers {Authorization: Bearer <TOKEN>, Content-Type: text/plain} and body `{\"couponCode\": \"ABC123456789\"}`"
+    ],
+    "expected_results": [
+      "Status 415; response.body.error.code == 'UNSUPPORTED_MEDIA_TYPE'"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "negative"
+    ]
+  },
+  {
+    "id": "TC-050",
+    "title": "GET /orders/{id} — accessing another user's order (IDOR)",
+    "description": "Verifies that an authenticated user cannot access an order owned by another user and receives 403 FORBIDDEN.",
+    "endpoint": "GET /orders/{id}",
+    "test_type": "security",
+    "priority": "high",
+    "preconditions": [
+      "Acquire valid user token for user_m4n5o6",
+      "Create an order as user_p7q8r9 and capture its ID"
+    ],
+    "steps": [
+      "GET /orders/<OTHER_USER_ORDER_ID> with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 403; response.body.error.code == 'FORBIDDEN'"
+    ],
+    "tags": [
+      "smoke",
+      "auth",
+      "security"
+    ]
+  },
+  {
+    "id": "TC-051",
+    "title": "GET /orders/{id} — non-integer path parameter",
+    "description": "Verifies that providing a non-integer or negative ID returns 400 INVALID_ID.",
+    "endpoint": "GET /orders/{id}",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "Acquire valid user token for user_s1t2u3"
+    ],
+    "steps": [
+      "GET /orders/abc-123 with headers {Authorization: Bearer <TOKEN>}"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "crud",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-052",
+    "title": "POST /orders/{id}/cancel — non-integer id returns 400",
+    "description": "Boundary: non-integer path parameter triggers 400 INVALID_ID.",
+    "endpoint": "POST /orders/{id}/cancel",
+    "test_type": "boundary",
+    "priority": "high",
+    "preconditions": [
+      "Obtain valid user token via POST /auth/login"
+    ],
+    "steps": [
+      "POST /orders/abc/cancel Headers: Authorization: Bearer <TOKEN>, Content-Type: application/json"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "boundary"
+    ]
+  },
+  {
+    "id": "TC-053",
+    "title": "POST /orders/{id}/cancel — negative id returns 400",
+    "description": "Boundary: negative integer path parameter triggers 400 INVALID_ID.",
+    "endpoint": "POST /orders/{id}/cancel",
+    "test_type": "boundary",
+    "priority": "medium",
+    "preconditions": [
+      "Obtain valid user token via POST /auth/login"
+    ],
+    "steps": [
+      "POST /orders/-1/cancel Headers: Authorization: Bearer <TOKEN>, Content-Type: application/json"
+    ],
+    "expected_results": [
+      "Status 400; response.body.error.code == 'INVALID_ID'"
+    ],
+    "tags": [
+      "regression",
+      "orders",
+      "boundary"
+    ]
+  }
+]

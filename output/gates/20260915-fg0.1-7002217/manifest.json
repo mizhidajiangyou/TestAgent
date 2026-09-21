@@ -1,31 +1,113 @@
 {
-  "milestone": "① FG0.1 落档",
-  "date_utc": "2026-09-15T06:30:00Z",
-  "commit_sha": "7002217d02ea0819f34e2ec2ee83bd31c04df27f",
-  "executor": "ZCode session (plan-k/plan-l 放行评审后实施)",
-  "environment": {
-    "python": "CPython 3.14 (repo .venv)",
-    "os": "darwin 25.5.0 arm64",
-    "baseline_note": "task.md §五 基线 567 → 本次 583（含 plan-i/j 轮新增测试，全绿）"
+  "baseline_expectations": {
+    "build_engine_generate_unit": "absent (exit=1)",
+    "git_check_ignore_gates": "exit=1 (not ignored, correct)",
+    "pipeline_executor_in_web": "absent (exit=1)",
+    "pipeline_links_modules": "absent (exit=1)",
+    "quality_links_new_identifiers": "absent (exit=1)",
+    "tasks/": [
+      "_example",
+      "perf"
+    ],
+    "tests/fixtures/migration/": [
+      "engine_events"
+    ]
   },
   "commands": [
-    {"cmd": ".venv/bin/python -m pytest tests/ -q", "exit_code": 0, "result": "583 passed, 6 warnings in 91.20s"},
-    {"cmd": ".venv/bin/python -m ruff check testagent/ tests/", "exit_code": 0, "result": "All checks passed!"},
-    {"cmd": ".venv/bin/python -m ruff format --check testagent/ tests/", "exit_code": 0, "result": "16 files identical / no diff"},
-    {"cmd": ".venv/bin/python -m mypy testagent/", "exit_code": 0, "result": "no issues (strict)"},
-    {"cmd": ".venv/bin/testagent tasks validate --strict", "exit_code": 0, "result": "_example + perf OK"},
-    {"cmd": ".venv/bin/python -m pytest tests/test_engine_event_baseline.py -q", "exit_code": 0, "result": "golden 四轨迹 diff=0"},
-    {"cmd": "pytest tests/test_pipeline_e2e.py::TestArchitectureGate tests/test_truncation_hooks.py::TestEngineDomainFreedom -q", "exit_code": 0, "result": "3 passed (plan-l §6 arch 命令可收集可执行)"}
+    {
+      "cmd": ".venv/bin/python -m pytest tests/ -q",
+      "exit_code": 0,
+      "result": "583 passed, 6 warnings in 91.20s"
+    },
+    {
+      "cmd": ".venv/bin/python -m ruff check testagent/ tests/",
+      "exit_code": 0,
+      "result": "All checks passed!"
+    },
+    {
+      "cmd": ".venv/bin/python -m ruff format --check testagent/ tests/",
+      "exit_code": 0,
+      "result": "16 files identical / no diff"
+    },
+    {
+      "cmd": ".venv/bin/python -m mypy testagent/",
+      "exit_code": 0,
+      "result": "no issues (strict)"
+    },
+    {
+      "cmd": ".venv/bin/testagent tasks validate --strict",
+      "exit_code": 0,
+      "result": "_example + perf OK"
+    },
+    {
+      "cmd": ".venv/bin/python -m pytest tests/test_engine_event_baseline.py -q",
+      "exit_code": 0,
+      "result": "golden 四轨迹 diff=0"
+    },
+    {
+      "cmd": "pytest tests/test_pipeline_e2e.py::TestArchitectureGate tests/test_truncation_hooks.py::TestEngineDomainFreedom -q",
+      "exit_code": 0,
+      "result": "3 passed (plan-l §6 arch 命令可收集可执行)"
+    }
   ],
-  "baseline_expectations": {
-    "tasks/": ["_example", "perf"],
-    "build_engine_generate_unit": "absent (exit=1)",
-    "tests/fixtures/migration/": ["engine_events"],
-    "pipeline_executor_in_web": "absent (exit=1)",
-    "quality_links_new_identifiers": "absent (exit=1)",
-    "pipeline_links_modules": "absent (exit=1)",
-    "git_check_ignore_gates": "exit=1 (not ignored, correct)"
+  "commit_sha": "70022172dc2b03daf21d0dfc6fd748cf49271d50",
+  "commit_sha_correction": "2026-09-20 修正：原记录 7002217d02ea0819f34e2ec2ee83bd31c04df27f 在对象库中不存在（git cat-file -e 失败），改为目录名短 sha 7002217 解析出的真实整 sha。",
+  "date_utc": "2026-09-15T06:30:00Z",
+  "environment": {
+    "baseline_note": "task.md §五 基线 567 → 本次 583（含 plan-i/j 轮新增测试，全绿）",
+    "os": "darwin 25.5.0 arm64",
+    "python": "CPython 3.14 (repo .venv)"
   },
-  "logs": ["baseline_checks.log", "full_gates.log"],
+  "executor": "ZCode session (plan-k/plan-l 放行评审后实施)",
+  "gates": [
+    {
+      "cmd": ".venv/bin/python -m pytest tests/ -q",
+      "exit": 0,
+      "id": "gate1",
+      "result": "583 passed, 6 warnings in 91.20s"
+    },
+    {
+      "cmd": ".venv/bin/python -m ruff check testagent/ tests/",
+      "exit": 0,
+      "id": "gate2",
+      "result": "All checks passed!"
+    },
+    {
+      "cmd": ".venv/bin/python -m ruff format --check testagent/ tests/",
+      "exit": 0,
+      "id": "gate3",
+      "result": "16 files identical / no diff"
+    },
+    {
+      "cmd": ".venv/bin/python -m mypy testagent/",
+      "exit": 0,
+      "id": "gate4",
+      "result": "no issues (strict)"
+    },
+    {
+      "cmd": ".venv/bin/testagent tasks validate --strict",
+      "exit": 0,
+      "id": "gate5",
+      "result": "_example + perf OK"
+    },
+    {
+      "cmd": ".venv/bin/python -m pytest tests/test_engine_event_baseline.py -q",
+      "exit": 0,
+      "id": "gate6",
+      "result": "golden 四轨迹 diff=0"
+    },
+    {
+      "cmd": "pytest tests/test_pipeline_e2e.py::TestArchitectureGate tests/test_truncation_hooks.py::TestEngineDomainFreedom -q",
+      "exit": 0,
+      "id": "gate7",
+      "result": "3 passed (plan-l §6 arch 命令可收集可执行)"
+    }
+  ],
+  "gates_mapped_from": "commands（2026-09-20 结构统一，字段值未改动）",
+  "logs": [
+    "baseline_checks.log",
+    "full_gates.log"
+  ],
+  "milestone": "① FG0.1 落档",
   "verdict": "PASS — 与 plan-k §1.3 基线声明零偏差；FG0.1=方案 A 落档（plan-k §1.1 为裁决记录，含裁决四项：A 路径/重录时点/窗口范围/字段先建方）"
 }

@@ -1,5 +1,5 @@
 == pytest tests/ -q ==
-  /Users/zhangtianxin/Desktop/TestAgent/testagent/reports/testcase_report.py:20: PytestCollectionWarning: cannot collect test class 'TestCaseReport' because it has a __init__ constructor (from: tests/test_web_app.py)
+  <repo>/testagent/reports/testcase_report.py:20: PytestCollectionWarning: cannot collect test class 'TestCaseReport' because it has a __init__ constructor (from: tests/test_web_app.py)
     class TestCaseReport(BaseReport[TestCaseReportInput]):
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

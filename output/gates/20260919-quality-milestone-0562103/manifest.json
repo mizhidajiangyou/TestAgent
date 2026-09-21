@@ -1,17 +1,92 @@
 {
-  "milestone": "② 质量里程碑门（T1~T13 + 真实 E2E 四象限）",
-  "date_utc": "2026-09-19T02:30:00Z",
-  "commit_sha": "0562103",
-  "executor": "ZCode session",
   "commands": [
-    {"cmd": "pytest tests/ -q", "exit_code": 0, "result": "786 passed"},
-    {"cmd": "ruff check + format --check + mypy strict + tasks validate --strict", "exit_code": 0},
-    {"cmd": "pytest tests/test_engine_event_baseline.py -q", "exit_code": 0, "result": "golden 四轨迹 diff=0"},
-    {"cmd": "scripts/golden_links.py --stage all", "exit_code": 0, "result": "graph/planner/fixture replay PASS"},
-    {"cmd": "scripts/benchmark_r6.py --stage graph|selected", "exit_code": 0, "result": "双 stage PASS (pair 1.0/0.92, directed 1.0/0.89)"},
-    {"cmd": "TestArchitectureGate + TestEngineDomainFreedom", "exit_code": 0, "result": "7 passed"},
-    {"cmd": "真实 E2E 四象限（qwen3.8-max）", "exit_code": 0, "result": "57/41/44/16 条；四门验收见 summary.md"}
+    {
+      "cmd": "pytest tests/ -q",
+      "exit_code": 0,
+      "result": "786 passed"
+    },
+    {
+      "cmd": "ruff check + format --check + mypy strict + tasks validate --strict",
+      "exit_code": 0
+    },
+    {
+      "cmd": "pytest tests/test_engine_event_baseline.py -q",
+      "exit_code": 0,
+      "result": "golden 四轨迹 diff=0"
+    },
+    {
+      "cmd": "scripts/golden_links.py --stage all",
+      "exit_code": 0,
+      "result": "graph/planner/fixture replay PASS"
+    },
+    {
+      "cmd": "scripts/benchmark_r6.py --stage graph|selected",
+      "exit_code": 0,
+      "result": "双 stage PASS (pair 1.0/0.92, directed 1.0/0.89)"
+    },
+    {
+      "cmd": "TestArchitectureGate + TestEngineDomainFreedom",
+      "exit_code": 0,
+      "result": "7 passed"
+    },
+    {
+      "cmd": "真实 E2E 四象限（qwen3.8-max）",
+      "exit_code": 0,
+      "result": "57/41/44/16 条；四门验收见 summary.md"
+    }
   ],
-  "verdict": "PASS — 质量线 T1~T13 完成 + v15 S0~S6a 完成；E2E 四象限质量评审通过（无静默丢弃、无伪造、对账全链路闭合）",
-  "logs": ["full_gates.log", "summary.md"]
+  "commit_sha": "0562103",
+  "date_utc": "2026-09-19T02:30:00Z",
+  "executor": "ZCode session",
+  "gates": [
+    {
+      "cmd": "pytest tests/ -q",
+      "exit": 0,
+      "id": "gate1",
+      "result": "786 passed"
+    },
+    {
+      "cmd": "ruff check + format --check + mypy strict + tasks validate --strict",
+      "exit": 0,
+      "id": "gate2",
+      "result": "PASS"
+    },
+    {
+      "cmd": "pytest tests/test_engine_event_baseline.py -q",
+      "exit": 0,
+      "id": "gate3",
+      "result": "golden 四轨迹 diff=0"
+    },
+    {
+      "cmd": "scripts/golden_links.py --stage all",
+      "exit": 0,
+      "id": "gate4",
+      "result": "graph/planner/fixture replay PASS"
+    },
+    {
+      "cmd": "scripts/benchmark_r6.py --stage graph|selected",
+      "exit": 0,
+      "id": "gate5",
+      "result": "双 stage PASS (pair 1.0/0.92, directed 1.0/0.89)"
+    },
+    {
+      "cmd": "TestArchitectureGate + TestEngineDomainFreedom",
+      "exit": 0,
+      "id": "gate6",
+      "result": "7 passed"
+    },
+    {
+      "cmd": "真实 E2E 四象限（qwen3.8-max）",
+      "exit": 0,
+      "id": "gate7",
+      "result": "57/41/44/16 条；四门验收见 summary.md"
+    }
+  ],
+  "gates_mapped_from": "commands（2026-09-20 结构统一，字段值未改动）",
+  "logs": [
+    "full_gates.log",
+    "summary.md"
+  ],
+  "milestone": "② 质量里程碑门（T1~T13 + 真实 E2E 四象限）",
+  "verdict": "PASS — 质量线 T1~T13 完成 + v15 S0~S6a 完成；E2E 四象限质量评审通过（无静默丢弃、无伪造、对账全链路闭合）"
 }

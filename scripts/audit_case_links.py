@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]  # repo root, cwd-independent
 
 # ---------------------------------------------------------------- 1 + 2
-cases = json.loads((ROOT / "output/ecommerce_testcases_v4.json").read_text(encoding="utf-8"))
+cases = json.loads((ROOT / "examples/ecommerce_testcases_v4.json").read_text(encoding="utf-8"))
 print(f"[1] v4 artifact: {len(cases)} cases")
 
 dist: dict[str, int] = {}

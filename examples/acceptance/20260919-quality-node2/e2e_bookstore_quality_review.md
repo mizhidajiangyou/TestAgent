@@ -2,13 +2,7 @@
 
 **日期**：2026-09-19 ｜ **执行者**：ZCode 会话 ｜ **模型**：qwen3.8-max（DashScope 兼容模式）
 **输入**：`examples/bookstore_requirements.md`（3 需求 / 9 条验收标准）+ `examples/bookstore_swagger.json`（9 端点 / books·cart·orders·payment·logistics 5 模块）
-**产物**（已入库，克隆后即可直接读，无需本机跑过那次生成）：
-- `examples/acceptance/20260919-quality-node2/e2e_bookstore_noreview_swagger.json`
-- `examples/acceptance/20260919-quality-node2/e2e_bookstore_noreview_noswagger.json`
-- `examples/acceptance/20260919-quality-node2/e2e_bookstore_review_swagger.json`
-- `examples/acceptance/20260919-quality-node2/e2e_bookstore_review_noswagger.json`
-- 四门评审结论 `examples/acceptance/20260919-quality-node2/e2e_bookstore_quality_review.md`
-每象限的 session raw 审计目录属运行期产物不入库，其关键读数已抄录在下文，正文可独立复核。
+**产物**：output/e2e_bookstore_{noreview,review}_{swagger,noswagger}.json + 各 session 审计目录
 
 ## 一、四象限总览
 

@@ -1,0 +1,41 @@
+{
+  "milestone": "v4 M0 启动快照（冻结面哈希 + 事实基线核对；非里程碑门禁运行）",
+  "kind": "snapshot",
+  "date_utc": "2026-09-19T02:59:15Z",
+  "commit_sha": "ef4eb475ef49d6725915ba648fecb6bd2a65e96f",
+  "executor": "agent session (user name deliberately not recorded)",
+  "log": "m0_snapshot.log",
+  "frozen_faces_hashed": 57,
+  "checks": [
+    {
+      "cmd": "ruff check testagent/ tests/",
+      "result": "All checks passed!（见 m0_snapshot.log）"
+    },
+    {
+      "cmd": "ruff format --check testagent/ tests/",
+      "result": "format OK（见 m0_snapshot.log）"
+    },
+    {
+      "cmd": "mypy testagent/",
+      "result": "Success: no issues found in 80 source files"
+    },
+    {
+      "cmd": "testagent tasks validate --strict",
+      "result": "✓ _example ✓ perf（当时的两个包）"
+    },
+    {
+      "cmd": "ruff format --check tests/test_context_builder.py",
+      "result": "1 file already formatted（M0 出口条件：无格式债务）"
+    },
+    {
+      "cmd": "rg REVIEWED testagent/pipeline/review_hooks.py",
+      "result": "48:REVIEWED = \"REVIEWED\""
+    },
+    {
+      "cmd": "rg document_parser testagent/container.py",
+      "result": "grep exit=1（provider 不存在，符合 v4 §2 事实表）"
+    }
+  ],
+  "verdict": "PASS",
+  "note": "manifest 由 2026-09-20 从 m0_snapshot.log 的原始输出逐条抄录生成；未新增任何未记录的读数。"
+}

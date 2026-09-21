@@ -1,5 +1,5 @@
-$ /Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/benchmark_r6.py --stage selected
-[cwd] /Users/zhangtianxin/Desktop/TestAgent
+$ <repo>/.venv/bin/python scripts/benchmark_r6.py --stage selected
+[cwd] <repo>
 [exit] 0
 
 --- stdout ---

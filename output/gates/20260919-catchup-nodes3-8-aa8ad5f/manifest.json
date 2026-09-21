@@ -6,11 +6,11 @@
   "working_tree_dirty": false,
   "python": "3.14.2",
   "os": "Darwin 25.5.0 arm64",
-  "executor": "agent (Qoder session) + zhangtianxin",
+  "executor": "agent session (user name deliberately not recorded)",
   "gates": [
     {
       "id": "ruff",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m ruff check testagent/ tests/ scripts/",
+      "cmd": "<repo>/.venv/bin/python -m ruff check testagent/ tests/ scripts/",
       "exit": 0,
       "result": "PASS",
       "log": "ruff.log",
@@ -18,7 +18,7 @@
     },
     {
       "id": "format",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m ruff format --check testagent/ tests/ scripts/",
+      "cmd": "<repo>/.venv/bin/python -m ruff format --check testagent/ tests/ scripts/",
       "exit": 0,
       "result": "PASS",
       "log": "format.log",
@@ -26,7 +26,7 @@
     },
     {
       "id": "mypy",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m mypy testagent/",
+      "cmd": "<repo>/.venv/bin/python -m mypy testagent/",
       "exit": 0,
       "result": "PASS",
       "log": "mypy.log",
@@ -34,7 +34,7 @@
     },
     {
       "id": "pytest",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m pytest tests/ -q",
+      "cmd": "<repo>/.venv/bin/python -m pytest tests/ -q",
       "exit": 0,
       "result": "PASS",
       "log": "pytest.log",
@@ -42,7 +42,7 @@
     },
     {
       "id": "arch",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m pytest tests/test_pipeline_e2e.py::TestArchitectureGate -q",
+      "cmd": "<repo>/.venv/bin/python -m pytest tests/test_pipeline_e2e.py::TestArchitectureGate -q",
       "exit": 0,
       "result": "PASS",
       "log": "arch.log",
@@ -50,7 +50,7 @@
     },
     {
       "id": "engine-golden",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python -m pytest tests/test_engine_event_baseline.py -q",
+      "cmd": "<repo>/.venv/bin/python -m pytest tests/test_engine_event_baseline.py -q",
       "exit": 0,
       "result": "PASS",
       "log": "engine-golden.log",
@@ -58,7 +58,7 @@
     },
     {
       "id": "tasks-validate",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/testagent tasks validate --strict",
+      "cmd": "<repo>/.venv/bin/testagent tasks validate --strict",
       "exit": 0,
       "result": "PASS",
       "log": "tasks-validate.log",
@@ -66,7 +66,7 @@
     },
     {
       "id": "links-golden",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/golden_links.py --stage all",
+      "cmd": "<repo>/.venv/bin/python scripts/golden_links.py --stage all",
       "exit": 0,
       "result": "PASS",
       "log": "links-golden.log",
@@ -74,7 +74,7 @@
     },
     {
       "id": "r6-graph",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/benchmark_r6.py --stage graph",
+      "cmd": "<repo>/.venv/bin/python scripts/benchmark_r6.py --stage graph",
       "exit": 0,
       "result": "PASS",
       "log": "r6-graph.log",
@@ -82,7 +82,7 @@
     },
     {
       "id": "r6-selected",
-      "cmd": "/Users/zhangtianxin/Desktop/TestAgent/.venv/bin/python scripts/benchmark_r6.py --stage selected",
+      "cmd": "<repo>/.venv/bin/python scripts/benchmark_r6.py --stage selected",
       "exit": 0,
       "result": "PASS",
       "log": "r6-selected.log",

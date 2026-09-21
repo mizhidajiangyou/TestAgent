@@ -56,10 +56,18 @@ TestAgent/
 要求 Python >= 3.14。推荐使用 [uv](https://docs.astral.sh/uv/) 管理虚拟环境与依赖：
 
 ```bash
-uv venv --python 3.14
+uv sync --frozen --all-extras        # 按 uv.lock 精确安装（与 CI 完全一致）
 source .venv/bin/activate
-uv pip install -e ".[dev]"
 ```
+
+依赖有改动时必须同步锁文件，否则 CI 的 `uv lock --check` 会红：
+
+```bash
+uv lock && uv lock --check
+```
+
+（`uv pip install -e ".[dev]"` 仍可用，但它按"满足下界的最新版"解析，
+不与 `uv.lock` 一致 —— 门禁与镜像就该锁在同一份解析结果上。）
 
 ## 配置
 
@@ -233,9 +241,9 @@ testagent checkpoint recover <session_id> --save-as out/recovered.json
 ### 运行生成的脚本
 
 ```bash
-k6 run output/perf_test.js
-jmeter -n -t output/perf_test.jmx -l results.jtl
-pytest output/gui_test.py --browser chromium
+k6 run ./output/perf_test.js
+jmeter -n -t ./output/perf_test.jmx -l results.jtl
+pytest ./output/gui_test.py --browser chromium
 ```
 
 ## 开发
@@ -381,12 +389,21 @@ docker compose -f docker/docker-compose.yml up -d prometheus grafana
 - Prometheus: `http://localhost:9090`（配置见 `monitoring/prometheus.yml`）
 - Grafana: `http://localhost:3000`（默认账号 admin/admin，仪表板见 `monitoring/grafana-dashboard.json`）
 
-## 扩展路线
+## 文档与证据纪律
 
-- 管道迁移收尾：web/conversation 已切新链（FH2.6/FH2.7），剩两个删除门 FH2.8（B5.4 / B6b.5）与 FH2.9；删除前须把"迁移期对比"固化成永久 golden（计划见 `output/plan-k.md` / `plan-l.md`），完成后 links 接线（S5b/S6b，见 `output/plan-links-v15-implementation-status.md`）
-- 性能结果分析：接入 `.jtl` / k6 JSON 结果，产出带指标的完整性能报告
-- 会话持久化：将会话状态序列化到磁盘/数据库，支持跨进程恢复
+### 入库文档的引用纪律（有测试强制）
 
+仓库被克隆后读者只能看到入库文件，因此：
+
+- **入库正文只允许引用入库路径**：`examples/`（验收与样例产物）、`tests/`、`scripts/`、
+  `testagent/`、`tasks/`、`output/gates/`。本地计划文档、`output/` 根下的运行产物、
+  `output/guidang/` 一律不得出现在入库正文里。
+- **引用不了就把结论抄进正文**：门禁读数、修前/修后字节数这类证据，写数字而不是写路径。
+- 运行期输出的示例命令统一写 `./output/...` 前缀（表示"你跑出来的文件"，不是仓库内容引用）。
+- 任何入库文件都不得含机器绝对路径（`/Users/...`、`/home/...`）、用户名或密钥；
+  门禁归档的 `manifest.json` / `*.log` 由 `scripts/gate_archive.py` 写 `<repo>` 占位。
+
+强制实现见 `tests/test_repo_hygiene.py`（三条：入库引用可达、归档结构完整、无个人路径）。
 
 ### 任务包命令与迁移 parity 纪律
 
@@ -413,6 +430,15 @@ testagent review --doc cases.json -r requirements.md --rounds 2 -o cases_reviewe
   报告）、`<output_dir>/<session>.pre_review_snapshot.json`（评审炸了用它恢复：`testagent checkpoint list|recover`）。
   `--resume <session-id>` / `checkpoint recover <session-id>` 的 id 会做路径安全校验。
 
-## License
+## 扩展路线
 
 Apache License 2.0，见 [LICENSE](LICENSE)。
+
+
+- 管道迁移收尾：web / conversation 已切任务包新链（FH2.6 / FH2.7，质量线 T1~T13 亦已接入）。
+  剩余：两个删除门 FH2.8（B5.4 perf/gui、B6b.5 testcase）与 FH2.9（旧提示词构造器清理）；
+  删除门前须把"迁移期对比"固化成永久 golden，之后才是 links 接线（S5b / S6b / S7）。
+  各门的过门证据见 `output/gates/`（本仓库唯一入库的运行输出目录）。
+- 性能结果分析：接入 `.jtl` / k6 JSON 结果，产出带指标的完整性能报告
+- 会话持久化：将会话状态序列化到磁盘/数据库，支持跨进程恢复
+
