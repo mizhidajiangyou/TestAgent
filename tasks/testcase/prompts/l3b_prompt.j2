@@ -1,0 +1,58 @@
+Generate END-TO-END INTEGRATION test cases that fulfil ONE API path.
+
+This is PHASE 3 (path units): the path below was selected from the endpoint
+relationship graph, not from a document section. Produce ONE case per path (at
+most a small handful of variants when the contract has branch points) that
+actually walks the whole path end to end.
+
+## Path contract
+{{ unit_item.contract_block }}
+
+{% if requirements %}
+## Requirements Context
+{{ requirements }}
+{% endif %}
+
+## Full API Endpoints (reference only — the path above is what you must fulfil)
+{{ endpoints }}
+
+---
+
+## Output schema
+{% if json_mode %}Return a JSON OBJECT {"test_cases": [...]} with the same schema (do NOT return a bare array):{% else %}Return a JSON array with the same schema:{% endif %}
+```json
+{
+  "id": "TC-XXX",
+  "title": "METHOD /path -> METHOD /path — what the flow proves",
+  "description": "what this end-to-end path verifies",
+  "endpoint": "the FIRST endpoint of the path, verbatim as the contract lists it",
+  "test_type": "integration",
+  "priority": "high",
+  "preconditions": ["setup including token acquisition if protected"],
+  "steps": ["one canonical `METHOD /path` per step, in contract order, with params/body spelled out"],
+  "expected_results": ["explicit status code + field-level assertions per step"],
+  "tags": ["integration", "path"],
+  "binds": {"<PLACEHOLDER>": {"producer": "METHOD /path response.<field>", "consumer": "METHOD /path body.<field>"}}
+}
+```
+
+## Hard Constraints (a case violating any of these is rejected by the checker)
+1. Every endpoint of the path appears in `steps`, in order, as a canonical
+   `METHOD /path` token — `GET /users/{id}`, not `GET /users/42`.
+2. A binding the contract marks DATA_FLOW is carried by the SAME `<PLACEHOLDER>`
+   in the producing step and the consuming request; the value is stored from the
+   producer's documented response field.
+3. A PRECONDITION / SIDE_EFFECT hop needs an observable assertion on the target
+   step (`assert response.<field> <op> <value>`), not a narrative claim.
+4. Status codes and error codes follow the contract in the system prompt; where
+   the spec documents a code, the spec wins.
+5. Declare bindings with the top-level `binds` object exactly as the binds
+   contract above specifies (placeholder -> producer / consumer). Do NOT emit
+   `path_id`, `source_stage` or `executability`: the program stamps provenance
+   from the unit that ran this call, and a self-reported identity is
+   overwritten and recorded.
+6. No invented fields: every request/response field you name must appear in the
+   endpoint signature above. Where a response schema is marked undefined, assert
+   only the status code.
+
+{% if json_mode %}Return the JSON OBJECT now — no prose, no markdown fences.{% else %}Return the JSON array now — no prose, no markdown fences.{% endif %}

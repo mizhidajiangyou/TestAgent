@@ -129,7 +129,13 @@ def _run_task(task: TaskPackage, kwargs: Any, click_ctx: click.Context) -> None:
         ctx=ctx.parsed,
         review_meta=result.review_meta,
     )
-    count = len(result.artifact) if isinstance(result.artifact, list) else 1
+    if isinstance(result.artifact, list):
+        count = len(result.artifact)
+    else:
+        # A text artifact is one script — but an EMPTY script is zero items.
+        # Counting "" as 1 printed "Done: 1 item(s)" next to a 0-byte file when
+        # the only unit had been rejected by the validators.
+        count = 1 if str(result.artifact).strip() else 0
     console.print(
         f"[green]Done:[/] {count} item(s) -> {path} "
         f"(session {result.session_id}, failed units {result.units_failed})"

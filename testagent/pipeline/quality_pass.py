@@ -44,7 +44,7 @@ from testagent.pipeline.obligations import (
     ObligationRegistry,
     register_spec_obligations,
 )
-from testagent.pipeline.scenario import dedup_cases, render_dedup_report
+from testagent.pipeline.scenario import covered_identities, dedup_cases, render_dedup_report
 from testagent.pipeline.testcase_adapter import renumber, testcase_to_full_dict
 
 logger = logging.getLogger(__name__)
@@ -343,15 +343,21 @@ class QualityPass:
                     scenario_variant=str(item.get("scenario_variant", "") or ""),
                     equivalence_class=str(item.get("equivalence_class", "") or ""),
                     covers_obligations=[str(c) for c in item.get("covers_obligations") or []],
+                    # path_id / source_stage are deliberately NOT read from the
+                    # model: they are program-stamped (v15 §6.1), so a
+                    # self-reported one must not survive this boundary. The
+                    # links pass records the attempt from the raw items.
                 )
             )
         self._session_case_count += len(test_cases)
         # Degenerate-stub cleanup (empty title / no expected results). The
-        # legacy chain ran it once on the whole pre-merge list; per batch it is
-        # equivalent because the pass only filters and renumbers, and the H1
-        # merge renumbers globally afterwards. User-provided historical cases
-        # never pass through here, so the baseline can not be filtered away.
-        test_cases = self.normalize_cases(test_cases)
+        # legacy chain ran it once on the whole pre-merge list; per batch the
+        # FILTER is equivalent, but the renumber is not: unit ids are prompt
+        # material for the next phase ("already covered" lists them), and the
+        # legacy chain showed the model's own ids there. The H1 merge renumbers
+        # globally afterwards either way, and user-provided historical cases
+        # never pass through here, so the baseline cannot be filtered away.
+        test_cases = self.normalize_cases(test_cases, renumber_ids=False)
         known: set[str] | None = None
         if self._obligation_registry is not None:
             known = {st.obligation.id for st in self._obligation_registry.states()}
@@ -366,7 +372,7 @@ class QualityPass:
     # -- post-merge passes --------------------------------------------------
 
     @staticmethod
-    def normalize_cases(cases: list[TestCase]) -> list[TestCase]:
+    def normalize_cases(cases: list[TestCase], *, renumber_ids: bool = True) -> list[TestCase]:
         """Boundary cleanup before save/review: drop degenerate stub cases
         (empty title and/or no expected results) and renumber survivors.
 
@@ -381,21 +387,14 @@ class QualityPass:
             kept.append(tc)
         if dropped:
             logger.info("Normalization dropped %d degenerate case(s); %d kept", dropped, len(kept))
-        for idx, tc in enumerate(kept, 1):
-            tc.id = f"TC-{idx:03d}"
+        if renumber_ids:
+            for idx, tc in enumerate(kept, 1):
+                tc.id = f"TC-{idx:03d}"
         return kept
 
     @staticmethod
     def covered_identities(cases: list[TestCase]) -> list[dict[str, str]]:
-        return [
-            {
-                "operation": tc.scenario_operation,
-                "scene": tc.scenario_scene,
-                "variant": tc.scenario_variant,
-            }
-            for tc in cases
-            if tc.scenario_operation and tc.scenario_scene
-        ]
+        return covered_identities(cases)
 
     def global_dedup(self, cases: list[TestCase]) -> list[TestCase]:
         """T8 wiring 3/3: final global identity dedup over merged cases."""

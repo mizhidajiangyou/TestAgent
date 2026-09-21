@@ -16,12 +16,12 @@
     "swagger_url": "./nope.json"
   },
   "meta": {
-    "git_sha": "75680a474463",
+    "git_sha": "242d3865faa9",
     "layer": "http-contract",
     "normalized": [
       "session_id"
     ],
-    "recorded_utc": "2026-09-19T14:43:40.302362+00:00"
+    "recorded_utc": "2026-09-20T13:10:04.072789+00:00"
   },
   "name": "err-swagger-missing",
   "request_trace": [],

@@ -12,8 +12,8 @@
     "swagger": "spec.json"
   },
   "meta": {
-    "git_sha": "bee63d560ad3",
-    "recorded_utc": "2026-09-19T08:49:11.395962+00:00",
+    "git_sha": "242d3865faa9",
+    "recorded_utc": "2026-09-20T15:07:22.092449+00:00",
     "task": "perf"
   },
   "name": "perf-baseline-k6",

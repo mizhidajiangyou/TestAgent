@@ -34,7 +34,9 @@ SUPPORTED_MANIFEST_VERSIONS: tuple[int, ...] = (1,)
 _NAME_RE = re.compile(r"[a-z0-9_-]+")
 
 InputKind = Literal["swagger", "requirements", "file", "text", "choice", "int", "bool"]
-SplitBy = Literal["single", "per_input", "batch"]
+#: "clusters" = L3a lifecycle groups when the links pass is running; without a
+#: links pass it falls back to plain batching with identical labels (LINK-S5b).
+SplitBy = Literal["single", "per_input", "batch", "clusters"]
 ArtifactType = Literal["structured", "text"]
 ValidatorKind = Literal["python_compile", "xml", "regex", "contains"]
 ContractKind = Literal["json_list", "text"]
@@ -96,15 +98,21 @@ class StageOutput(StrictModel):
 class StageSpec(StrictModel):
     name: str
     template: str
-    system_prompt: str  # "file:<path>" | "inline:<text>"
+    system_prompt: str  # "file:<path>" | "generation:<base>" | "inline:<text>"
     when: WhenSpec = Field(default_factory=WhenSpec)
     split: SplitSpec = Field(default_factory=SplitSpec)
     inject: dict[str, str] = Field(default_factory=dict)
     output: StageOutput = Field(default_factory=StageOutput)
+    #: Name of an EARLIER stage whose cases this stage must see as "already
+    #: covered" (rendered under the template variable ``already_covered``).
+    #: Cross-phase coverage is a data flow between stages, so the executor
+    #: resolves it once the earlier stage has run — the legacy chain did the
+    #: same by feeding Phase 1's summary into Phase 2.
+    coverage_input: str = ""
 
     @model_validator(mode="after")
     def _split_input_required(self) -> StageSpec:
-        if self.split.by in ("per_input", "batch") and not self.split.input:
+        if self.split.by in ("per_input", "batch", "clusters") and not self.split.input:
             raise ValueError(
                 f"stage {self.name!r}: split.by={self.split.by!r} requires split.input"
             )
@@ -114,6 +122,10 @@ class StageSpec(StrictModel):
 class DedupSpec(StrictModel):
     keys: list[str] = Field(default_factory=list)
     normalize: Literal["lower", "none"] = "none"
+    #: Optional column that scopes the dedup key (v15 §7.2: ``path_id`` for the
+    #: links line). Empty = the frozen behaviour, where one key value meant one
+    #: duplicate regardless of which unit produced it.
+    namespace_field: str = ""
 
 
 class RenumberSpec(StrictModel):
@@ -135,6 +147,16 @@ class TruncationSpec(StrictModel):
     policy: str = "from_settings"
     slim_continue: bool = True
     scope_key_field: str = ""
+
+
+class LinksSpec(StrictModel):
+    """Cross-module links (LINK-S5b/S6b) — opt-IN per package.
+
+    The packages that generate structured case artifacts declare it; text
+    tasks (perf/gui) never do, so the links pass is not built at all there.
+    """
+
+    enabled: bool = False
 
 
 class QualitySpec(StrictModel):
@@ -209,6 +231,7 @@ class PipelineSpec(StrictModel):
     merge: MergeSpec = Field(default_factory=MergeSpec)
     truncation: TruncationSpec = Field(default_factory=TruncationSpec)
     quality: QualitySpec = Field(default_factory=QualitySpec)
+    links: LinksSpec = Field(default_factory=LinksSpec)
     fan_out_recover: bool = True
 
     @field_validator("stages")
@@ -240,6 +263,23 @@ class Manifest(StrictModel):
     #: (empty-context renders cannot). Values may be non-strings — templates
     #: legitimately do arithmetic on int inputs (B5.1).
     template_context: dict[str, Any] = Field(default_factory=dict)
+    #: Template variable -> renderer name (``text`` / ``rich`` / ``coverage``).
+    #: A package that spells its material ``{{ endpoints }}`` says WHICH rendering
+    #: that variable carries, because the legacy builders did not agree: the
+    #: testcase chain shows the per-unit RICH signature, perf and gui the plain
+    #: ``endpoints_to_text``. Guessing globally would move one family's prompt
+    #: bytes while "fixing" the other. Absent = no view injected.
+    prompt_views: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("prompt_views")
+    @classmethod
+    def _known_prompt_views(cls, v: dict[str, str]) -> dict[str, str]:
+        unknown = sorted(set(v.values()) - {"text", "rich", "coverage"})
+        if unknown:
+            raise ValueError(
+                f"unknown prompt_views renderer(s) {unknown}; supported: coverage, rich, text"
+            )
+        return v
 
     @field_validator("manifest_version")
     @classmethod

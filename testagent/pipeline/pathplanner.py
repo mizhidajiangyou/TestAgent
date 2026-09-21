@@ -27,6 +27,8 @@ __all__ = [
     "PlanningLimitExceeded",
     "PlanningLimitExceededError",
     "canonical_payload_bytes",
+    "contract_from_payload",
+    "path_id_of",
     "plan_paths",
 ]
 
@@ -61,6 +63,60 @@ def canonical_payload_bytes(payload: dict[str, Any]) -> bytes:
     """Fixed canonical serialization (v15 §5.2)."""
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
+    )
+
+
+def path_id_of(payload: dict[str, Any]) -> str:
+    """The identity a canonical payload owns (v15 §5.2, collision-free short
+    hash). Shared by planning and by offline replay so neither can invent one."""
+    return "P" + hashlib.sha256(canonical_payload_bytes(payload)).hexdigest()[:12]
+
+
+def contract_from_payload(
+    payload: dict[str, Any],
+    *,
+    required_pairs: list[dict[str, Any]] | None = None,
+    priority: int = 0,
+    static_class: str = "",
+) -> PathContract:
+    """Rebuild a frozen contract from its canonical payload (offline replay).
+
+    Nothing is re-planned here: the hops, endpoints and identities come out of
+    the document, so a checker measures the artifact against the contracts the
+    run was actually held to.
+    """
+    hops: list[_Hop] = []
+    for hop in payload.get("hops", []):
+        binding = hop.get("binding")
+        hops.append(
+            _Hop(
+                source=str(hop.get("source", "")),
+                target=str(hop.get("target", "")),
+                kind=str(hop.get("kind", "")),
+                candidate=(
+                    BindingCandidate(
+                        producer=str(binding.get("producer", "")),
+                        consumer=str(binding.get("consumer", "")),
+                        mode=str(binding.get("mode", "")),
+                        trust="document",
+                        rule="document",
+                    )
+                    if isinstance(binding, dict)
+                    else None
+                ),
+                bridge_before=tuple(str(b) for b in hop.get("bridge_before") or []),
+            )
+        )
+    canonical = canonical_payload_bytes(payload)
+    return PathContract(
+        path_id="P" + hashlib.sha256(canonical).hexdigest()[:12],
+        payload=payload,
+        canonical_bytes=canonical,
+        endpoints=tuple(str(e) for e in payload.get("endpoints") or []),
+        business_hops=tuple(hops),
+        priority=priority,
+        static_class=static_class,
+        required_pairs=[dict(p) for p in required_pairs or []],
     )
 
 
@@ -185,7 +241,7 @@ def plan_paths(
             seen_modules.add(m)
         payload = _payload(hops, endpoint_seq)
         data = canonical_payload_bytes(payload)
-        path_id = "P" + hashlib.sha256(data).hexdigest()[:12]
+        path_id = path_id_of(payload)
         if path_id in payloads and payloads[path_id] != data:
             raise PathIdentityCollision(f"path_id collision: {path_id}")
         payloads[path_id] = data

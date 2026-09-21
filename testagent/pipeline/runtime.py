@@ -15,6 +15,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from testagent.config.prompt_contract import append_authoritative_table
 from testagent.engine.llm_client import CALL_LABEL, LLMResponse
 from testagent.pipeline.review_hooks import (
     DEFAULT_REVIEW_SYSTEM_PROMPT,
@@ -27,7 +28,7 @@ from testagent.pipeline.review_hooks import (
     make_text_hooks,
 )
 from testagent.pipeline.status import UnitResult, UnitStatus
-from testagent.pipeline.testcase_adapter import testcase_to_full_dict
+from testagent.pipeline.testcase_adapter import dict_to_testcase, testcase_to_full_dict
 from testagent.pipeline.validators import strip_fences, validate_structured, validate_text
 
 if TYPE_CHECKING:
@@ -68,6 +69,35 @@ def _extract_json_list(raw: str) -> list[dict[str, Any]] | None:
     return None
 
 
+def _render_unit_prompts(
+    task: TaskPackage, stage: StageSpec, unit_ctx: dict[str, Any], ctx: TaskContext
+) -> tuple[str, str]:
+    """One unit's ``(system, user)`` pair — the ONLY place that assembles it.
+
+    Both generate_unit variants (single-call and engine-backed) call this, so
+    the rollback path cannot drift from the production path, and the legacy
+    append order (template, then the run's authoritative value table) holds for
+    either. Links material is appended LAST and only when a links pass exists:
+    a links-off run must stay byte-identical to the pre-links recording.
+    """
+    render_ctx = {
+        **ctx.parsed,
+        **ctx.settings_views,
+        **_unit_views(unit_ctx),
+        **_prompt_views(task, unit_ctx, ctx),
+    }
+    system_prompt = task.system_prompt(stage.system_prompt, render_ctx)
+    user_prompt = task.render(stage.template, render_ctx)
+    table = ctx.quality.conflict_table if ctx.quality is not None else ""
+    user_prompt = append_authoritative_table(user_prompt, table)
+    if ctx.links is not None:
+        # L0 index (+ L1 neighbours of this batch), v15 §5.4: batching material.
+        block = ctx.links.context_block(stage.name, unit_ctx)
+        if block:
+            user_prompt = f"{user_prompt}\n\n{block}"
+    return system_prompt, user_prompt
+
+
 def build_generate_unit(llm: LLMClient) -> Any:
     """Create the async unit generator closure over the LLM client."""
 
@@ -80,14 +110,7 @@ def build_generate_unit(llm: LLMClient) -> Any:
         session_id: str,
         fingerprint_log: FingerprintLog | None = None,
     ) -> UnitResult:
-        # Split-specific context: the unit's item(s) ride alongside the full
-        # parsed context so templates can render ``_unit_item`` / ``_unit_batch``.
-        render_ctx = {**ctx.parsed, **ctx.settings_views, **_unit_views(unit_ctx)}
-        # file: system prompts render with the run context (B5.1: format /
-        # output-language variance must reach the system prompt — the
-        # fingerprint gate compares it against the legacy generator).
-        system_prompt = task.system_prompt(stage.system_prompt, render_ctx)
-        user_prompt = task.render(stage.template, render_ctx)
+        system_prompt, user_prompt = _render_unit_prompts(task, stage, unit_ctx, ctx)
         if fingerprint_log is not None:
             fingerprint_log.record(
                 model=getattr(llm, "primary_model", "llm"),
@@ -106,11 +129,27 @@ def build_generate_unit(llm: LLMClient) -> Any:
             script = strip_fences(raw)
             problems = validate_text(script, task.manifest.artifact.validators, ctx)
             if problems:
+                # A rejected script used to vanish silently: the run said
+                # "1 unit failed" and left no reason anywhere, because the text
+                # chain has no raw-audit sink. The validators know exactly why.
+                logger.warning(
+                    "[%s] script rejected by validators %s (%d chars returned): %s",
+                    CALL_LABEL.get(""),
+                    [v.kind for v in task.manifest.artifact.validators],
+                    len(script),
+                    "; ".join(problems),
+                )
                 return UnitResult(status=UnitStatus.INVALID)
             return UnitResult(status=UnitStatus.SUCCESS, items=[{"script": script}])
 
         items = _extract_json_list(raw)
         if items is None:
+            logger.warning(
+                "[%s] response is not parseable as a JSON list (%d chars): %.120s",
+                CALL_LABEL.get(""),
+                len(raw),
+                raw.strip(),
+            )
             return UnitResult(status=UnitStatus.INVALID)
         schema = task.manifest.artifact.item_schema
         if schema and validate_structured(items, schema):
@@ -120,7 +159,9 @@ def build_generate_unit(llm: LLMClient) -> Any:
     return generate_unit
 
 
-def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
+def build_engine_generate_unit(
+    llm: LLMClient, *, output_token_cap: int, json_mode: bool = False
+) -> Any:
     """FH2.1: engine-backed unit generator (plan-d B6b.1).
 
     Drives the REAL :class:`TruncationEngine` (truncated salvage → slim
@@ -162,9 +203,7 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
             )
             return result
 
-        render_ctx = {**ctx.parsed, **ctx.settings_views, **_unit_views(unit_ctx)}
-        system_prompt = task.system_prompt(stage.system_prompt, render_ctx)
-        user_prompt = task.render(stage.template, render_ctx)
+        system_prompt, user_prompt = _render_unit_prompts(task, stage, unit_ctx, ctx)
         if fingerprint_log is not None:
             fingerprint_log.record(
                 model=getattr(llm, "primary_model", "llm"),
@@ -177,6 +216,7 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
         from testagent.engine.truncation import TruncationEngine, TruncationPolicy
         from testagent.pipeline.truncation_hooks import make_dict_hooks
 
+        quality = ctx.quality
         policy = TruncationPolicy(output_token_cap=output_token_cap)
 
         def _extract(raw: str) -> list[dict[str, Any]] | None:
@@ -247,7 +287,6 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
                 return f"{method} {path}"
             return str(item)
 
-        quality = ctx.quality
         hooks = make_dict_hooks(
             extract=_extract,
             salvage=_salvage,
@@ -258,7 +297,15 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
             # per-run pass onto the TaskContext.
             expected_for=quality.expected_for if quality is not None else None,
         )
-        engine = TruncationEngine(policy, json_mode=False, hooks=hooks)
+        engine = TruncationEngine(
+            policy,
+            json_mode=json_mode,
+            hooks=hooks,
+            # T1: every engine call lands a raw row. Without the sink the
+            # session's reconciliation reports ``raw_calls: 0`` beside 60
+            # delivered cases — an audit that cannot reconcile at all.
+            raw_sink=quality.emit_raw_record if quality is not None else None,
+        )
         scope_items = _unit_scope_items(unit_ctx, ctx)
         items = await engine.arun(llm, system_prompt, user_prompt, scope_items, label)
 
@@ -273,7 +320,20 @@ def build_engine_generate_unit(llm: LLMClient, *, output_token_cap: int) -> Any:
             # T11a normalization, endpoint scoping, T11b semantic validation).
             # Schema validation above stays on the raw model output.
             endpoints = list(ctx.parsed.get("endpoints") or [])
-            items = [testcase_to_full_dict(tc) for tc in quality.to_test_cases(items, endpoints)]
+            raw_items = list(items)
+            items = [
+                testcase_to_full_dict(tc) for tc in quality.to_test_cases(raw_items, endpoints)
+            ]
+        else:
+            raw_items = list(items)
+        if ctx.links is not None:
+            # v15 §6.1: identity fields are program-owned. The attempt is read
+            # off the raw output (the conversion drops those columns, so the
+            # artifact alone would show a clean — and unrecorded — claim).
+            ctx.links.note_forgeries(raw_items, stage.name)
+            unit_item = unit_ctx.get("_unit_item")
+            path_id = str(unit_item.get("path_id", "")) if isinstance(unit_item, dict) else ""
+            ctx.links.stamp(items, stage=stage.name, path_id=path_id)
         return UnitResult(status=UnitStatus.SUCCESS, items=items)
 
     return generate_unit
@@ -307,6 +367,62 @@ def _unit_views(unit_ctx: dict[str, Any]) -> dict[str, Any]:
         views["unit_item"] = item
     if batch is not None:
         views["unit_batch"] = batch
+    return views
+
+
+def _prompt_views(task: TaskPackage, unit_ctx: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
+    """Template variables as PROMPT TEXT, in the units the templates expect.
+
+    ``tasks/*/prompts`` were migrated byte-for-byte from the legacy templates,
+    and those templates spell their material ``{{ endpoints }}`` /
+    ``{{ requirements }}`` — which the legacy builders passed as *rendered
+    strings* scoped to the unit (this batch's signature, this one requirement).
+    The parsed run context holds objects instead, so a naive render hands the
+    model an ``[APIEndpoint(method='GET', ...)]`` repr of the WHOLE spec on
+    every unit: valid JSON out, silently degraded prompting.
+
+    Which rendering a variable carries is declared per package
+    (``manifest.prompt_views``) because the legacy builders disagreed: the
+    testcase chain shows the rich signature, perf and gui the plain text.
+    """
+    from testagent.config.models import APIEndpoint, RequirementItem
+    from testagent.config.prompt_contract import case_coverage_text
+    from testagent.parsers.requirement_parser import RequirementParser
+    from testagent.parsers.swagger_parser import SwaggerParser, endpoints_to_rich_signature
+
+    mapping = task.manifest.prompt_views
+    views: dict[str, Any] = {}
+    if not mapping:
+        return views
+
+    endpoints = [ep for ep in (ctx.parsed.get("endpoints") or []) if isinstance(ep, APIEndpoint)]
+    scoped = [ep for ep in (unit_ctx.get("_unit_batch") or []) if isinstance(ep, APIEndpoint)]
+    unit_item = unit_ctx.get("_unit_item")
+    if isinstance(unit_item, APIEndpoint):
+        scoped = [unit_item]
+    scope = scoped or endpoints
+    style = mapping.get("endpoints")
+    if style == "rich":
+        views["endpoints"] = endpoints_to_rich_signature(scope) if scope else ""
+    elif style == "text":
+        views["endpoints"] = SwaggerParser.endpoints_to_text(scope) if scope else ""
+
+    requirements = [
+        req for req in (ctx.parsed.get("requirements") or []) if isinstance(req, RequirementItem)
+    ]
+    if isinstance(unit_item, RequirementItem):
+        requirements = [unit_item]
+    if mapping.get("requirements") == "text":
+        views["requirements"] = (
+            RequirementParser.requirements_to_text(requirements) if requirements else ""
+        )
+
+    historical = ctx.parsed.get("historical_cases")
+    if mapping.get("historical_cases") == "coverage":
+        items = historical if isinstance(historical, list) else []
+        views["historical_cases"] = case_coverage_text(
+            [tc for tc in (dict_to_testcase(item) for item in items) if tc]
+        )
     return views
 
 
@@ -365,13 +481,14 @@ def _review_context_value(task: Any, spec: Any, render_ctx: dict[str, Any]) -> s
     fingerprint gate pins it. ``None`` when the task declares no third
     context variable or no template for it.
 
-    The render is rstrip()ed: the legacy ``context_text`` never carries
-    trailing whitespace, and a file-level trailing newline (editors add
-    them) must not leak into the request fingerprint.
+    No trimming here: Jinja already drops the TEMPLATE's own final newline
+    (``keep_trailing_newline`` is off), so what remains is content. Stripping
+    further ate a real newline the legacy GUI context carries between the
+    requirements block and the next section header.
     """
     if len(spec.context) < 3 or not spec.context_template:
         return None
-    return str(task.render(spec.context_template, render_ctx)).rstrip()
+    return str(task.render(spec.context_template, render_ctx))
 
 
 def build_review_runner(llm: Any) -> Any:

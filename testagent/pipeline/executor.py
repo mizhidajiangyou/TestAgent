@@ -13,6 +13,7 @@ manifest_version feature; the name says exactly what it is).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from testagent import __version__
 from testagent.engine.concurrency import gather_with_concurrency
 from testagent.engine.llm_client import CALL_LABEL, ReasoningBudgetExhaustedError
 from testagent.engine.truncation import TruncationPolicy
@@ -50,7 +52,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_SUFFIX = ".pre_review_snapshot.json"
+LINKS_SIDECAR_SUFFIX = ".links.json"
 DEFAULT_SNAPSHOT_KEEP_LAST = 50
+
+
+def _hash_artifact(value: Any) -> str:
+    """Stable content hash for the sidecar's before/after-review fingerprints.
+
+    ``default=str`` keeps unpicklable input objects (parsed models) from
+    raising: the hash only has to be reproducible for the SAME run, not
+    canonical across processes.
+    """
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
 
 
 def _reduce_text_artifact(items: list[dict[str, Any]]) -> str:
@@ -67,6 +82,21 @@ def _cases_of(items: list[dict[str, Any]]) -> list[TestCase]:
     return [tc for tc in (dict_to_testcase(item) for item in items) if tc]
 
 
+def _coverage_of(source_stage: str, results: list[StageResult]) -> str:
+    """The "already covered" block a later stage gets from an earlier one.
+
+    Built from the SOURCE stage's items only (not the merged artifact), which is
+    what "what Phase 1 already produced" means — and the same object the legacy
+    chain passed into Phase 2.
+    """
+    from testagent.config.prompt_contract import coverage_block
+    from testagent.pipeline.scenario import covered_identities
+
+    prior = next((r for r in results if r.name == source_stage), None)
+    cases = _cases_of(prior.items) if prior is not None else []
+    return coverage_block(cases, covered_identities(cases))
+
+
 @dataclass
 class PipelineResult:
     """One pipeline run's outcome."""
@@ -77,6 +107,9 @@ class PipelineResult:
     session_id: str = ""  # every caller can find the snapshot with this
     review_meta: dict[str, Any] | None = None
     units_failed: int = 0
+    #: LINK-S7 metrics (Gate 1/2/3 rates incl. per-source_stage rejected_rate,
+    #: plus planning counts). None when the package did not opt into links.
+    links_report: dict[str, Any] | None = None
 
 
 class PipelineExecutor:
@@ -88,6 +121,7 @@ class PipelineExecutor:
         settings: Settings,
         generate_unit: Any = None,
         review_runner: Any = None,
+        links_signature_fn: Any = None,
     ) -> None:
         """``generate_unit``: callable(task, stage, label, unit_ctx, ctx) ->
         UnitResult. Injected so the executor stays LLM-mechanics-free and
@@ -102,6 +136,9 @@ class PipelineExecutor:
         self._settings = settings
         self._generate_unit = generate_unit
         self._review_runner = review_runner
+        #: The endpoint-signature renderer used by the links L0 index, injected
+        #: by the composition root (B4.11 forbids importing it here).
+        self._links_signature_fn = links_signature_fn
 
     # -- public API ----------------------------------------------------
 
@@ -134,6 +171,39 @@ class PipelineExecutor:
         ctx.quality = quality
         return quality
 
+    def _start_links(self, task: TaskPackage, ctx: TaskContext, session_id: str) -> Any:
+        """Attach the per-run links pass when the package AND the config allow it.
+
+        ``LINKS_ENABLED=false`` must mean "as if this code path were never
+        added": no graph, no extra prompt material, no program stamps. That is
+        the rollback proof v15 §12.2 demands, and it is what keeps the recorded
+        prompt fingerprints meaningful.
+        """
+        from testagent.pipeline.links_pass import LinksPass, LinksRunConfig
+
+        config = LinksRunConfig.from_settings(self._settings)
+        opted_in = task.manifest.pipeline.links.enabled or bool(ctx.parsed.get("links_enabled"))
+        if not opted_in or not config.enabled:
+            ctx.links = None
+            return None
+        links = LinksPass(config, signature_fn=self._links_signature_fn, session_id=session_id)
+        links.start(
+            list(ctx.parsed.get("requirements") or []),
+            list(ctx.parsed.get("endpoints") or []),
+        )
+        ctx.links = links
+        # v15 §7.3: an external baseline may carry identity columns from the run
+        # that produced it. Those are audit history, not this run's provenance —
+        # path fulfillment is only granted to items this run's units stamped.
+        baseline = task.manifest.pipeline.merge.baseline_input
+        if baseline and ctx.parsed.get(baseline):
+            ctx.parsed[baseline] = links.normalize_history(list(ctx.parsed[baseline]))
+        # The L3b stage is an ordinary per_input stage over these bundles, so
+        # the stage machinery (when / split / fingerprint / recovery) applies to
+        # it unchanged.
+        ctx.parsed["l3b_bundles"] = links.l3b_units()
+        return links
+
     async def arun(
         self,
         task: TaskPackage,
@@ -145,6 +215,8 @@ class PipelineExecutor:
         session_id = session_id or uuid.uuid4().hex[:12]
         self._llm.set_session_id(session_id)
         quality = self._start_quality(task, ctx, session_id)
+        links = self._start_links(task, ctx, session_id)
+        links_gates: dict[str, Any] | None = None
 
         if self._llm.intent_capable and self._resolve_flag(
             task.manifest.pipeline.verify_model, default=True
@@ -156,6 +228,8 @@ class PipelineExecutor:
         for stage in task.manifest.pipeline.stages:
             if not evaluate_when(stage.when, ctx):
                 continue
+            if stage.coverage_input:
+                ctx.parsed["already_covered"] = _coverage_of(stage.coverage_input, results)
             units = make_units(stage, ctx)
             outcomes = await gather_with_concurrency(
                 self._resolve_concurrency(task),
@@ -227,6 +301,14 @@ class PipelineExecutor:
         if quality is not None:
             quality.finish_session(_cases_of(merged) if isinstance(merged, list) else [])
 
+        # Links gates (LINK-S6b/S7) run on the FINAL artifact: contract cases
+        # must be judged after merge, dedup and review, not on a stage slice.
+        if links is not None and isinstance(merged, list):
+            links_gates = links.run_gates(
+                merged, list(ctx.parsed.get("endpoints") or []), links.attempted_keys()
+            )
+            self._write_links_sidecar(links, session_id, merged, snapshot_artifact, ctx)
+
         return PipelineResult(
             task=task.name,
             artifact=merged,
@@ -234,6 +316,7 @@ class PipelineExecutor:
             session_id=session_id,
             review_meta=review_meta,
             units_failed=units_failed,
+            links_report=links_gates,
         )
 
     # -- unit execution --------------------------------------------------
@@ -375,6 +458,32 @@ class PipelineExecutor:
     def read_snapshot(self, session_id: str) -> Any:
         payload = json.loads(self._snapshot_path(session_id).read_text(encoding="utf-8"))
         return payload["artifact"]
+
+    def _write_links_sidecar(
+        self, links: Any, session_id: str, final: list[Any], pre_review: Any, ctx: TaskContext
+    ) -> Path:
+        """Persist the links report next to the snapshot (v15 §8.3).
+
+        Same directory and same session id as the pre-review snapshot, because
+        the two files describe one run: the snapshot is the content, this is the
+        measurement. ``links-check`` replays from THIS document, so the planner
+        never gets to redraw the denominators after the fact.
+        """
+        path = Path(self._settings.output_dir) / f"{session_id}{LINKS_SIDECAR_SUFFIX}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        document = links.run_document(
+            cases=final,
+            pre_review_hash=_hash_artifact(pre_review),
+            final_hash=_hash_artifact(final),
+            input_digest=_hash_artifact(sorted((k, str(v)) for k, v in ctx.raw.items())),
+            config_digest=links.config_digest(),
+            code_version=__version__,
+            code_sha=os.getenv("TESTAGENT_GIT_SHA", ""),
+        )
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+        return path
 
     def _prune_snapshots(self) -> None:
         """Keep the newest N snapshots (review #9; env-overridable)."""

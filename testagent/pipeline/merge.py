@@ -26,10 +26,23 @@ def _as_dicts(value: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _dedup_key(item: dict[str, Any], keys: list[str], normalize: str) -> tuple[Any, ...]:
+def _dedup_key(
+    item: dict[str, Any], keys: list[str], normalize: str, namespace: str = ""
+) -> tuple[Any, ...]:
+    """H1 dedup key, optionally namespaced by one column (LINK-S6b, v15 §7.2).
+
+    With ``namespace="path_id"`` two cases that match on every dedup key are
+    still duplicates ONLY inside the same path: an L3b case for path A must not
+    be swallowed by an ordinary case (empty path) that happens to share its
+    title/endpoint/type. Links-off runs have no path_id anywhere, so the
+    namespace part is the empty string for every item and the grouping is
+    exactly the frozen one.
+    """
     parts = [str(item.get(k, "")) for k in keys]
     if normalize == "lower":
         parts = [p.lower() for p in parts]
+    if namespace:
+        return (str(item.get(namespace, "") or ""), *tuple(parts))
     return tuple(parts)
 
 
@@ -55,7 +68,9 @@ def apply_merge(
         seen: set[tuple[Any, ...]] = set()
         deduped: list[dict[str, Any]] = []
         for item in items:
-            key = _dedup_key(item, spec.dedup.keys, spec.dedup.normalize)
+            key = _dedup_key(
+                item, spec.dedup.keys, spec.dedup.normalize, spec.dedup.namespace_field
+            )
             if key in seen:
                 continue
             seen.add(key)

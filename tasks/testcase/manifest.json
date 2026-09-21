@@ -5,7 +5,7 @@
   "description": "Two-phase test case generation on the task-package pipeline (FH2.3, plan-k B6b.3): Phase 1 requirements per-input, Phase 2 API-specific endpoint batches of 2, engine-backed truncation, review, H1 historical merge. Templates are byte-identical migrations of the frozen legacy prompts (reverse-rename discipline: no rename needed, sha256 equality proven by tests).",
   "version": "1.0.0",
   "aliases": [],
-  "examples": "  testagent testcase --requirements examples/sample_requirements.md --swagger examples/sample_swagger.json\n  testagent testcase --requirements req.md --no-review -o output/cases.json",
+  "examples": "  testagent testcase --requirements examples/sample_requirements.md --swagger examples/sample_swagger.json\n  testagent testcase --requirements req.md --historical-cases cases.json -o output/cases.json\n  LINKS_ENABLED=true testagent testcase -r req.md -s api.json --links -o output/cases.json",
   "inputs": [
     {
       "name": "requirements",
@@ -38,6 +38,17 @@
         "-H"
       ],
       "help": "Historical test cases JSON baseline (H1 merge input)"
+    },
+    {
+      "name": "links",
+      "kind": "bool",
+      "required": false,
+      "default": false,
+      "context_var": "links_enabled",
+      "option": [
+        "--links"
+      ],
+      "help": "Enable the links pass for this run (endpoint-relationship graph, L0/L1/L2 context, L3a clustering and the L3b path units); requires LINKS_ENABLED=true"
     }
   ],
   "require_any": [
@@ -49,7 +60,7 @@
       {
         "name": "phase1",
         "template": "prompts/testcase_prompt.j2",
-        "system_prompt": "inline:You are a senior QA engineer. Generate comprehensive, well-structured test cases from requirements and API specifications. Output only valid JSON. Keep the total output within the model's token limit: prefer a focused set of high-value cases with concise descriptions and steps over exhaustive coverage, so the response is never cut off mid-JSON.",
+        "system_prompt": "generation:testcase",
         "split": {
           "by": "per_input",
           "input": "requirements"
@@ -66,9 +77,10 @@
       {
         "name": "phase2_api",
         "template": "prompts/api_prompt.j2",
-        "system_prompt": "inline:You are a senior QA engineer specializing in API testing. Generate boundary, security, and integration test cases. Output only valid JSON.",
+        "system_prompt": "generation:api",
+        "coverage_input": "phase1",
         "split": {
-          "by": "batch",
+          "by": "clusters",
           "input": "endpoints",
           "batch_size": 2
         },
@@ -76,6 +88,23 @@
           "input_present": [
             "requirements",
             "endpoints"
+          ]
+        },
+        "output": {
+          "contract": "json_list"
+        }
+      },
+      {
+        "name": "l3b",
+        "template": "prompts/l3b_prompt.j2",
+        "system_prompt": "generation:l3b",
+        "split": {
+          "by": "per_input",
+          "input": "l3b_bundles"
+        },
+        "when": {
+          "input_present": [
+            "l3b_bundles"
           ]
         },
         "output": {
@@ -91,7 +120,8 @@
           "endpoint",
           "test_type"
         ],
-        "normalize": "lower"
+        "normalize": "lower",
+        "namespace_field": "path_id"
       },
       "renumber": {
         "field": "id",
@@ -106,6 +136,9 @@
     },
     "quality": {
       "enabled": true
+    },
+    "links": {
+      "enabled": false
     }
   },
   "review": {
@@ -257,6 +290,11 @@
     "record": true,
     "resume": true
   },
+  "prompt_views": {
+    "endpoints": "rich",
+    "requirements": "text",
+    "historical_cases": "coverage"
+  },
   "template_context": {
     "endpoints": "GET /users\nPOST /users",
     "endpoints_text": "GET /users - list\nPOST /users - create",
@@ -266,7 +304,11 @@
     "output_language": "chinese",
     "historical_cases": "",
     "json_mode": false,
-    "unit_item": "Sample requirement",
+    "unit_item": {
+      "path_id": "P-01",
+      "static_class": "R1",
+      "contract_block": "POST /users -> GET /users/{id}: <USER_ID> -> params.id (EXACT)"
+    },
     "unit_batch": "GET /users, POST /users",
     "test_cases_json": "[{\"id\": \"TC-XXX\", \"title\": \"sample\"}]",
     "round": 1,

@@ -42,14 +42,18 @@ class TestTemplateMigration:
         manifest = load_manifest(REPO / "tasks" / "testcase" / "manifest.json")
         assert manifest.name == "testcase"
         stage_names = [s.name for s in manifest.pipeline.stages]
-        assert stage_names == ["phase1", "phase2_api"]
+        assert stage_names == ["phase1", "phase2_api", "l3b"]
 
     def test_phase2_batch_size_is_two(self) -> None:
+        """Phase 2 batches by twos with links off, and clusters instead with
+        links on — one stage declaration, because ``clusters`` falls back to the
+        declared ``batch_size`` when no links pass exists (LINK-S5b)."""
         manifest = load_manifest(REPO / "tasks" / "testcase" / "manifest.json")
         phase2 = manifest.pipeline.stages[1]
-        assert phase2.split.by == "batch"
+        assert phase2.split.by == "clusters"
         assert phase2.split.batch_size == 2
         assert phase2.split.input == "endpoints"
+        assert phase2.coverage_input == "phase1"
 
     def test_merge_dedup_keys_match_h1(self) -> None:
         manifest = load_manifest(REPO / "tasks" / "testcase" / "manifest.json")
@@ -201,3 +205,34 @@ class TestPipelineE2E:
             "H1 renumber timing: ids assigned after merge, sequential"
         )
         assert engine_fake_llm.calls, "engine-backed units must call the LLM"
+
+
+#: ``examples`` lines are what a reader copies into a shell — an option that
+#: does not exist is a broken command, and `--no-review` once shipped exactly
+#: that way on the task-package CLI (review is configured, not flagged).
+_COMMAND_BY_PACKAGE = {"testcase": "testcase", "perf": "perf", "gui": "gui"}
+
+
+@pytest.mark.parametrize("package", sorted(_COMMAND_BY_PACKAGE))
+def test_manifest_examples_only_use_real_options(package: str) -> None:
+    manifest = load_manifest(REPO / "tasks" / package / "manifest.json")
+    command = next(c for c in main.commands.values() if c.name == _COMMAND_BY_PACKAGE[package])
+    options = _opt(command)
+    assert options, f"{package} command exposes no options — the check would be vacuous"
+    for line in manifest.examples.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        for token in line.split():
+            if token.startswith("--") and "=" not in token:
+                name = token.split("=", 1)[0]
+                assert name in options, f"{package} examples advertise {name}: {line}"
+
+
+def _opt(command: object) -> set[str]:
+    return {
+        spec
+        for param in getattr(command, "params", [])
+        for spec in getattr(param, "opts", [])
+        if spec.startswith("--")
+    }

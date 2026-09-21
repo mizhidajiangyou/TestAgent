@@ -165,6 +165,8 @@ def make_container(llm: LLMClient, settings: Any, *, tasks_dir: Path = REPO / "t
 
         return TestCaseGenerator(llm_client=llm, prompt_builder=PromptBuilder())
 
+    from testagent.parsers.swagger_parser import endpoints_to_rich_signature
+
     executor = PipelineExecutor(
         llm,  # type: ignore[arg-type]
         settings,
@@ -172,6 +174,9 @@ def make_container(llm: LLMClient, settings: Any, *, tasks_dir: Path = REPO / "t
             llm,  # type: ignore[arg-type]
             output_token_cap=settings.llm.max_output_tokens,
         ),
+        # Same wiring as the production container, so a links run here measures
+        # the same L0 index the CLI run would.
+        links_signature_fn=endpoints_to_rich_signature,
     )
     return SimpleNamespace(
         testcase_generator=legacy_generator,

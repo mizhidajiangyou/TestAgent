@@ -1,0 +1,22 @@
+Review the following Playwright (pytest) GUI test script and produce a COMPLETE revised version.
+
+## Review Context (the script MUST stay consistent with this)
+{{ context_text }}
+
+## Current Script
+{{ script }}
+
+## Review Checklist
+1. The target URL and requirement coverage match the review context; every required user flow is exercised.
+2. Locators are robust: prefer `get_by_role` / `get_by_label` / `get_by_placeholder` / `get_by_text` over fragile CSS/XPath selectors.
+3. Assertions are machine-checkable: `expect()` calls verify observable outcomes (URL, visible text, element state), not just "no exception".
+4. Waits are explicit (Playwright auto-waiting / `expect` retries), no brittle fixed sleeps as the only synchronization.
+5. Error handling and cleanup: test data created during the test is removed; fixtures tear down state.
+6. The script is complete and runnable: imports, fixtures and test functions are all present and syntactically valid Python.
+
+## Output Contract
+- Output the COMPLETE revised Python script.
+- No explanations, no diff, no markdown fences — raw Python only.
+- Preserve the original structure and naming where possible; change only what the checklist requires.
+- If nothing needs to change, return the original script unchanged.
+

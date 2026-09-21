@@ -15,12 +15,12 @@
     "requirements": "　\n---\n"
   },
   "meta": {
-    "git_sha": "75680a474463",
+    "git_sha": "242d3865faa9",
     "layer": "http-contract",
     "normalized": [
       "session_id"
     ],
-    "recorded_utc": "2026-09-19T14:43:40.331367+00:00"
+    "recorded_utc": "2026-09-20T13:10:04.095924+00:00"
   },
   "name": "err-nothing-parseable",
   "request_trace": [],

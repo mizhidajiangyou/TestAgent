@@ -144,6 +144,9 @@ class TaskContext:
     raw: dict[str, Any] = field(default_factory=dict)  # CLI values as given
     parsed: dict[str, Any] = field(default_factory=dict)  # parsed products
     settings_views: dict[str, Any] = field(default_factory=dict)  # lang/mode/...
+    #: Per-run links pass (pipeline.links), attached by the executor when the
+    #: package opts in. None = links untouched: prompts stay byte-identical.
+    links: Any = None
     #: Per-run case quality line (pipeline.quality), attached by the executor
     #: when the package declares it. Unit generators use it for the obligation
     #: floor and the scope-aware dict->TestCase conversion.
@@ -169,7 +172,17 @@ def parse_inputs(
     ``from_settings:KEY`` defaults are resolved when the CLI did not provide
     a value and a Settings object is supplied.
     """
-    parsed: dict[str, Any] = {}
+    parsed: dict[str, Any] = {
+        # Derived views are declared even when their input is absent: a
+        # missing key lets ``TaskPackage.render`` fall back to the SYNTHETIC
+        # validation sample, and a sample endpoint in a production prompt makes
+        # the model invent cases for an API that was never supplied.
+        "endpoints": [],
+        "endpoints_text": "",
+        "endpoints_signature": "",
+        "requirements": [],
+        "requirements_text": "",
+    }
     effective: dict[str, Any] = {}
     for spec in manifest.inputs:
         value = raw.get(spec.name)

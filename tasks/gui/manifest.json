@@ -42,7 +42,7 @@
       {
         "name": "script",
         "template": "prompts/main.j2",
-        "system_prompt": "inline:You are a senior QA automation engineer specializing in Playwright and pytest. Generate complete, runnable, maintainable GUI test scripts. Output only valid Python code.",
+        "system_prompt": "generation:gui",
         "split": {
           "by": "single"
         },
@@ -50,6 +50,18 @@
           "contract": "text"
         }
       }
+    ]
+  },
+  "review": {
+    "enabled": "from_settings",
+    "max_rounds": "from_settings",
+    "template": "prompts/script_review.j2",
+    "system_prompt": "file:prompts/script_review_system.j2",
+    "context_template": "prompts/review_context.j2",
+    "context": [
+      "script",
+      "round",
+      "context_text"
     ]
   },
   "artifact": {
@@ -72,6 +84,7 @@
     "record": true,
     "resume": true
   },
+  "prompt_views": {"requirements": "text"},
   "template_context": {
     "url": "https://example.com",
     "requirements_text": "Sample requirement",

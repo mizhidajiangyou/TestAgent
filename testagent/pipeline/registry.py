@@ -51,18 +51,37 @@ class TaskPackage:
         return self._env.get_template(template_name).render(**merged)
 
     def system_prompt(self, spec: str, context: dict[str, Any] | None = None) -> str:
-        """Resolve a system_prompt spec ("file:<path>" | "inline:<text>").
+        """Resolve a system_prompt spec.
 
-        ``file:`` prompts are jinja templates rendered with ``context``
-        (B5.1: the legacy perf/gui system prompts vary with the script
-        format and output language — a static string cannot reproduce
-        that, and the fingerprint gate would catch the drift). Validation
-        renders pass no context and fall back to the synthetic one.
+        Three forms:
+
+        - ``file:<path>`` — a jinja template inside the package, rendered with
+          ``context`` (B5.1: the legacy perf/gui system prompts vary with the
+          script format and output language, so a static string cannot
+          reproduce that and the fingerprint gate catches the drift);
+        - ``generation:<name>`` — one of the shared system-prompt bases from
+          ``config/prompt_contract``, run through THE composition order every
+          chain uses (base → historical-baseline suffix → language hint → error
+          contract → JSON-mode wrapper). A task package that spelled only the
+          base would send prompts without the error contract, which is a
+          quality regression no artifact diff can see;
+        - ``inline:<text>`` — the text verbatim.
+
         Rendered output is stripped: system prompts are logical text, and
         trailing file newlines must not leak into request fingerprints.
         """
         if spec.startswith("file:"):
             return self.render(spec.removeprefix("file:"), context or {}).strip()
+        if spec.startswith("generation:"):
+            from testagent.config.prompt_contract import compose_named_system_prompt
+
+            ctx = context or {}
+            return compose_named_system_prompt(
+                spec.removeprefix("generation:"),
+                output_language=str(ctx.get("output_language") or "english"),
+                json_mode=bool(ctx.get("json_mode")),
+                historical_cases=str(ctx.get("historical_cases") or ""),
+            )
         if spec.startswith("inline:"):
             return spec.removeprefix("inline:")
         return spec

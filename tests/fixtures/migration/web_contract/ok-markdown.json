@@ -27,6 +27,7 @@
             "Status code is 200"
           ],
           "id": "TC-001",
+          "path_id": "",
           "preconditions": [
             "User is authenticated"
           ],
@@ -34,6 +35,7 @@
           "scenario_operation": "",
           "scenario_scene": "",
           "scenario_variant": "",
+          "source_stage": "",
           "steps": [
             "Send GET request to /users"
           ],
@@ -62,11 +64,13 @@
             "Status code is 201"
           ],
           "id": "TC-002",
+          "path_id": "",
           "preconditions": [],
           "priority": "medium",
           "scenario_operation": "",
           "scenario_scene": "",
           "scenario_variant": "",
+          "source_stage": "",
           "steps": [
             "Send POST request with valid body"
           ],
@@ -92,12 +96,12 @@
     "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
   },
   "meta": {
-    "git_sha": "75680a474463",
+    "git_sha": "242d3865faa9",
     "layer": "http-contract",
     "normalized": [
       "session_id"
     ],
-    "recorded_utc": "2026-09-19T14:43:40.174375+00:00"
+    "recorded_utc": "2026-09-20T13:10:03.972867+00:00"
   },
   "name": "ok-markdown",
   "request_trace": [],

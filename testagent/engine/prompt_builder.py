@@ -12,71 +12,48 @@ from typing import Any
 from jinja2 import BaseLoader, Environment, FileSystemLoader
 
 from testagent.config.models import APIEndpoint
+from testagent.config.prompt_contract import (
+    API_SYSTEM_BASE,
+    ERROR_CONTRACT,
+    GUI_SYSTEM_BASE,
+    JMETER_SYSTEM_BASE,
+    JSON_MODE_TEST_CASES_INSTRUCTION,
+    K6_SYSTEM_BASE,
+    REVIEW_SYSTEM_BASE,
+    TESTCASE_HISTORICAL_SUFFIX,
+    TESTCASE_SYSTEM_BASE,
+    append_authoritative_table,
+    compose_system_prompt,
+    language_instruction,
+)
+from testagent.parsers.swagger_parser import endpoints_to_rich_signature
 
 logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 
-#: System-prompt suffix appended when JSON mode is enabled. OpenAI's
-#: ``json_object`` response format rejects a bare JSON array, so the payload
-#: must be wrapped in a single top-level object keyed ``test_cases``.
-JSON_MODE_TEST_CASES_INSTRUCTION = (
-    " CRITICAL: You MUST return a JSON OBJECT with exactly one top-level key "
-    '"test_cases", whose value is the JSON array of test cases described '
-    'above. Example shape: {"test_cases": [ { ...single case object... } ]}. '
-    "Do NOT return a bare JSON array."
-)
+#: The prompt contract fragments moved to ``config/prompt_contract`` so the
+#: task-package chain can compose byte-identical prompts without importing this
+#: module (architecture gate). They are re-exported above for the frozen legacy
+#: import paths (generators, tests) until plan-k B7.3 deletes them.
+__all__ = [
+    "API_SYSTEM_BASE",
+    "ERROR_CONTRACT",
+    "GUI_SYSTEM_BASE",
+    "JMETER_SYSTEM_BASE",
+    "JSON_MODE_TEST_CASES_INSTRUCTION",
+    "K6_SYSTEM_BASE",
+    "REVIEW_SYSTEM_BASE",
+    "TEMPLATES_DIR",
+    "TESTCASE_HISTORICAL_SUFFIX",
+    "TESTCASE_SYSTEM_BASE",
+    "PromptBuilder",
+    "endpoints_to_rich_signature",
+    "endpoints_to_signature",
+    "extract_requirement_summary",
+    "language_instruction",
+]
 
-#: Canonical error contract shared by BOTH generation phases and the review
-#: pass. Defining it ONCE here (injected into every system prompt) is what
-#: prevents Phase 1 and Phase 2 from inventing two different, contradictory
-#: status-code / error-code conventions (the "spec inconsistency" defect).
-ERROR_CONTRACT = (
-    " ERROR CONTRACT (FALLBACK - applies ONLY where the requirement text or the "
-    "Authoritative Value Table of this run already specifies the status code; "
-    "spec and requirements always win over these defaults; both phases and "
-    "review must agree): "
-    "2xx = 200 OK / 201 Created / 204 No Content. "
-    "400 BAD_REQUEST for ALL client-input errors, with error.code: "
-    "'VALIDATION_ERROR' + error.details.<field> for body validation (e.g. password "
-    "length, email format); 'INVALID_<NAME>' for bad path/query params (INVALID_ID, "
-    "INVALID_PAGE, INVALID_LIMIT); 'MALFORMED_JSON' for unparseable body. "
-    "Do NOT use 422 — use 400. "
-    "401 UNAUTHORIZED = missing / invalid / expired token. "
-    "403 FORBIDDEN = authenticated but wrong role (non-admin on an admin endpoint). "
-    "404 NOT_FOUND = unknown resource id. "
-    "409 DUPLICATE_<FIELD> = unique-constraint violation (DUPLICATE_EMAIL). "
-    "415 UNSUPPORTED_MEDIA_TYPE = wrong Content-Type. "
-    "429 TOO_MANY_REQUESTS = rate limit / account lockout."
-)
-
-
-#: System-prompt bases, hoisted out of the legacy ``build_*`` builders so the
-#: conversation chain (plan-k B7.2, which renders ``tasks/<pkg>/prompts``) and
-#: the frozen generators compose byte-identical prompts from ONE holder until
-#: B7.3 deletes those builders.
-TESTCASE_SYSTEM_BASE = (
-    "You are a senior QA engineer. Generate comprehensive, well-structured "
-    "test cases from requirements and API specifications. Output only valid JSON. "
-    "Keep the total output within the model's token limit: prefer a focused set "
-    "of high-value cases with concise descriptions and steps over exhaustive "
-    "coverage, so the response is never cut off mid-JSON."
-)
-TESTCASE_HISTORICAL_SUFFIX = (
-    " Historical test cases are provided as a baseline — generate ONLY "
-    "net-new or updated cases that are NOT already covered by the baseline."
-)
-K6_SYSTEM_BASE = (
-    "You are an expert k6 performance engineer. Output only complete, runnable k6 JavaScript."
-)
-JMETER_SYSTEM_BASE = (
-    "You are an expert JMeter performance engineer. Output only complete, valid JMeter JMX XML."
-)
-GUI_SYSTEM_BASE = (
-    "You are a senior QA automation engineer specializing in Playwright "
-    "and pytest. Generate complete, runnable, maintainable GUI test "
-    "scripts. Output only valid Python code."
-)
 
 #: Task packages live next to the source tree; the composition root passes the
 #: configured ``TASKS_DIR`` in.
@@ -174,15 +151,12 @@ class PromptBuilder:
         if extra_context and isinstance(extra_context.get("historical_cases"), str):
             historical_cases = extra_context["historical_cases"]
 
-        system_prompt = TESTCASE_SYSTEM_BASE
-        if historical_cases:
-            system_prompt += TESTCASE_HISTORICAL_SUFFIX
-        lang_hint = self.language_instruction(output_language)
-        if lang_hint:
-            system_prompt += " " + lang_hint
-        system_prompt += ERROR_CONTRACT
-        if json_mode:
-            system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
+        system_prompt = compose_system_prompt(
+            TESTCASE_SYSTEM_BASE,
+            output_language=output_language,
+            json_mode=json_mode,
+            with_historical_suffix=bool(historical_cases),
+        )
 
         context = {
             "endpoints": endpoints_text,
@@ -210,20 +184,9 @@ class PromptBuilder:
 
     @staticmethod
     def _append_authoritative_table(user_prompt: str, table: str) -> str:
-        """T9: attach the run's authoritative value table to the user prompt.
-
-        Empty tables (no findings / feature not wired) leave the prompt
-        byte-identical, keeping construction sites without the table on the
-        legacy behavior.
-        """
-        if not table.strip():
-            return user_prompt
-        return (
-            f"{user_prompt}\n\n---\n"
-            "AUTHORITATIVE VALUE TABLE (this run - these decisions override the "
-            "generic error contract below; rows marked conflict_unresolved must "
-            f"stay explicitly unresolved in the cases):\n{table.rstrip()}\n"
-        )
+        """T9: attach the run's authoritative value table (rules live in
+        ``config/prompt_contract``, which the task-package chain shares)."""
+        return append_authoritative_table(user_prompt, table)
 
     def build_api_prompt(
         self,
@@ -239,17 +202,9 @@ class PromptBuilder:
         This is phase 2: generates boundary, security, integration cases
         that require API-level details (parameters, request body, status codes).
         """
-        system_prompt = (
-            "You are a senior QA engineer specializing in API testing. "
-            "Generate boundary, security, and integration test cases. "
-            "Output only valid JSON."
+        system_prompt = compose_system_prompt(
+            API_SYSTEM_BASE, output_language=output_language, json_mode=json_mode
         )
-        lang_hint = self.language_instruction(output_language)
-        if lang_hint:
-            system_prompt += " " + lang_hint
-        system_prompt += ERROR_CONTRACT
-        if json_mode:
-            system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
 
         context = {
             "endpoints": endpoints_text,
@@ -341,17 +296,9 @@ class PromptBuilder:
 
         Runs as a fresh conversation with no prior context.
         """
-        system_prompt = (
-            "You are a meticulous senior QA reviewer. You detect gaps, inconsistencies and "
-            "weak assertions in generated test cases, then produce a complete, improved list. "
-            "Output only valid JSON."
+        system_prompt = compose_system_prompt(
+            REVIEW_SYSTEM_BASE, output_language=output_language, json_mode=json_mode
         )
-        lang_hint = self.language_instruction(output_language)
-        if lang_hint:
-            system_prompt += " " + lang_hint
-        system_prompt += ERROR_CONTRACT
-        if json_mode:
-            system_prompt += JSON_MODE_TEST_CASES_INSTRUCTION
 
         context = {
             "endpoints": endpoints_text,
@@ -507,18 +454,12 @@ class PromptBuilder:
 
     @staticmethod
     def language_instruction(output_language: str, code_context: bool = False) -> str:
-        """Return a language instruction snippet for prompts."""
-        if output_language == "chinese":
-            if code_context:
-                return (
-                    "Write all script comments, user-facing labels and summary text in "
-                    "Simplified Chinese (keep code keywords and identifiers in English)."
-                )
-            return (
-                "Write all text fields (title, description, preconditions, steps, "
-                "expected_results, tags) in Simplified Chinese."
-            )
-        return ""
+        """Return a language instruction snippet for prompts.
+
+        Delegates to :func:`testagent.config.prompt_contract.language_instruction`
+        — one holder of the wording, shared with the task-package chain.
+        """
+        return language_instruction(output_language, code_context=code_context)
 
     def _build_inline_testcase_prompt(
         self, endpoints: str, requirements: str, json_mode: bool = False, **kwargs: Any
@@ -872,92 +813,6 @@ def extract_requirement_summary(user_prompt: str, max_chars: int) -> str | None:
     if len(text) > max_chars:
         return text[:max_chars] + "\n... [truncated]"
     return text
-
-
-def _format_param_rich(name: str, schema: Any, required: bool) -> str:
-    """Format one parameter as ``name(type,req|opt[,min=..][,max=..][,default=..][,enum:..])``.
-
-    Rich variant of :func:`_format_param` (T3, fix-plan RC-4): adds the
-    numeric bounds / default constraints that boundary and pagination cases
-    need. Kept SEPARATE from the frozen ``_format_param`` so existing
-    signature output (the perf parity fingerprint surface and the truncation
-    continuation prompts) stays byte-identical.
-    """
-    schema = schema if isinstance(schema, dict) else {}
-    t = schema.get("type", "?")
-    extra = ""
-    for key, label in (("minimum", "min"), ("maximum", "max"), ("default", "default")):
-        if schema.get(key) is not None:
-            extra += f",{label}={schema[key]}"
-    if schema.get("enum"):
-        extra += ",enum:" + "|".join(str(e) for e in schema["enum"])
-    return f"{name}({t},{'req' if required else 'opt'}{extra})"
-
-
-def _render_response_schemas(ep: APIEndpoint) -> str:
-    """Render documented response schemas, or the undefined-schema marker.
-
-    With schemas: ``responses:[200:object{data(array),total(integer)},404:object{message(string)}]``.
-    Without any: the explicit honesty marker from fix-plan RC-4 so the model
-    never invents envelope / pagination shapes.
-    """
-    schemas = ep.response_schemas or {}
-    if not schemas:
-        return " (response schema undefined - do not assume envelope shape)"
-    chunks: list[str] = []
-    for status in sorted(schemas, key=str):
-        schema = schemas[status] if isinstance(schemas[status], dict) else {}
-        top_type = schema.get("type", "?")
-        props = schema.get("properties")
-        if not isinstance(props, dict) or not props:
-            chunks.append(f"{status}:{top_type}")
-            continue
-        req_set = set(schema.get("required", []) or [])
-        rparts = [_format_param_rich(k, v or {}, k in req_set) for k, v in props.items()]
-        chunks.append(f"{status}:{top_type}{{{', '.join(sorted(rparts))}}}")
-    return f" responses:[{', '.join(chunks)}]"
-
-
-def endpoints_to_rich_signature(endpoints: list[APIEndpoint]) -> str:
-    """Rich endpoint signature for the main generation chain (T3, fix-plan RC-4).
-
-    Extends the compact signature idea with parameter bounds/defaults
-    (``age(integer,req,min=0)``, ``limit(integer,opt,min=1,max=100,default=20)``)
-    and the documented response schemas keyed by status code. Endpoints that
-    document no response schema carry the explicit marker
-    ``response schema undefined - do not assume envelope shape``.
-
-    ADDITIVE on purpose: :func:`endpoints_to_signature` output is a frozen
-    fingerprint surface (perf generator + truncation continuation prompts)
-    and must never change; the main testcase chain switches to THIS function.
-    """
-    lines: list[str] = []
-    for ep in endpoints:
-        parts: list[str] = []
-        for p in ep.parameters or []:
-            if not isinstance(p, dict):
-                continue
-            schema = p.get("schema")
-            if not isinstance(schema, dict):
-                # Swagger 2.0 params carry type/enum/bounds at the top level.
-                schema = {
-                    k: p[k] for k in ("type", "enum", "minimum", "maximum", "default") if k in p
-                }
-            parts.append(
-                _format_param_rich(str(p.get("name", "")), schema, bool(p.get("required", False)))
-            )
-        line = f"- {ep.method} {ep.path}"
-        if parts:
-            line += f" params:[{', '.join(sorted(parts))}]"
-        body = ep.request_body or {}
-        props = (body.get("schema") or {}).get("properties", {}) if isinstance(body, dict) else {}
-        if isinstance(props, dict) and props:
-            req_set = set((body.get("schema") or {}).get("required") or [])
-            bparts = [_format_param_rich(k, v or {}, k in req_set) for k, v in props.items()]
-            line += f" body:[{', '.join(sorted(bparts))}]"
-        line += _render_response_schemas(ep)
-        lines.append(line)
-    return "\n".join(lines)
 
 
 def _truncate_marker(text: str, limit: int) -> str:

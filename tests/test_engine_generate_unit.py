@@ -27,11 +27,13 @@ class ScriptedLLM:
         self._responses = list(responses)
         self._finish = finish
         self.calls = 0
+        self.formats: list[object] = []
 
     async def achat_with_meta(
         self, system_prompt, user_prompt, response_format=None, max_tokens=None
     ):
         self.calls += 1
+        self.formats.append(response_format)
         text = self._responses.pop(0) if self._responses else ""
         return LLMResponse(
             text=text, finish_reason=self._finish, completion_tokens=max_tokens or 10
@@ -128,6 +130,27 @@ class TestEngineGenerateUnit:
         result = await unit(_Task(), _STAGE, "batch 1/1", _unit_ctx(_EPS), _ctx(_EPS), "s2")
         assert result.status is UnitStatus.SUCCESS
         assert llm.calls >= 2, "engine must continue after salvage"
+
+    async def test_json_mode_reaches_the_provider(self) -> None:
+        """OPENAI_JSON_MODE must change the request, not only the prompt text.
+
+        The engine maps the flag to ``response_format``; a unit builder that
+        hardcodes it off sends a prompt promising a JSON object and asks the
+        provider for a plain completion.
+        """
+        from testagent.engine.llm_client import JSON_OBJECT_FORMAT
+
+        wrapped = json.dumps({"test_cases": json.loads(_VALID)})
+        llm = ScriptedLLM([wrapped])
+        unit = build_engine_generate_unit(llm, output_token_cap=_CAP, json_mode=True)  # type: ignore[arg-type]
+        result = await unit(_Task(), _STAGE, "batch 1/1", _unit_ctx(_EPS), _ctx(_EPS), "s1")
+        assert result.status is UnitStatus.SUCCESS, result
+        assert llm.formats and llm.formats[0] == JSON_OBJECT_FORMAT, llm.formats
+
+        off = ScriptedLLM([_VALID])
+        plain = build_engine_generate_unit(off, output_token_cap=_CAP)  # type: ignore[arg-type]
+        await plain(_Task(), _STAGE, "batch 1/1", _unit_ctx(_EPS), _ctx(_EPS), "s2")
+        assert off.formats and off.formats[0] is None, off.formats
 
     async def test_budget_exhausted_maps_empty(self) -> None:
         """Repeatedly empty responses: engine ladder exhausts -> EMPTY (the

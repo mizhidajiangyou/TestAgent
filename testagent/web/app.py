@@ -28,7 +28,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -82,6 +82,15 @@ class GenerateRequest(BaseModel):
         default=None, description="Optional Swagger/OpenAPI URL or path."
     )
     output_format: str = Field(default="json", description="One of: json, csv, markdown.")
+    links: bool = Field(
+        default=False,
+        description=(
+            "Opt this request into the links pass (endpoint relationship graph, "
+            "L3a clustering, L3b path units and the Gate report). Needs "
+            "LINKS_ENABLED=true; the response then carries the same "
+            "``links_report`` object the run sidecar records."
+        ),
+    )
     historical_cases: list[dict[str, Any]] | None = Field(
         default=None,
         description=(
@@ -183,7 +192,7 @@ def create_app(container: Container | None = None) -> FastAPI:
         )
 
     @app.post("/api/generate", response_model=GenerateResponse, tags=["generate"])
-    async def generate(req: GenerateRequest) -> GenerateResponse:
+    async def generate(req: GenerateRequest) -> GenerateResponse | JSONResponse:
         """Generate test cases from requirement text on the task pipeline.
 
         Contract note: every status code and error string below is pinned by a
@@ -262,7 +271,7 @@ def create_app(container: Container | None = None) -> FastAPI:
             container, cases, cases_dicts, req.output_format
         )
 
-        return GenerateResponse(
+        response = GenerateResponse(
             count=len(cases),
             test_cases=cases_dicts,
             output_format=req.output_format,
@@ -272,6 +281,15 @@ def create_app(container: Container | None = None) -> FastAPI:
             session_id=session_id,
             historical_count=len(historical),
         )
+        # v15 §8.3: the web shows the SAME report object the sidecar recorded —
+        # no recomputed rates, no second coverage definition. The key appears
+        # only when a links run produced one, so a links-off response keeps its
+        # frozen byte shape.
+        if getattr(result, "links_report", None):
+            payload = response.model_dump()
+            payload["links_report"] = result.links_report
+            return JSONResponse(payload)
+        return response
 
     @app.get("/api/download/{fmt}", tags=["generate"])
     def download_endpoint() -> None:
@@ -292,7 +310,7 @@ def create_app(container: Container | None = None) -> FastAPI:
 # ---------------------------------------------------------------------------
 
 
-def _stage_request_inputs(tmpdir: Path, req: GenerateRequest) -> dict[str, str]:
+def _stage_request_inputs(tmpdir: Path, req: GenerateRequest) -> dict[str, Any]:
     """Map the HTTP request onto ``tasks/testcase`` inputs.
 
     Package inputs are paths (the same parsers the CLI uses), so inline request
@@ -301,7 +319,9 @@ def _stage_request_inputs(tmpdir: Path, req: GenerateRequest) -> dict[str, str]:
     """
     req_path = tmpdir / "requirements.md"
     req_path.write_text(req.requirements, encoding="utf-8")
-    raw: dict[str, str] = {"requirements": str(req_path)}
+    raw: dict[str, Any] = {"requirements": str(req_path)}
+    if req.links:
+        raw["links"] = True
     if req.swagger_url:
         raw["swagger"] = req.swagger_url
     if req.historical_cases:
@@ -312,7 +332,7 @@ def _stage_request_inputs(tmpdir: Path, req: GenerateRequest) -> dict[str, str]:
 
 
 def _case_to_http_dict(tc: TestCase) -> dict[str, Any]:
-    """One case → the HTTP response shape (the 17-key ``testcase_to_full_dict``).
+    """One case → the HTTP response shape (the 19-key ``testcase_to_full_dict``).
 
     Owned by the web contract, pinned by the ``web_contract`` fixtures: the
     pipeline's own artifact dict is the 10-key narrative form, while the API has

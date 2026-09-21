@@ -14,7 +14,7 @@ from dependency_injector import containers, providers
 from testagent.config.settings import Settings, get_settings
 from testagent.engine.conversation import ConversationManager
 from testagent.engine.llm_client import create_llm_client
-from testagent.engine.prompt_builder import PromptBuilder
+from testagent.engine.prompt_builder import PromptBuilder, endpoints_to_rich_signature
 from testagent.engine.session_store import create_session_store
 from testagent.engine.truncation import TruncationPolicy
 from testagent.generators.gui_test_generator import GUITestGenerator
@@ -90,11 +90,19 @@ class Container(containers.DeclarativeContainer):
             build_engine_generate_unit,
             llm=llm_client.provided,
             output_token_cap=settings.provided.llm.max_output_tokens,
+            # Same reason as the cap: the engine decides ``response_format``
+            # from this flag, so a hardcoded value would silently never ask for
+            # JSON mode even with OPENAI_JSON_MODE=true.
+            json_mode=settings.provided.llm.json_mode,
         ),
         review_runner=providers.Callable(
             build_review_runner,
             llm=llm_client.provided,
         ),
+        # Injected because pipeline modules may not import the legacy prompt
+        # layer (B4.11); the links L0 index renders endpoints with the same
+        # rich signature the generation prompts use.
+        links_signature_fn=endpoints_to_rich_signature,
     )
 
     # Factory (defect ⑨, 2026-09-19 review): agenerate writes per-session

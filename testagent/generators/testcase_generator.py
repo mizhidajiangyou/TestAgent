@@ -35,6 +35,7 @@ from testagent.config.models import (
     TestPriority,
     TestType,
 )
+from testagent.config.prompt_contract import case_coverage_text, coverage_block
 from testagent.engine.concurrency import gather_with_concurrency
 from testagent.engine.llm_client import JSON_OBJECT_FORMAT, LLMClient
 from testagent.engine.prompt_builder import (
@@ -70,7 +71,7 @@ from testagent.pipeline.obligations import (
     ObligationRegistry,
     register_spec_obligations,
 )
-from testagent.pipeline.scenario import dedup_cases, render_dedup_report
+from testagent.pipeline.scenario import covered_identities, dedup_cases, render_dedup_report
 
 logger = logging.getLogger(__name__)
 
@@ -452,15 +453,9 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
     @staticmethod
     def _covered_identities(cases: list[TestCase]) -> list[dict[str, str]]:
-        return [
-            {
-                "operation": tc.scenario_operation,
-                "scene": tc.scenario_scene,
-                "variant": tc.scenario_variant,
-            }
-            for tc in cases
-            if tc.scenario_operation and tc.scenario_scene
-        ]
+        """Delegates to ``pipeline.scenario.covered_identities`` — one rule for
+        both chains (T8)."""
+        return covered_identities(cases)
 
     def _global_identity_dedup(self, cases: list[TestCase]) -> list[TestCase]:
         """T8 wiring 3/3: final global identity dedup over merged cases."""
@@ -625,18 +620,14 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
         if requirements and endpoints:
             # Feed Phase 1 coverage into Phase 2 so it does NOT regenerate the
             # same scenarios (kills cross-phase duplication / inconsistency).
-            covered_text = self._historical_cases_to_text(phase1_cases)
-            # T8 wiring 2/3: STRUCTURED covered-identity list (not a text
-            # summary) so Phase 2 avoids regenerating the same identity.
-            covered_identities = self._covered_identities(phase1_cases)
-            if covered_identities:
-                covered_text = (
-                    f"{covered_text}\n\nAlready-covered scenario identities "
-                    "(do NOT regenerate these operation+scene+variant combinations):\n"
-                    + json.dumps(covered_identities, ensure_ascii=False)
-                )
+            # T8 wiring 2/3: the structured identity list rides along inside
+            # the same block (``prompt_contract.coverage_block``).
             api_cases = self._generate_api_specific(
-                endpoints, requirements, already_covered=covered_text
+                endpoints,
+                requirements,
+                already_covered=coverage_block(
+                    phase1_cases, self._covered_identities(phase1_cases)
+                ),
             )
             all_cases.extend(api_cases)
 
@@ -740,16 +731,12 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
             return []
 
         if requirements and endpoints:
-            covered_text = self._historical_cases_to_text(phase1_cases)
-            covered_identities = self._covered_identities(phase1_cases)
-            if covered_identities:
-                covered_text = (
-                    f"{covered_text}\n\nAlready-covered scenario identities "
-                    "(do NOT regenerate these operation+scene+variant combinations):\n"
-                    + json.dumps(covered_identities, ensure_ascii=False)
-                )
             api_cases = await self._agenerate_api_specific(
-                endpoints, requirements, already_covered=covered_text
+                endpoints,
+                requirements,
+                already_covered=coverage_block(
+                    phase1_cases, self._covered_identities(phase1_cases)
+                ),
             )
             all_cases.extend(api_cases)
 
@@ -1600,25 +1587,11 @@ class TestCaseGenerator(BaseGenerator[TestCaseGenInput, list[TestCase]]):
 
     @staticmethod
     def _historical_cases_to_text(cases: list[TestCase] | None) -> str:
-        """Render historical cases as a compact text summary for prompt injection.
-
-        Includes id, title, endpoint, test_type and a one-line description so
-        the LLM can see what's already covered and avoid regenerating the same
-        scenarios.
-        """
-        if not cases:
-            return ""
-        lines = [f"Total existing cases: {len(cases)}", ""]
-        for tc in cases:
-            line = f"- [{tc.id}] {tc.title} | {tc.endpoint.full_path} | {tc.test_type.value}"
-            if tc.description:
-                # Truncate long descriptions to keep the prompt compact.
-                desc = tc.description[:120]
-                if len(tc.description) > 120:
-                    desc += "..."
-                line += f" | {desc}"
-            lines.append(line)
-        return "\n".join(lines)
+        """Render historical cases as a compact text summary for prompt
+        injection. Delegates to ``config.prompt_contract.case_coverage_text``
+        — the task-package chain renders the same block (plan-k B6b finding:
+        two holders of this text is how Phase 2 lost its coverage input)."""
+        return case_coverage_text(cases)
 
     @staticmethod
     def _merge_historical_cases(

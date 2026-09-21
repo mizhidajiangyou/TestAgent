@@ -27,6 +27,7 @@
             "Status code is 200"
           ],
           "id": "TC-001",
+          "path_id": "",
           "preconditions": [
             "User is authenticated"
           ],
@@ -34,6 +35,7 @@
           "scenario_operation": "",
           "scenario_scene": "",
           "scenario_variant": "",
+          "source_stage": "",
           "steps": [
             "Send GET request to /users"
           ],
@@ -60,11 +62,13 @@
           },
           "expected_results": [],
           "id": "TC-002",
+          "path_id": "",
           "preconditions": [],
           "priority": "medium",
           "scenario_operation": "",
           "scenario_scene": "",
           "scenario_variant": "",
+          "source_stage": "",
           "steps": [],
           "tags": [],
           "test_type": "functional",
@@ -89,6 +93,7 @@
             "Status code is 200"
           ],
           "id": "TC-003",
+          "path_id": "",
           "preconditions": [
             "User is authenticated"
           ],
@@ -96,6 +101,7 @@
           "scenario_operation": "",
           "scenario_scene": "",
           "scenario_variant": "",
+          "source_stage": "",
           "steps": [
             "Send GET request to /users"
           ],
@@ -124,11 +130,13 @@
             "Status code is 201"
           ],
           "id": "TC-004",
+          "path_id": "",
           "preconditions": [],
           "priority": "medium",
           "scenario_operation": "",
           "scenario_scene": "",
           "scenario_variant": "",
+          "source_stage": "",
           "steps": [
             "Send POST request with valid body"
           ],
@@ -178,12 +186,12 @@
     "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
   },
   "meta": {
-    "git_sha": "75680a474463",
+    "git_sha": "242d3865faa9",
     "layer": "http-contract",
     "normalized": [
       "session_id"
     ],
-    "recorded_utc": "2026-09-19T14:43:40.237369+00:00"
+    "recorded_utc": "2026-09-20T13:10:04.022554+00:00"
   },
   "name": "ok-historical",
   "request_trace": [],

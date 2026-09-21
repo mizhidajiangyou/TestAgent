@@ -23,6 +23,7 @@ from typing import Any
 
 __all__ = [
     "SCENE_VOCABULARY",
+    "covered_identities",
     "dedup_cases",
     "dedup_key",
     "identity_missing_keys",
@@ -105,6 +106,25 @@ def _identity_of(case: dict[str, Any]) -> tuple[str, str, str]:
         str(case.get("scenario_scene", "") or ""),
         str(case.get("scenario_variant", "") or ""),
     )
+
+
+def covered_identities(cases: Iterable[Any]) -> list[dict[str, str]]:
+    """The declared identities a later phase must NOT regenerate (T8).
+
+    Injected into the Phase 2 prompt alongside the case summary: the summary
+    says what exists, this says which operation+scene+variant combinations are
+    already taken. Cases without a complete identity are absent by design —
+    the program does not guess intent from natural language.
+    """
+    return [
+        {
+            "operation": tc.scenario_operation,
+            "scene": tc.scenario_scene,
+            "variant": tc.scenario_variant,
+        }
+        for tc in cases
+        if getattr(tc, "scenario_operation", "") and getattr(tc, "scenario_scene", "")
+    ]
 
 
 def identity_missing_keys(cases: Iterable[dict[str, Any]]) -> list[str]:

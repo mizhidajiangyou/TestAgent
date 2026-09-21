@@ -29,13 +29,22 @@ def make_units(stage: StageSpec, ctx: TaskContext) -> list[tuple[str, dict[str, 
             (f"{stage.name} {i}/{len(items)}", {**ctx.parsed, "_unit_item": it})
             for i, it in enumerate(items, 1)
         ]
-    # batch
-    batches = [
-        items[i : i + split.batch_size] for i in range(0, len(items), max(1, split.batch_size))
-    ]
+
+    # batch — and "clusters" without a links pass, which must produce the very
+    # same groups AND label format so a links-off run keeps its recorded
+    # prompt fingerprints (LINK-S5b).
+    def _sized_batches() -> list[list[Any]]:
+        size = max(1, split.batch_size)
+        return [items[i : i + size] for i in range(0, len(items), size)]
+
+    groups = _sized_batches()
+    if split.by == "clusters":
+        links = getattr(ctx, "links", None)
+        if links is not None:
+            groups = links.clusters_for(list(items))
     return [
-        (f"{stage.name} batch {i}/{len(batches)}", {**ctx.parsed, "_unit_batch": b})
-        for i, b in enumerate(batches, 1)
+        (f"{stage.name} batch {i}/{len(groups)}", {**ctx.parsed, "_unit_batch": g})
+        for i, g in enumerate(groups, 1)
     ]
 
 

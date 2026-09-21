@@ -119,7 +119,8 @@ def testcase_to_dict(tc: TestCase) -> dict[str, Any]:
 
 
 def testcase_to_full_dict(tc: TestCase) -> dict[str, Any]:
-    """TestCase → the 17-key document (engine dict + quality columns).
+    """TestCase → the 19-key document (engine dict + quality and provenance
+    columns).
 
     This is the shape the quality passes read (``semantic_validation``,
     ``placeholder_closure_metrics``, ``grade_case``) and the shape the web API
@@ -139,6 +140,11 @@ def testcase_to_full_dict(tc: TestCase) -> dict[str, Any]:
         "covers_obligations": tc.covers_obligations,
         "binds": tc.binds,
         "executability": tc.executability,
+        # Program-stamped provenance (v15 §6.1): dropping them here is what made
+        # an L3b case indistinguishable from a phase case in the artifact, the
+        # CSV and the HTTP contract — and Gate 2 reads them from that shape.
+        "path_id": tc.path_id,
+        "source_stage": tc.source_stage,
         "priority": tc.priority.value,
         "preconditions": tc.preconditions,
         "steps": tc.steps,

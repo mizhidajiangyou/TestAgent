@@ -16,12 +16,12 @@
     "requirements": "# User Management\nUsers can be created, listed, and deleted.\n\nAcceptance Criteria:\n- User can register\n- User can login\n"
   },
   "meta": {
-    "git_sha": "75680a474463",
+    "git_sha": "242d3865faa9",
     "layer": "http-contract",
     "normalized": [
       "session_id"
     ],
-    "recorded_utc": "2026-09-19T14:43:40.273996+00:00"
+    "recorded_utc": "2026-09-20T13:10:04.049904+00:00"
   },
   "name": "err-bad-format",
   "request_trace": [],

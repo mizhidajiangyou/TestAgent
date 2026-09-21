@@ -116,6 +116,7 @@
     }
   },
   "session": { "record": true, "resume": true },
+  "prompt_views": {"endpoints": "text"},
   "template_context": {
     "endpoints_text": "GET /items - list items\nPOST /items - create item",
     "script_format": "k6",

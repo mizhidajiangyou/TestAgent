@@ -19,6 +19,7 @@
         "200 and the payload matches"
       ],
       "id": "TC-001",
+      "path_id": "",
       "preconditions": [
         "user exists"
       ],
@@ -26,6 +27,7 @@
       "scenario_operation": "",
       "scenario_scene": "",
       "scenario_variant": "",
+      "source_stage": "",
       "steps": [
         "call GET /users"
       ],
@@ -54,6 +56,7 @@
         "200 and the payload matches"
       ],
       "id": "TC-002",
+      "path_id": "",
       "preconditions": [
         "user exists"
       ],
@@ -61,6 +64,7 @@
       "scenario_operation": "",
       "scenario_scene": "",
       "scenario_variant": "",
+      "source_stage": "",
       "steps": [
         "call POST /users"
       ],
@@ -103,8 +107,8 @@
     "swagger": "spec.json"
   },
   "meta": {
-    "git_sha": "75680a474463",
-    "recorded_utc": "2026-09-19T14:43:06.698171+00:00",
+    "git_sha": "242d3865faa9",
+    "recorded_utc": "2026-09-20T13:10:06.526491+00:00",
     "review_enabled": false
   },
   "name": "tc-a4-empty-unit",
@@ -116,8 +120,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "e71d524d6107ab776fa31e866e26cf76242e1ea7dcc7160555fdef7693b79db5"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "9da24a9deb92864e3e28ae9919423a260b7388e53e296b4e19945636c1610408"
     },
     {
       "label": "",
@@ -126,8 +130,8 @@
         "max_tokens": 16000
       },
       "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"description\": \"list users on GET /users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call GET /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"description\": \"create user on POST /users\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call POST /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}]",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "5eea7ae3d167d54a86e73ae2ab7f0bd5a74aea3a51870ade7d203dc602c6513a"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "bf2695757416bcb0b7ff84cfd7b1e68674413d95e7fb8ad003d1bb1c899dcf3b"
     },
     {
       "label": "",
@@ -136,8 +140,8 @@
         "max_tokens": 16000
       },
       "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"description\": \"list users on GET /users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call GET /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"description\": \"create user on POST /users\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call POST /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}]",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "fa234b85d6f2d23b2c78821f15edb9ca3b76b98a6a63a2e1ca06c123af7d9c13"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "e0797716bc1d233dc51e4d74e0df9a6a5feaedd3fe1ff7437b134405e9fc3200"
     },
     {
       "label": "",
@@ -146,8 +150,8 @@
         "max_tokens": 16000
       },
       "response_text": "[{\"id\": \"TC-XXX\", \"title\": \"list users\", \"description\": \"list users on GET /users\", \"endpoint\": \"GET /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call GET /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}, {\"id\": \"TC-XXX\", \"title\": \"create user\", \"description\": \"create user on POST /users\", \"endpoint\": \"POST /users\", \"test_type\": \"functional\", \"priority\": \"high\", \"preconditions\": [\"user exists\"], \"steps\": [\"call POST /users\"], \"expected_results\": [\"200 and the payload matches\"], \"tags\": [\"smoke\"]}]",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "fa234b85d6f2d23b2c78821f15edb9ca3b76b98a6a63a2e1ca06c123af7d9c13"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "e0797716bc1d233dc51e4d74e0df9a6a5feaedd3fe1ff7437b134405e9fc3200"
     },
     {
       "label": "",
@@ -156,8 +160,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "6da47c0c6d5d8d07f78469288fbcd0ba2b931869b920d036767083619aba07af"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "9f293c5263f9f8731881f4a529af89f0a704a7b621104630066a57ed61b0f767"
     },
     {
       "label": "",
@@ -166,8 +170,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "5eea7ae3d167d54a86e73ae2ab7f0bd5a74aea3a51870ade7d203dc602c6513a"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "bf2695757416bcb0b7ff84cfd7b1e68674413d95e7fb8ad003d1bb1c899dcf3b"
     },
     {
       "label": "",
@@ -176,8 +180,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "5eea7ae3d167d54a86e73ae2ab7f0bd5a74aea3a51870ade7d203dc602c6513a"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "bf2695757416bcb0b7ff84cfd7b1e68674413d95e7fb8ad003d1bb1c899dcf3b"
     },
     {
       "label": "",
@@ -186,8 +190,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "e71d524d6107ab776fa31e866e26cf76242e1ea7dcc7160555fdef7693b79db5"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "97c71a435e9d2c1b02efb0e4c6ee7eeff9b6dbaad7db95e22e3d36e81103c848"
     },
     {
       "label": "",
@@ -196,8 +200,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "7f00a71314746b004ac9d5f82627210b7c629ee67d0d2b2a949b7e150f09dec3"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "23e632e22eeb112fe394abf9d6b1fe0f56fe066b5905c18aab5ccc4a15582cf1"
     },
     {
       "label": "",
@@ -206,8 +210,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "7f00a71314746b004ac9d5f82627210b7c629ee67d0d2b2a949b7e150f09dec3"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "23e632e22eeb112fe394abf9d6b1fe0f56fe066b5905c18aab5ccc4a15582cf1"
     },
     {
       "label": "",
@@ -216,8 +220,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "e71d524d6107ab776fa31e866e26cf76242e1ea7dcc7160555fdef7693b79db5"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "d3d8c949d0c42ec65565f2ce69d90e190ec6dad0a91ac04509ba48c256d7a65e"
     },
     {
       "label": "",
@@ -226,8 +230,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "ef357c71ca389d047940c9087d91126382f1df287cbff05e3fcd817b37d87b52"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "4889fc53782c3492166005776f46ba64ef8f0b43452c031c53d8dc6046e8f14c"
     },
     {
       "label": "",
@@ -236,8 +240,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "ef357c71ca389d047940c9087d91126382f1df287cbff05e3fcd817b37d87b52"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "4889fc53782c3492166005776f46ba64ef8f0b43452c031c53d8dc6046e8f14c"
     },
     {
       "label": "",
@@ -246,8 +250,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "e71d524d6107ab776fa31e866e26cf76242e1ea7dcc7160555fdef7693b79db5"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "97c71a435e9d2c1b02efb0e4c6ee7eeff9b6dbaad7db95e22e3d36e81103c848"
     },
     {
       "label": "",
@@ -256,8 +260,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "7f00a71314746b004ac9d5f82627210b7c629ee67d0d2b2a949b7e150f09dec3"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "23e632e22eeb112fe394abf9d6b1fe0f56fe066b5905c18aab5ccc4a15582cf1"
     },
     {
       "label": "",
@@ -266,8 +270,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "7f00a71314746b004ac9d5f82627210b7c629ee67d0d2b2a949b7e150f09dec3"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "23e632e22eeb112fe394abf9d6b1fe0f56fe066b5905c18aab5ccc4a15582cf1"
     },
     {
       "label": "",
@@ -276,8 +280,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "e71d524d6107ab776fa31e866e26cf76242e1ea7dcc7160555fdef7693b79db5"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "d3d8c949d0c42ec65565f2ce69d90e190ec6dad0a91ac04509ba48c256d7a65e"
     },
     {
       "label": "",
@@ -286,8 +290,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "ef357c71ca389d047940c9087d91126382f1df287cbff05e3fcd817b37d87b52"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "4889fc53782c3492166005776f46ba64ef8f0b43452c031c53d8dc6046e8f14c"
     },
     {
       "label": "",
@@ -296,8 +300,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "8230c8ee3f105aaa4b8ec459a60d54ed0e48a1d797b2eb958d32e81e05db068c",
-      "user_sha256": "ef357c71ca389d047940c9087d91126382f1df287cbff05e3fcd817b37d87b52"
+      "system_sha256": "e63871c3ef6c910db3cdf7f93932b9b2bdf5e500be9e2139b3719d91e1668e62",
+      "user_sha256": "4889fc53782c3492166005776f46ba64ef8f0b43452c031c53d8dc6046e8f14c"
     },
     {
       "label": "",
@@ -306,8 +310,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "370f7a3a2080be485223357fb8a389d08d7ada7c1a24f98e781cbd9dba68a858",
-      "user_sha256": "86ba7e3f8ed59405c031b55d7f4cc5ff648eb8f1b1fcf649f40d6d394250a004"
+      "system_sha256": "8bf0a709aaed66ffd744c070883ca24b838a6178691b786657abefc1ec0d412b",
+      "user_sha256": "d7d88a9be95987e4553946639df2d7ff203b59c698ab30a482695c6352c6ec3d"
     },
     {
       "label": "",
@@ -316,8 +320,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "370f7a3a2080be485223357fb8a389d08d7ada7c1a24f98e781cbd9dba68a858",
-      "user_sha256": "1288f399c0b3cee9ccd799e589c379e0e3891465553bebc8c45e79195c814d89"
+      "system_sha256": "8bf0a709aaed66ffd744c070883ca24b838a6178691b786657abefc1ec0d412b",
+      "user_sha256": "409931b9316acb96ccb195a8d94c2e2b450e604b4e3a0636bf5559edf2f36961"
     },
     {
       "label": "",
@@ -326,8 +330,8 @@
         "max_tokens": 16000
       },
       "response_text": "",
-      "system_sha256": "370f7a3a2080be485223357fb8a389d08d7ada7c1a24f98e781cbd9dba68a858",
-      "user_sha256": "1288f399c0b3cee9ccd799e589c379e0e3891465553bebc8c45e79195c814d89"
+      "system_sha256": "8bf0a709aaed66ffd744c070883ca24b838a6178691b786657abefc1ec0d412b",
+      "user_sha256": "409931b9316acb96ccb195a8d94c2e2b450e604b4e3a0636bf5559edf2f36961"
     }
   ],
   "task": "testcase"

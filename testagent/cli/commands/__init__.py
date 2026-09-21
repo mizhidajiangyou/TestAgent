@@ -12,6 +12,7 @@ from testagent.cli.commands import (  # noqa: F401  (registration side-effect)
     generate_gui,
     generate_perf,
     generate_tests,
+    links,
     review,
     serve,
     tasks,

@@ -11,8 +11,8 @@
     "url": "x.test"
   },
   "meta": {
-    "git_sha": "bee63d560ad3",
-    "recorded_utc": "2026-09-19T08:49:11.372282+00:00",
+    "git_sha": "242d3865faa9",
+    "recorded_utc": "2026-09-20T15:07:22.068395+00:00",
     "task": "gui"
   },
   "name": "gui-baseline",
@@ -22,8 +22,8 @@
       "model": "fake-model",
       "params": {},
       "response_text": "import pytest\nfrom playwright.sync_api import Page, expect\n\n\ndef test_home(page: Page) -> None:\n    page.goto('https://x.test')\n    expect(page.get_by_role('heading')).to_be_visible()\n",
-      "system_sha256": "2920e8771f7bc1f890b457659eac3cb40852d710a6ea05cafca9fdebcae6e87c",
-      "user_sha256": "859679a79a0863e9a65cf20e38e2d1dea40a95a8e21325bc5a76bc3bf4a85f67"
+      "system_sha256": "1f34b69ee315896b5f977f63e7c16d77863b5f6059e29b1fd2d6f114f45942f8",
+      "user_sha256": "c60fcd0ae8dea32ae778a91708df9a8ed998debb0005fdfaebd52c42a6628583"
     }
   ],
   "task": "gui"

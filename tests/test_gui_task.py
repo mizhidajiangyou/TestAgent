@@ -111,3 +111,30 @@ class TestGuiPipelineE2E:
         # fingerprint: the fake saw the rendered prompt
         assert gui_fake_llm.calls, "LLM must have been called once (text contract)"
         assert "https://example.test" in gui_fake_llm.calls[0][1]
+
+    def test_rejected_script_reports_zero_items(self, gui_fake_llm, tmp_path: Path) -> None:
+        """A script the validators reject must not be counted as a delivered item.
+
+        The CLI used to print ``Done: 1 item(s)`` beside a 0-byte file because a
+        text artifact counted as one item even when empty.
+        """
+        fake = gui_fake_llm
+        original = fake.achat_with_meta
+
+        async def respond(system: str, user: str, **kw):
+            resp = await original(system, user, **kw)
+            resp.text = "def test_login(page: Page) -> None:\n    page.goto(\n"
+            return resp
+
+        fake.achat_with_meta = respond
+        doc = tmp_path / "req.md"
+        doc.write_text("# GUI\n\nLogin flow.\n", encoding="utf-8")
+        out = tmp_path / "gui_test.py"
+        result = CliRunner().invoke(
+            main,
+            ["gui", "-r", str(doc), "--url", "https://example.test", "-o", str(out)],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 1, result.output
+        assert "0 item(s)" in result.output, result.output
+        assert out.read_text(encoding="utf-8") == ""

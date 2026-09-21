@@ -219,3 +219,24 @@ def test_adjudicated_difference_generated_dedup_without_baseline(tmp_path: Path)
         "historical baseline; if it changed, re-check the adjudication above"
     )
     assert len(pipeline) == 1
+
+
+def test_new_chain_reconciles_against_raw_calls(tmp_path: Path) -> None:
+    """T1 on the new chain: the session audit must be reconcilable.
+
+    ``reconciliation.json`` with ``raw_calls: 0`` beside a non-empty artifact is
+    not a pass — it is the audit being dead. The engine's ``raw_sink`` has to be
+    wired through ``QualityPass.emit_raw_record`` for the artifact count to mean
+    anything next to the raw rows.
+    """
+    settings = bare_settings(
+        output_dir=str(tmp_path / "audit-output"),
+        audit_dump_enabled=True,
+    )
+    _pipeline_run(tmp_path / "audit", settings, list(_RESPONSES))
+    sessions = list((tmp_path / "audit-output" / "sessions").glob("*/reconciliation.json"))
+    assert sessions, "the run wrote no reconciliation report"
+    document = json.loads(sessions[0].read_text(encoding="utf-8"))
+    assert document["raw_calls"] > 0, f"raw audit is dead: {document}"
+    assert document["rows"], "no raw rows landed"
+    assert document["artifact_count"] == len(document["rows"]) or document["match"] is False

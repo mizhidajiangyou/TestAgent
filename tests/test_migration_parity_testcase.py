@@ -149,8 +149,8 @@ def _write_inputs(tmp: Path, historical: list[dict] | None = None) -> dict[str, 
     return raw
 
 
-def _make_settings(review_enabled: bool = False) -> Any:
-    settings = bare_settings(review_enabled=review_enabled)
+def _make_settings(review_enabled: bool = False, **overrides: Any) -> Any:
+    settings = bare_settings(review_enabled=review_enabled, **overrides)
     object.__setattr__(settings, "output_dir", "./output")
     return settings
 
@@ -174,6 +174,7 @@ def _run_taskcase(
     *,
     finish: str = "stop",
     review_enabled: bool = False,
+    settings_overrides: dict[str, Any] | None = None,
 ) -> Fixture:
     """Drive tasks/testcase through PipelineExecutor; observe E1 elements.
 
@@ -183,7 +184,7 @@ def _run_taskcase(
     """
     task = get_registry(REPO / "tasks").get("testcase")
     llm = ScriptedPipelineLLM(responses, finish=finish)
-    settings = _make_settings(review_enabled)
+    settings = _make_settings(review_enabled, **(settings_overrides or {}))
 
     executor = PipelineExecutor(
         llm,  # type: ignore[arg-type]

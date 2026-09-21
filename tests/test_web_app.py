@@ -253,3 +253,31 @@ class TestGenerateIntegration:
         assert requirements[0].title == "User Management"
         # the staged requirement file lives in a temp dir that is gone again
         assert not Path(captured[0].raw["requirements"]).exists()  # type: ignore[attr-defined]
+
+
+class TestLinksReportDisplay:
+    """``links_report`` reaches the browser as the SAME object the run recorded
+    (v15 §8.3): no second rate calculation, and no key at all when links off."""
+
+    def test_links_off_response_has_no_report_key(self, client: TestClient) -> None:
+        r = client.post("/api/generate", json={"requirements": _REQUIREMENTS_MD})
+        assert r.status_code == 200, r.text
+        assert "links_report" not in r.json(), "a links-off response grew a contract key"
+
+    def test_links_on_response_shows_the_run_report(self) -> None:
+        llm = ScriptedLLM([_case_response()] * 24)
+        settings = bare_settings(
+            llm=LLMSettings(_env_file=None, model=_MODELS),  # type: ignore[call-arg]
+            links_enabled=True,
+            links_prose_enabled=True,
+        )
+        app = create_app(container=make_container(llm, settings))
+        # The container's executor needs the injected signature renderer the
+        # production container passes — same wiring, so the L0 index is real.
+        r = TestClient(app).post(
+            "/api/generate", json={"requirements": _REQUIREMENTS_MD, "links": True}
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        report = body["links_report"]
+        assert {"pair_rate", "grades_by_source_stage", "candidate_paths"} <= set(report)
