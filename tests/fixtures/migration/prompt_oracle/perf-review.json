@@ -1,0 +1,37 @@
+{
+  "artifact": null,
+  "events": [],
+  "failure_semantics": {},
+  "fixture_version": 1,
+  "input": {
+    "language": "english",
+    "module": "perf",
+    "review": true
+  },
+  "meta": {
+    "chain": "tasks/perf",
+    "git_sha": "036966c0bdbb",
+    "recorded_from": "legacy GUITestGenerator/PerformanceGenerator.generate (same proof, including the script-review pass)",
+    "recorded_utc": "2026-09-21T03:14:29.253902+00:00",
+    "tasks_dir": "tasks"
+  },
+  "name": "perf-review",
+  "request_trace": [
+    {
+      "index": 0,
+      "system": "You are an expert k6 performance engineer. Output only complete, runnable k6 JavaScript.",
+      "user": "Generate a complete, production-ready k6 JavaScript test script.\n\n## API Endpoints\nGET /users\nPOST /users\nDELETE /users/{id}\n\n## Configuration\n- Virtual Users: 100\n- Duration: 300 seconds\n- Ramp-Up: 60 seconds\n- Think Time: 500 ms\n- Base URL: https://x.test\n- Auth: none\n\n## Requirements (all mandatory for a runnable, meaningful script)\n1. `import http from 'k6/http'; import { check, sleep, group } from 'k6';` and `export const options` with `stages` implementing ramp-up then steady state (use Duration/Ramp-Up from Configuration; e.g. ramp 60s to 100 VUs, hold for the remainder).\n2. NEVER hardcode the host. Build URLs from `const BASE_URL = __ENV.BASE_URL || 'https://x.test';`. Document: run with `k6 run -e BASE_URL=https://api.example.com/v1 script.js`.\n3. If Auth != none: obtain a token in `setup()` (login call) and pass it to the default function; send it as `headers: { Authorization: 'Bearer ' + token }` on protected endpoints. Document obtaining `AUTH_TOKEN` via `-e AUTH_TOKEN=...` when the token cannot be fetched inside the script.\n4. Cover EVERY listed endpoint. For POST/PUT include a realistic request `body` taken from the endpoint schema (e.g. `{\"name\":\"...\",\"email\":\"...\",\"age\":30}`). Use `group('endpoint name', () => { ... })` per endpoint.\n5. `check()` assertions: ALWAYS assert `res.status` against the expected code, AND assert at least one key response field (e.g. `res.json('email') !== null`). For error paths assert the error code field.\n6. `thresholds`: set `http_req_duration: ['p(95)<500']` and `http_req_failed: ['rate<0.01']` (tune the 500ms to the agreed SLO if known).\n7. Pacing: use `sleep(0 )` between requests to match Think Time; do not use long fixed sleeps as the only control.\n8. `setup()` / `teardown()`: create any needed test data in `setup()` and DELETE it in `teardown()` so the environment is not polluted across runs.\n9. No secrets hardcoded; never commit real tokens.\n\nOutput ONLY raw JavaScript. No markdown.\n"
+    },
+    {
+      "index": 1,
+      "system": "You are a meticulous senior performance engineer reviewing a k6 JavaScript test script. Detect parameter mismatches, missing assertions and structural errors, then produce the complete revised script. Output only complete, runnable k6 JavaScript.",
+      "user": "Review the following k6 JavaScript test script and produce a COMPLETE revised version.\n\n## Review Context (the script MUST stay consistent with this)\n## Load Configuration\n- base_url: https://x.test\n- virtual_users: 100\n- duration_seconds: 300\n- ramp_up_seconds: 60\n- think_time_ms: 500\n- auth_type: none\n\n## Endpoint Signatures\n- GET /users\n- POST /users\n- DELETE /users/{id}\n\n## Current Script\nimport pytest\n\n\ndef test_flow(page: Page) -> None:\n    assert page\n\n## Review Checklist\n1. Load parameters match the context: options/stages implement the configured VUs, duration and ramp-up (ramp-up then steady state).\n2. Pacing matches the configured think time (sleep between iterations).\n3. Every endpoint listed in the context is covered; POST/PUT carry realistic bodies.\n4. `check()` assertions exist: `res.status` against the expected code AND at least one key response field.\n5. `thresholds` exist (e.g. `http_req_duration`, `http_req_failed`).\n6. Auth flow is coherent when auth is enabled (token obtained in setup and sent as Authorization header).\n7. No hardcoded host/secrets: BASE_URL comes from `__ENV` with a documented default.\n8. Cleanup: setup-created data is deleted in teardown.\n\n## Output Contract\n- Output the COMPLETE revised k6 JavaScript script.\n- No explanations, no diff, no markdown fences — raw JavaScript only.\n- Preserve the original structure and naming where possible; change only what the checklist requires.\n- If nothing needs to change, return the original script unchanged.\n"
+    },
+    {
+      "index": 2,
+      "system": "You are a meticulous senior performance engineer reviewing a k6 JavaScript test script. Detect parameter mismatches, missing assertions and structural errors, then produce the complete revised script. Output only complete, runnable k6 JavaScript.",
+      "user": "Review the following k6 JavaScript test script and produce a COMPLETE revised version.\n\n## Review Context (the script MUST stay consistent with this)\n## Load Configuration\n- base_url: https://x.test\n- virtual_users: 100\n- duration_seconds: 300\n- ramp_up_seconds: 60\n- think_time_ms: 500\n- auth_type: none\n\n## Endpoint Signatures\n- GET /users\n- POST /users\n- DELETE /users/{id}\n\n## Current Script\nimport pytest\n\n\ndef test_flow(page: Page) -> None:\n    assert page\n\n## Review Checklist\n1. Load parameters match the context: options/stages implement the configured VUs, duration and ramp-up (ramp-up then steady state).\n2. Pacing matches the configured think time (sleep between iterations).\n3. Every endpoint listed in the context is covered; POST/PUT carry realistic bodies.\n4. `check()` assertions exist: `res.status` against the expected code AND at least one key response field.\n5. `thresholds` exist (e.g. `http_req_duration`, `http_req_failed`).\n6. Auth flow is coherent when auth is enabled (token obtained in setup and sent as Authorization header).\n7. No hardcoded host/secrets: BASE_URL comes from `__ENV` with a documented default.\n8. Cleanup: setup-created data is deleted in teardown.\n\n## Output Contract\n- Output the COMPLETE revised k6 JavaScript script.\n- No explanations, no diff, no markdown fences — raw JavaScript only.\n- Preserve the original structure and naming where possible; change only what the checklist requires.\n- If nothing needs to change, return the original script unchanged.\n"
+    }
+  ],
+  "task": "prompt_oracle"
+}

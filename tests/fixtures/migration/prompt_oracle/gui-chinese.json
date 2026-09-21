@@ -1,0 +1,27 @@
+{
+  "artifact": null,
+  "events": [],
+  "failure_semantics": {},
+  "fixture_version": 1,
+  "input": {
+    "language": "chinese",
+    "module": "gui",
+    "review": false
+  },
+  "meta": {
+    "chain": "tasks/gui",
+    "git_sha": "036966c0bdbb",
+    "recorded_from": "legacy GUITestGenerator/PerformanceGenerator.generate (same proof, including the script-review pass)",
+    "recorded_utc": "2026-09-21T03:14:29.152526+00:00",
+    "tasks_dir": "tasks"
+  },
+  "name": "gui-chinese",
+  "request_trace": [
+    {
+      "index": 0,
+      "system": "You are a senior QA automation engineer specializing in Playwright and pytest. Generate complete, runnable, maintainable GUI test scripts. Output only valid Python code. Write all script comments, user-facing labels and summary text in Simplified Chinese (keep code keywords and identifiers in English).",
+      "user": "Generate a complete Playwright Python test script for web/GUI testing.\n\n## Target URL\nhttps://x.test\n\n## Requirements\n[REQ-001] User Management\n  Users can be listed and created.\n  Acceptance Criteria:\n    - User can register\n    - User can login\n\n## API Context (for reference)\nGET /users\nPOST /users\nDELETE /users/{id}\n\n## Script Requirements (all mandatory)\n1. Use Playwright's Python **sync** API. Start with:\n   ```python\n   import pytest\n   from playwright.sync_api import Page, expect, BrowserContext\n   ```\n2. Use **pytest** as the test framework; type-annotate the `page: Page` argument.\n3. Provide a **fixture** (module- or function-scoped) that:\n   - navigates to the Target URL (use `page.goto(\"https://x.test\")`),\n   - waits with `page.wait_for_load_state(\"networkidle\")`,\n   - if the page requires login, performs the login steps in the fixture and stores auth via `context` (e.g. `storage_state`),\n   - yields `page`.\n4. Use **ROBUST locators** (priority order) — NEVER use CSS/XPath as the primary choice:\n   - `page.get_by_role()` — FIRST CHOICE for buttons/inputs/links (e.g. `page.get_by_role(\"button\", name=\"登录\")`).\n   - `page.get_by_label()` — form inputs with associated `<label>`.\n   - `page.get_by_placeholder()` — inputs without labels.\n   - `page.get_by_text()` — non-interactive text.\n   - `page.locator()` — LAST RESORT, only with a stable, specific selector and a comment explaining why.\n5. Use **`expect()`** for ALL assertions (never raw `assert`). Assert concrete values, e.g. `expect(page.get_by_text(\"欢迎\")).to_be_visible()` or `expect(field).to_have_value(\"...\")`. Avoid weak checks like `assert \"welcome\" in page.content()`.\n6. Use **explicit waits**, not fixed sleeps: prefer `page.wait_for_load_state`, `page.wait_for_selector`, or `expect(...).to_be_visible()`. Do NOT use `time.sleep` or long `page.wait_for_timeout`.\n7. Cover at least: happy path, **form validation** (required/format errors — assert the visible error message via `expect(error).to_have_text(...)`), **error handling** (invalid input ⇒ error state), **navigation/routing**, and **UI state changes**.\n8. Each test method needs a descriptive **docstring** and a pytest marker (`@pytest.mark.smoke`, `@pytest.mark.regression`).\n9. **Cleanup**: if the flow creates data or a session, add teardown (logout / delete created data) so the script is re-runnable.\n10. The script MUST target the **Target URL above** (do not navigate to example.com or any other host). It must be syntactically valid Python runnable with:\n   `pytest test_script.py --browser chromium`\n\n## Language\nWrite all script comments, docstrings, user-facing labels and summary text in\nSimplified Chinese. Keep code keywords, identifiers and Playwright API calls in English.\n\n## Output\nOutput ONLY the Python script code. No markdown fences, no explanations."
+    }
+  ],
+  "task": "prompt_oracle"
+}
